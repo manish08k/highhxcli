@@ -1,0 +1,34 @@
+# HighhX project configuration for a flutter project.
+# Reference: docs/configuration.md — validate with `highhx config validate`.
+version: 1
+
+project:
+  name: {{ project.name }}
+  type: flutter
+
+commands:
+  dev: {{ commands.dev }}
+  start: {{ commands.start }}
+  test: {{ commands.test }}
+  build: {{ commands.build }}
+  lint: {{ commands.lint }}
+  format: {{ commands.format }}
+  fix: {{ commands.fix }}
+  typecheck: {{ commands.typecheck }}
+  install: {{ commands.install }}
+  package: {{ commands.package }}
+  clean: {{ commands.clean }}
+
+environment:
+  default_profile: development
+
+release:
+  tag_prefix: v
+  changelog: CHANGELOG.md
+
+approvals:
+  auto_approve: normal
+  yes_max_risk: critical
+  typed_confirmation: critical
+
+# Flutter builds are platform specific; adjust commands.build (apk, appbundle, ios, web …).

@@ -1,0 +1,10 @@
+version: 1
+project:
+  name: platform
+  type: monorepo
+workspace:
+  members: ["apps/*", "packages/*"]
+commands:
+  install: pnpm install
+  test: pnpm -r test
+  build: pnpm -r build

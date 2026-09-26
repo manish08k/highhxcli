@@ -1,0 +1,13 @@
+name: check
+description: Static checks and tests in parallel.
+settings:
+  fail_fast: false
+  max_parallel: 3
+steps:
+  - id: lint
+    run: uv run ruff check .
+  - id: typecheck
+    run: uv run mypy .
+  - id: test
+    run: uv run pytest -q
+    timeout: 10m

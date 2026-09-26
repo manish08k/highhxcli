@@ -1,0 +1,9 @@
+[project]
+name = "pyapp"
+version = "1.2.3"
+description = "Fixture project for HighhX tests"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]

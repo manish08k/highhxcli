@@ -1,0 +1,6 @@
+name: build
+description: Build container images.
+steps:
+  - id: build
+    name: Build images
+    run: {{ commands.build }}

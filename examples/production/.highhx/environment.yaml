@@ -1,0 +1,25 @@
+default_profile: development
+variables:
+  DATABASE_URL:
+    description: Primary database
+    required: true
+    secret: true
+  LOG_LEVEL:
+    default: info
+    choices: [debug, info, warning, error]
+  SENTRY_DSN:
+    secret: true
+    required: true
+    profiles: [staging, production]
+profiles:
+  development:
+    files: [.env, .env.development]
+    env:
+      DEBUG: "true"
+  staging:
+    files: [.env.staging]
+  production:
+    files: [.env.production]
+    protected: true
+    env:
+      DEBUG: "false"

@@ -1,0 +1,16 @@
+version: 1
+project:
+  name: basic-example
+commands:
+  test: python -m unittest discover -s tests -t .
+  lint: python -m compileall -q calc.py tests
+scripts:
+  hello: python -c "print('hello from highhx')"
+tasks:
+  prepare:
+    description: Create the output directory
+    run: python -c "import pathlib; pathlib.Path('out').mkdir(exist_ok=True)"
+  report:
+    description: Write a report after preparing
+    run: python -c "open('out/report.txt', 'w').write('ok')"
+    depends_on: [prepare]

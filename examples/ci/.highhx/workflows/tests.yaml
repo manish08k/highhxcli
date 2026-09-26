@@ -1,0 +1,12 @@
+name: tests
+description: "Reusable test workflow (called with `uses: tests`)."
+inputs:
+  marker:
+    description: pytest -m expression
+    default: ""
+steps:
+  - id: unit
+    run: python -m pytest -q -m "${{ inputs.marker }}"
+  - id: flaky-integration
+    run: python -m pytest -q tests/integration
+    continue_on_error: true

@@ -1,0 +1,10 @@
+name: check
+description: Lint and test in parallel, keep going if one fails.
+settings:
+  fail_fast: false
+  max_parallel: 2
+steps:
+  - id: lint
+    run: python -m compileall -q calc.py tests
+  - id: test
+    run: python -m unittest discover -s tests -t .

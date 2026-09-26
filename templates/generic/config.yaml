@@ -1,0 +1,57 @@
+# HighhX project configuration.
+# Reference: docs/configuration.md — validate with `highhx config validate`.
+version: 1
+
+project:
+  name: {{ project.name }}
+  type: {{ project.type }}
+
+# Commands HighhX runs for `highhx dev`, `highhx test`, `highhx build` …
+# Detected from your project files; edit freely.
+commands:
+  dev: {{ commands.dev }}
+  start: {{ commands.start }}
+  test: {{ commands.test }}
+  build: {{ commands.build }}
+  lint: {{ commands.lint }}
+  format: {{ commands.format }}
+  fix: {{ commands.fix }}
+  typecheck: {{ commands.typecheck }}
+  install: {{ commands.install }}
+  package: {{ commands.package }}
+  clean: {{ commands.clean }}
+
+environment:
+  default_profile: development
+
+# Named shortcuts: `highhx script <name>`
+# scripts:
+#   hello: echo hello
+
+# Background services managed by `highhx start/stop/services`
+# services:
+#   api:
+#     command: python -m http.server 8000
+#     port: 8000
+#     health:
+#       url: http://127.0.0.1:8000/
+
+# Deployment targets used by `highhx deploy <target>`
+# deploy:
+#   default: staging
+#   targets:
+#     staging:
+#       type: ssh
+#       host: deploy@staging.example.com
+#       command: cd /srv/app && ./deploy.sh {{ version }}
+#       health_check:
+#         url: https://staging.example.com/health
+
+release:
+  tag_prefix: v
+  changelog: CHANGELOG.md
+
+approvals:
+  auto_approve: normal        # safe/normal actions never prompt
+  yes_max_risk: critical      # highest risk --yes may approve
+  typed_confirmation: critical

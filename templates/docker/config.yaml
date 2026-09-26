@@ -1,0 +1,26 @@
+# HighhX project configuration for a Docker / Compose project.
+version: 1
+
+project:
+  name: {{ project.name }}
+  type: docker
+
+commands:
+  dev: docker compose up
+  build: {{ commands.build }}
+
+deploy:
+  default: local
+  targets:
+    local:
+      type: docker
+      description: Build and start the Compose stack on this machine.
+      build: true
+
+environment:
+  default_profile: development
+
+approvals:
+  auto_approve: normal
+  yes_max_risk: critical
+  typed_confirmation: critical

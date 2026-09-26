@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "highhxcli"
+dynamic = ["version"]
+description = "HighhX — a local-first, offline-first developer operations command center."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "HighhX contributors" }]
+keywords = ["cli", "devops", "workflow", "developer-tools", "automation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Build Tools",
+]
+dependencies = [
+    "click>=8.1",
+    "rich>=13.7",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-PyYAML",
+    "coverage[toml]>=7.4",
+]
+
+[project.scripts]
+highhx = "highhx.cli:main"
+highhxcli = "highhx.cli:main"
+
+[tool.hatch.version]
+path = "src/highhx/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/highhx"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "highhx/_templates"
+"schemas" = "highhx/_schemas"
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "templates", "schemas", "docs", "tests", "examples", "scripts", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", ".gitignore"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["fixtures", ".*", "*.egg-info", "build", "dist"]
+addopts = "-ra"
+filterwarnings = ["error::DeprecationWarning:highhx.*", "error::ResourceWarning"]
+markers = [
+    "e2e: end-to-end tests that invoke the full CLI",
+    "integration: tests that exercise several subsystems together",
+]
+
+[tool.coverage.run]
+source = ["highhx"]
+branch = true
+parallel = true
+concurrency = ["thread"]
+
+[tool.coverage.report]
+show_missing = false
+skip_covered = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "pragma: no cover"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["templates", "examples", "tests/fixtures"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "C4", "PTH", "PL"]
+ignore = [
+    "E501", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004", "PLC0415",
+    "PTH123", "RUF012", "SIM105", "SIM102", "PLW0603", "PLW2901", "PTH101", "B904",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR", "S", "B011"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/highhx"]
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+ignore_missing_imports = true

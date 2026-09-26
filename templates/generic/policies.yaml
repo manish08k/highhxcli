@@ -1,0 +1,27 @@
+# Project policies — `highhx policy`, `highhx policy check`.
+version: 1
+
+# Pushing to these branches is treated as dangerous; force-pushing is critical.
+protected_branches: [main, master]
+
+# Actions that refuse to run with uncommitted changes.
+require_clean_tree: [release, deploy]
+
+# Files that must never be committed.
+forbidden_files: [".env", ".env.*", "*.pem", "*.key", "id_rsa", "id_ed25519"]
+
+rules:
+  - id: no-force-push-protected
+    description: Force-pushing to a protected branch is not allowed.
+    when:
+      command: "git\\s+push\\s+.*(--force|-f)\\b"
+      branch: main
+    effect: deny
+  - id: production-deploy-approval
+    description: Production deployments always need interactive confirmation.
+    when:
+      action: "deploy:*"
+      production: true
+    effect: require_approval
+    risk: critical
+    bypassable: false

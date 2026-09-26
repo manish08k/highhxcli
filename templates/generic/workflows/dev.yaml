@@ -1,0 +1,12 @@
+name: dev
+description: Install dependencies and start the development server.
+settings:
+  fail_fast: true
+steps:
+  - id: install
+    name: Install dependencies
+    run: {{ commands.install }}
+  - id: dev
+    name: Development server
+    run: {{ commands.dev }}
+    depends_on: [install]

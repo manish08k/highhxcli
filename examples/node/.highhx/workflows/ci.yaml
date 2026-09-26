@@ -1,0 +1,22 @@
+name: ci
+description: Install, check in parallel, build. Only builds on CI or when forced.
+inputs:
+  force_build:
+    default: "false"
+steps:
+  - id: install
+    run: pnpm install --frozen-lockfile
+  - id: lint
+    run: pnpm run lint
+    depends_on: [install]
+  - id: typecheck
+    run: pnpm exec tsc --noEmit
+    depends_on: [install]
+  - id: test
+    run: pnpm run test
+    depends_on: [install]
+    retry: 2
+  - id: build
+    run: pnpm run build
+    depends_on: [lint, typecheck, test]
+    if: env.CI == 'true' || inputs.force_build == 'true'

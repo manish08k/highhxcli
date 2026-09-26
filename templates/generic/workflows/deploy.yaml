@@ -1,0 +1,23 @@
+name: deploy
+description: Test and build, then deploy to a target with health checks.
+inputs:
+  target:
+    description: Deployment target from .highhx/config.yaml
+    required: true
+settings:
+  fail_fast: true
+steps:
+  - id: test
+    name: Tests
+    run: {{ commands.test }}
+  - id: build
+    name: Build
+    run: {{ commands.build }}
+    depends_on: [test]
+  - id: deploy
+    name: Deploy
+    run: highhx deploy ${{ inputs.target }} --yes
+    depends_on: [build]
+    approval:
+      message: Deploys the current build.
+      risk: critical

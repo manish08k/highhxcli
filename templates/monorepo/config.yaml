@@ -1,0 +1,24 @@
+# HighhX configuration for a monorepo. Run a command in every member with
+# `highhx workspace run "<command>"`.
+version: 1
+
+project:
+  name: {{ project.name }}
+  type: monorepo
+
+commands:
+  install: {{ commands.install }}
+  test: {{ commands.test }}
+  build: {{ commands.build }}
+  lint: {{ commands.lint }}
+
+workspace:
+  members: {{ workspace.members }}
+
+environment:
+  default_profile: development
+
+approvals:
+  auto_approve: normal
+  yes_max_risk: critical
+  typed_confirmation: critical

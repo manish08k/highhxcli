@@ -1,0 +1,33 @@
+name: pipeline
+description: Full CI pipeline with retries, timeouts, outputs and a reusable workflow.
+on: [push, pull_request]
+settings:
+  fail_fast: true
+  max_parallel: 4
+  timeout: 30m
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+steps:
+  - id: version
+    run: python -c "import os; open(os.environ['HIGHHX_OUTPUT'], 'a').write('value=1.0.0\n')"
+  - id: tests
+    uses: tests
+    with:
+      marker: not slow
+  - id: build
+    run: python -m build
+    depends_on: [version, tests]
+    timeout: 10m
+    retry:
+      attempts: 3
+      delay: 5s
+      backoff: 2
+  - id: summary
+    run: python -c "print('built ${{ steps.version.outputs.value }}')"
+    depends_on: [build]
+  - id: notify-failure
+    run: python -c "print('pipeline failed')"
+    depends_on: [build]
+    if: failure()
+outputs:
+  version: ${{ steps.version.outputs.value }}

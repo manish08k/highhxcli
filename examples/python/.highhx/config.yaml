@@ -1,0 +1,33 @@
+version: 1
+project:
+  name: python-service
+  type: python
+commands:
+  install: uv sync
+  dev: uv run uvicorn app.main:app --reload
+  test: uv run pytest
+  coverage: uv run pytest --cov --cov-report=term-missing
+  lint: uv run ruff check .
+  format: uv run ruff format .
+  fix: uv run ruff check --fix .
+  typecheck: uv run mypy .
+  build: uv build
+services:
+  api:
+    command: uv run uvicorn app.main:app --port 8000
+    port: 8000
+    health:
+      url: http://127.0.0.1:8000/health
+      timeout: 5s
+    ready_timeout: 30s
+release:
+  tag_prefix: v
+  changelog: CHANGELOG.md
+  publish_command: uv publish
+watch:
+  - name: tests
+    paths: [src, tests]
+    patterns: ["*.py"]
+    run: uv run pytest -x -q
+hooks:
+  pre-commit: check

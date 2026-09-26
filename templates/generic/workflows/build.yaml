@@ -1,0 +1,12 @@
+name: build
+description: Test, then build the project.
+settings:
+  fail_fast: true
+steps:
+  - id: test
+    name: Tests
+    run: {{ commands.test }}
+  - id: build
+    name: Build
+    run: {{ commands.build }}
+    depends_on: [test]

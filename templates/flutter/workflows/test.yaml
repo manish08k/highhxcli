@@ -1,0 +1,21 @@
+name: test
+description: Analyze, check formatting and run Flutter tests.
+settings:
+  fail_fast: false
+  max_parallel: 3
+steps:
+  - id: pub-get
+    name: Fetch packages
+    run: {{ commands.install }}
+  - id: analyze
+    name: Analyze
+    run: {{ commands.lint }}
+    depends_on: [pub-get]
+  - id: format
+    name: Check formatting
+    run: dart format --output=none --set-exit-if-changed .
+    depends_on: [pub-get]
+  - id: test
+    name: Tests
+    run: {{ commands.test }}
+    depends_on: [pub-get]

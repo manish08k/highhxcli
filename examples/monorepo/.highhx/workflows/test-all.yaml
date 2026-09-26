@@ -1,0 +1,8 @@
+name: test-all
+description: Run each package's tests in parallel through the workspace runner.
+steps:
+  - id: install
+    run: pnpm install
+  - id: test
+    run: highhx workspace run --parallel --continue-on-error "pnpm test"
+    depends_on: [install]

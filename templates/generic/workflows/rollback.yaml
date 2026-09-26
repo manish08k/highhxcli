@@ -1,0 +1,13 @@
+name: rollback
+description: Roll a target back to its previous successful deployment.
+inputs:
+  target:
+    description: Deployment target to roll back
+    required: true
+steps:
+  - id: rollback
+    name: Roll back
+    run: highhx rollback ${{ inputs.target }} --yes
+    approval:
+      message: Restores the previous deployment.
+      risk: critical

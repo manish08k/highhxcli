@@ -1,0 +1,12 @@
+version: 1
+project:
+  name: ci-example
+commands:
+  test: python -m pytest -q
+  build: python -m build
+triggers:
+  push: [pipeline]
+schedules:
+  - name: nightly
+    cron: "0 2 * * *"
+    workflow: pipeline

@@ -1,0 +1,18 @@
+name: release
+description: Check, build and cut a release.
+inputs:
+  bump:
+    description: auto, major, minor or patch
+    default: auto
+steps:
+  - id: check
+    uses: check
+  - id: build
+    run: uv build
+    depends_on: [check]
+  - id: release
+    run: highhx release ${{ inputs.bump }} --yes
+    depends_on: [build]
+    approval:
+      message: Creates the release commit and tag.
+      risk: dangerous

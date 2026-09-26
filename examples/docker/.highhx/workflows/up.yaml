@@ -1,0 +1,12 @@
+name: up
+description: Build images and start the stack in the background.
+steps:
+  - id: build
+    run: docker compose build
+    timeout: 15m
+  - id: up
+    run: docker compose up -d
+    depends_on: [build]
+  - id: ps
+    run: docker compose ps
+    depends_on: [up]

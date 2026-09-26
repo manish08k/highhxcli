@@ -1,0 +1,57 @@
+version: 1
+project:
+  name: production-service
+commands:
+  test: pytest -q
+  build: docker build -t registry.example.com/service:latest .
+deploy:
+  default: staging
+  targets:
+    staging:
+      type: ssh
+      host: deploy@staging.example.com
+      remote_dir: /srv/service
+      command: ./deploy.sh {{ version }}
+      rollback_command: ./deploy.sh {{ previous_version }}
+      logs_command: journalctl -u service -n 200 --no-pager
+      status_command: systemctl is-active service
+      health_check:
+        url: https://staging.example.com/health
+        retries: 10
+        interval: 5s
+    production:
+      type: kubernetes
+      production: true
+      require_branch: main
+      require_clean: true
+      context: prod-cluster
+      namespace: service
+      manifests: k8s/production
+      deployment: service
+      auto_rollback: true
+      preflight:
+        - pytest -q
+      health_check:
+        url: https://service.example.com/health
+        retries: 12
+        interval: 10s
+database:
+  url_env: DATABASE_URL
+  migrations:
+    directory: db/migrations
+  seed:
+    directory: db/seeds
+  backups_dir: .highhx/backups
+approvals:
+  auto_approve: normal
+  yes_max_risk: dangerous
+  typed_confirmation: critical
+  non_bypassable: [publish]
+  rules:
+    - id: psql-prod
+      pattern: psql .*prod
+      risk: critical
+      reason: touches the production database
+      bypassable: false
+security:
+  ignore: ["docs/**"]

@@ -1,0 +1,31 @@
+version: 1
+protected_branches: [main, "release/*"]
+require_clean_tree: [release, deploy]
+allowed_release_branches: [main]
+forbidden_files: [".env", ".env.*", "*.pem", "*.key", "*.p12"]
+rules:
+  - id: no-force-push
+    description: Never force-push protected branches.
+    when:
+      command: "git\\s+push\\s+.*(--force|-f)\\b"
+      branch: main
+    effect: deny
+  - id: prod-deploys-from-main
+    description: Production deployments must come from main.
+    when:
+      action: "deploy:production"
+      branch: "feature/*"
+    effect: deny
+  - id: prod-confirmation
+    description: Production deployments always need a human.
+    when:
+      action: "deploy:*"
+      production: true
+    effect: require_approval
+    risk: critical
+    bypassable: false
+  - id: warn-on-docker-prune
+    when:
+      command: docker .*prune
+    effect: warn
+    message: Pruning removes cached layers for every project on this machine.

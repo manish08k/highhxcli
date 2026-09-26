@@ -1,0 +1,6 @@
+name: test
+description: Run the test command in every workspace member.
+steps:
+  - id: test-all
+    name: Test all members
+    run: highhx workspace run --parallel "{{ commands.test }}"

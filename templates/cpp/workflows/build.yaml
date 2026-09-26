@@ -1,0 +1,10 @@
+name: build
+description: Configure, build and test with CMake.
+steps:
+  - id: build
+    name: Build
+    run: {{ commands.build }}
+  - id: test
+    name: Tests
+    run: {{ commands.test }}
+    depends_on: [build]

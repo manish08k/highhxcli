@@ -1,0 +1,19 @@
+version: 1
+project:
+  name: containerized-app
+  type: docker
+commands:
+  dev: docker compose up
+  build: docker build -t containerized-app .
+deploy:
+  default: local
+  targets:
+    local:
+      type: docker
+      description: Build a versioned image and restart the Compose stack.
+      image: containerized-app
+      service: web
+      health_check:
+        url: http://127.0.0.1:8080/health
+        retries: 10
+        interval: 3s

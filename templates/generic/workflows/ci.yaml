@@ -1,0 +1,25 @@
+name: ci
+description: Continuous-integration checks (install, lint, test, build).
+settings:
+  fail_fast: true
+  max_parallel: 4
+steps:
+  - id: install
+    name: Install dependencies
+    run: {{ commands.install }}
+  - id: lint
+    name: Lint
+    run: {{ commands.lint }}
+    depends_on: [install]
+  - id: typecheck
+    name: Type check
+    run: {{ commands.typecheck }}
+    depends_on: [install]
+  - id: test
+    name: Tests
+    run: {{ commands.test }}
+    depends_on: [install]
+  - id: build
+    name: Build
+    run: {{ commands.build }}
+    depends_on: [lint, typecheck, test]

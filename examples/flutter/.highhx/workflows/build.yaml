@@ -1,0 +1,27 @@
+name: build
+description: Analyze, test and build for the requested platform.
+inputs:
+  platform:
+    description: android, ios or web
+    default: android
+steps:
+  - id: pub-get
+    run: flutter pub get
+  - id: analyze
+    run: flutter analyze
+    depends_on: [pub-get]
+  - id: test
+    run: flutter test
+    depends_on: [pub-get]
+  - id: android
+    run: flutter build appbundle
+    depends_on: [analyze, test]
+    if: inputs.platform == 'android'
+  - id: ios
+    run: flutter build ios --no-codesign
+    depends_on: [analyze, test]
+    if: inputs.platform == 'ios' && platform == 'macos'
+  - id: web
+    run: flutter build web
+    depends_on: [analyze, test]
+    if: inputs.platform == 'web'

@@ -1,0 +1,21 @@
+version: 1
+project:
+  name: web-app
+  type: nextjs
+commands:
+  install: pnpm install --frozen-lockfile
+  dev: pnpm run dev
+  test: pnpm run test
+  lint: pnpm run lint
+  typecheck: pnpm exec tsc --noEmit
+  build: pnpm run build
+services:
+  web:
+    command: pnpm run start
+    port: 3000
+    health:
+      url: http://127.0.0.1:3000/
+    depends_on: [api-mock]
+  api-mock:
+    command: pnpm exec json-server --port 4000 mock/db.json
+    port: 4000

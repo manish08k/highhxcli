@@ -1,0 +1,14 @@
+version: 1
+project:
+  name: mobile-app
+  type: flutter
+commands:
+  install: flutter pub get
+  dev: flutter run
+  test: flutter test
+  coverage: flutter test --coverage
+  lint: flutter analyze
+  format: dart format .
+  fix: dart fix --apply
+  build: flutter build appbundle
+  clean: flutter clean
