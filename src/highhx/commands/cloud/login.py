@@ -18,9 +18,11 @@ def _signed_in_message(app: App, email: str, plan_name: str, is_pro: bool) -> No
     out = app.output
     out.success(f"Signed in as {email} ({plan_name})")
     if is_pro:
-        out.info("Start the AI developer agent with `highhx agent`.")
+        out.info("Run `highhx` in any project — the AI developer agent is part of the session.")
     else:
-        out.note("You are on HighhX Free — every CLI command works. `highhx account upgrade` unlocks `highhx agent`.")
+        out.note(
+            "You are on HighhX Free — every CLI command works. `highhx account upgrade` adds the AI developer agent."
+        )
 
 
 @click.command("login", short_help="Sign in to your HighhX account (browser or token).")

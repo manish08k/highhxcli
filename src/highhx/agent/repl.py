@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import logging
 import shlex
 import signal
 import threading
@@ -62,6 +63,8 @@ if TYPE_CHECKING:
     from highhx.cloud.account import Account, CloudAccount
     from highhx.commands import App
 
+log = logging.getLogger(__name__)
+
 SessionFactory = Callable[[], "tuple[AgentSession, Account, bool]"]
 
 # Kept as a module attribute: tests replace it to keep the real history file untouched.
@@ -70,6 +73,12 @@ _setup_readline = setup_readline
 ACCOUNT_COMMANDS = frozenset({"login", "logout", "account"})
 """HighhX commands after which the session re-checks the account's capabilities."""
 AGENT_SUBCOMMANDS_OK = frozenset({"sessions", "models", "stop", "--help", "-h"})
+CONFIRM_INTENTS: dict[tuple[str, ...], str] = {
+    ("fix",): "applies formatter and linter fixes to your files",
+    ("deps", "install"): "installs the project's dependencies",
+}
+"""Deterministic mappings that change files: typed as free-form text, they are confirmed first."""
+RECONNECT_SECONDS = 20.0
 STRAY_ANSWERS = frozenset({"y", "yes", "n", "no", "a", "always", "p"})
 """Answers typed when no question is open (a prompt already answered); never sent as a request."""
 
@@ -135,11 +144,27 @@ def prompt_interrupts() -> Iterator[None]:
         signal.signal(signal.SIGINT, previous)
 
 
+OPTIONS_WITH_VALUES = frozenset({"-C", "--cwd", "--config-profile"})
+"""Global options that take a value (skipped when looking for the command name)."""
+
+
+def command_words(argv: list[str]) -> list[str]:
+    """``argv`` without leading global options: ``["-v", "-C", "x", "agent", "fix"]`` → ``["agent", "fix"]``."""
+    index = 0
+    while index < len(argv) and argv[index].startswith("-"):
+        if argv[index] in ("-h", "--help", "-V", "--version"):
+            return argv[index:]
+        index += 2 if argv[index] in OPTIONS_WITH_VALUES else 1
+    return argv[index:]
+
+
 def nested_session(argv: list[str]) -> bool:
-    """``highhx`` / ``highhx agent …`` inside the session would start a second session."""
-    if not argv:
+    """``highhx`` / ``highhx agent …`` inside the session would start a second session
+    (global options such as ``-v`` or ``-C DIR`` in front do not change that)."""
+    words = command_words(argv)
+    if not words:
         return True
-    return argv[0] == "agent" and (len(argv) == 1 or argv[1] not in AGENT_SUBCOMMANDS_OK)
+    return words[0] == "agent" and (len(words) == 1 or words[1] not in AGENT_SUBCOMMANDS_OK)
 
 
 class AgentREPL:
@@ -173,6 +198,7 @@ class AgentREPL:
         self._running = True
         self._token: CancellationToken | None = None
         self._context: ProjectContext | None = None
+        self._last_check = time.monotonic()
 
     # ---------------------------------------------------------------- state
     @property
@@ -328,7 +354,16 @@ class AgentREPL:
         return read_request(self._read_line, prompt=PROMPT_MARKUP, continuation=CONTINUATION_MARKUP)
 
     def handle(self, text: str) -> None:
-        """Dispatch one request (see the module docstring)."""
+        """Dispatch one request (see the module docstring). Never raises: the session goes on."""
+        try:
+            self._handle(text)
+        except KeyboardInterrupt:
+            self.ui.assistant_finished()
+            self.ui.notice("warn", "Interrupted.")
+        except Exception as exc:
+            self.unexpected(exc)
+
+    def _handle(self, text: str) -> None:
         text = text.strip()
         if not text:
             return
@@ -431,14 +466,32 @@ class AgentREPL:
     def local_request(self, text: str) -> None:
         """Without the AI agent: a deterministic intent, or the capability the request needs."""
         planned = route(text)
+        if planned.intent is None and self.reconnect() and self.session is not None:
+            self.turn(text)  # the platform is back and grants the agent
+            return
         if planned.intent is not None:
+            intent = planned.intent
+            note = CONFIRM_INTENTS.get(tuple(intent.argv))
+            if note and not self.ui.ask(f"Run {intent.description} — {note}?", default=True):
+                return
             self.run_intent(planned)
             return
         assert planned.capability is not None
+        ent = self.entitlements
+        if ent.connection == Connection.CACHED and ent.tier == "Pro":
+            # A Pro plan (as last known) that cannot reach the platform: the gap is the connection.
+            self.offer(
+                "The AI agent needs the HighhX platform, which cannot be reached right now.",
+                planned.alternatives,
+                title="HighhX platform unavailable",
+            )
+            return
         self.offer(planned.reason, planned.alternatives)
 
-    def offer(self, reason: str, alternatives: tuple[LocalAction, ...]) -> None:
-        choice = self.ui.capability_panel(reason, alternatives)
+    def offer(
+        self, reason: str, alternatives: tuple[LocalAction, ...], *, title: str = "HighhX Pro capability"
+    ) -> None:
+        choice = self.ui.capability_panel(reason, alternatives, title=title)
         if choice == VIEW_PRO:
             self.show_pro()
         elif isinstance(choice, LocalAction):
@@ -467,7 +520,8 @@ class AgentREPL:
             return 0
         shown = label or "highhx " + " ".join(argv)
         code = self._local(shown, lambda: self._invoke(argv))
-        if argv[0] in ACCOUNT_COMMANDS:
+        words = command_words(argv)
+        if words and words[0] in ACCOUNT_COMMANDS:
             self.refresh_entitlements()
         return code
 
@@ -512,8 +566,19 @@ class AgentREPL:
             if exc.hint:
                 self.ui.print(f"  [dim]{escape(exc.hint)}[/dim]")
             code = int(exc.exit_code)
+        except Exception as exc:  # a bug in one command must not end the session
+            self.unexpected(exc)
+            code = int(ExitCode.FAILURE)
         self.ui.activity_finished(label, code, time.monotonic() - started)
         return code
+
+    def unexpected(self, exc: BaseException) -> None:
+        from highhx.ui.errors import render_unexpected
+
+        log.exception("unexpected error in the interactive session")
+        self.ui.assistant_finished()
+        render_unexpected(self.ui.console, exc, self.ui.symbols, debug=self.app.options.debug)
+        self.ui.print("  [dim]The session continues. Run with --debug for the traceback.[/dim]")
 
     @contextlib.contextmanager
     def local_io(self) -> Iterator[None]:
@@ -529,11 +594,24 @@ class AgentREPL:
             engine.output, approvals.prompter = saved
 
     # ---------------------------------------------------------- entitlements
+    def reconnect(self) -> bool:
+        """Signed in but offline: re-check the platform (at most every RECONNECT_SECONDS).
+        True when the check ran."""
+        if (
+            self.cloud is None
+            or self.entitlements.connection not in (Connection.CACHED, Connection.UNAVAILABLE)
+            or time.monotonic() - self._last_check < RECONNECT_SECONDS
+        ):
+            return False
+        self.refresh_entitlements()
+        return True
+
     def refresh_entitlements(self) -> None:
         """Re-check the account (after login / logout / upgrade, or a plan error) and adapt in place."""
         if self.cloud is None:
             return
         before = self.entitlements
+        self._last_check = time.monotonic()
         self.entitlements = capabilities.resolve(self.cloud)
         if self.entitlements.has(Capability.AI_AGENT) and self.session is None and self.session_factory is not None:
             try:

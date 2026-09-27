@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from highhx.cloud import capabilities
 from highhx.cloud.capabilities import LOCAL, Capability, Connection
-from highhx.core.errors import AccountError, CloudError, ModelProviderError, PlanRequiredError
+from highhx.core.errors import CloudError, HighhXError, UsageError
 
 if TYPE_CHECKING:
     from highhx.agent.bootstrap import Resume
@@ -41,6 +41,9 @@ def start_interactive(
     from highhx.agent.running import registered
     from highhx.agent.ui import TerminalUI
 
+    if getattr(app, "interactive_session", False):
+        raise UsageError("You are already in the HighhX session.", hint="Type your request at the prompt.")
+    app.interactive_session = True  # type: ignore[attr-defined]
     out = app.output
     cloud = app.cloud
     ui = TerminalUI(out.console, out.symbols, interactive=True)
@@ -55,9 +58,10 @@ def start_interactive(
     if entitlements.has(Capability.AI_AGENT):
         try:
             session, account, resumed = create_session(app, cloud, ui, overrides=overrides or {}, resume=resume)
-        except (AccountError, PlanRequiredError, CloudError, ModelProviderError) as exc:
-            # The platform decides: when it refuses or cannot be reached, local capabilities remain.
-            problem = exc.message if not isinstance(exc, CloudError) else "HighhX platform unavailable."
+        except HighhXError as exc:
+            # The platform decides: when it refuses or cannot be reached (or the agent cannot be
+            # set up), the session starts with local capabilities instead of not at all.
+            problem = "HighhX platform unavailable." if isinstance(exc, CloudError) else exc.message
             entitlements = dataclasses.replace(
                 entitlements,
                 capabilities=LOCAL,

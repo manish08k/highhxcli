@@ -133,7 +133,9 @@ def account_status(app: App) -> int:
             out.warn("The HighhX platform is unreachable; showing cached account details.")
         out.plain()
         if pro:
-            out.success("HighhX Pro: run `highhx agent` in any project.")
+            out.success(
+                "HighhX Pro: run `highhx` (or `highhx agent`) in any project — the AI developer agent is attached."
+            )
         else:
             out.info("HighhX Free: the full developer CLI. `highhx account upgrade` unlocks the AI developer agent.")
         usage = acct.usage
@@ -195,7 +197,9 @@ def account_upgrade(app: App, no_browser: bool) -> int:
         app.output.json({"plan": acct.plan.id, "url": url})
         return 0
     _open(app, url, "Complete your upgrade in the browser", no_browser)
-    app.output.note("Your plan updates as soon as checkout completes — then run `highhx agent`.")
+    app.output.note(
+        "Your plan updates as soon as checkout completes — then run `highhx` (or `/account` in a running session)."
+    )
     return 0
 
 

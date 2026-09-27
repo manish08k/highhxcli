@@ -36,6 +36,83 @@ _COMMANDS: tuple[tuple[str, list[str]], ...] = (
     (r"(?:list|show)(?: the)? outdated(?: dependencies| packages)?", ["deps", "outdated"]),
     (r"(?:run\s+)?(?:the\s+)?(?:auto(?:matic)?\s*)?fix(?:es)?|format(?: the)? code", ["fix"]),
 )
+FILE_SUFFIXES = frozenset(
+    [
+        "py",
+        "pyi",
+        "ipynb",
+        "md",
+        "rst",
+        "txt",
+        "json",
+        "jsonc",
+        "yaml",
+        "yml",
+        "toml",
+        "ini",
+        "cfg",
+        "conf",
+        "lock",
+        "env",
+        "js",
+        "mjs",
+        "cjs",
+        "ts",
+        "tsx",
+        "jsx",
+        "vue",
+        "svelte",
+        "go",
+        "rs",
+        "java",
+        "kt",
+        "kts",
+        "scala",
+        "rb",
+        "php",
+        "c",
+        "h",
+        "cc",
+        "cpp",
+        "hpp",
+        "cs",
+        "swift",
+        "m",
+        "dart",
+        "lua",
+        "pl",
+        "r",
+        "sql",
+        "sh",
+        "bash",
+        "zsh",
+        "ps1",
+        "bat",
+        "html",
+        "htm",
+        "css",
+        "scss",
+        "sass",
+        "less",
+        "xml",
+        "csv",
+        "tsv",
+        "log",
+        "gradle",
+        "mk",
+        "dockerfile",
+        "tf",
+    ]
+)
+"""Extensions that make ``name.ext`` a file in the project, not a website or an application.
+(A few are also real top-level domains — `.md`, `.sh` — so open those with an explicit https://.)"""
+
+
+def looks_like_file(target: str) -> bool:
+    name = target.rstrip("/").rsplit("/", 1)[-1]
+    return "." in name and name.rsplit(".", 1)[-1].lower() in FILE_SUFFIXES
+
+
 _URL = re.compile(r"^(?:https?://\S+|(?:localhost|127\.0\.0\.1)(?::\d+)?(?:/\S*)?|[\w-]+(?:\.[\w-]+)+(?:/\S*)?)$", re.I)
 
 
@@ -77,7 +154,14 @@ def parse(request: str, *, search_url: str = DEFAULT_SEARCH_URL) -> Intent | Non
     match = re.fullmatch(
         r"(?:open|go to|navigate to|visit|browse to)\s+(?P<target>\S+)(?:\s+in\s+(?P<app>[\w ]+))?", text, re.I
     )
-    if match and _URL.match(match.group("target")):
+    if (
+        match
+        and _URL.match(match.group("target"))
+        and not (
+            looks_like_file(match.group("target"))
+            and not re.match(r"^(?:https?://|localhost|127\.0\.0\.1)", match.group("target"), re.I)
+        )
+    ):
         target = match.group("target")
         url = (
             target
@@ -90,7 +174,12 @@ def parse(request: str, *, search_url: str = DEFAULT_SEARCH_URL) -> Intent | Non
         app = match.group("app").strip()
         words = app.lower().split()
         # A follow-up clause ("… and check whether …") or a long description needs understanding.
-        if "and" in words or len(words) > 3 or app.lower() in ("tests", "dev server", "services", "the project"):
+        if (
+            "and" in words
+            or len(words) > 3
+            or app.lower() in ("tests", "dev server", "services", "the project")
+            or looks_like_file(app)
+        ):
             return None
         return Intent("launch", app=app, description=f"launch {app}")
     return None

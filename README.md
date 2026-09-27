@@ -164,9 +164,13 @@ $ highhx
 - **Input.** ↑/↓ history (kept across sessions), line editing, `\` at the end of a line or
   a `"""` block for multi-line input, Ctrl+C interrupts the running request, Ctrl+D exits.
 - **Status line.** `Free • Local`, `Free • Connected`, `Pro • Connected`,
-  `Pro • Offline (cached)` or `… • Platform unavailable`. When the platform cannot be
-  reached, local capabilities keep working; if it fails during a Pro request, the session
-  says so and offers the local route for that request.
+  `Pro • Offline (cached)` or `… • Platform unavailable`. Only a live answer from the
+  platform attaches the AI agent. When the platform cannot be reached, local capabilities
+  keep working and the session re-checks when a request needs the agent; if the gateway
+  fails during a Pro request, the session says so and offers the local route for it.
+- **Deterministic means predictable.** Free never calls a model or reads a provider API key.
+  File names are never treated as websites (`open main.py` is not `https://main.py`), and
+  known requests that change files (`fix`, `install dependencies`) ask first.
 - **Plan changes apply in place.** Run `highhx login` (or `/account` after upgrading) inside
   the session and it re-checks your account: the AI agent attaches when the platform grants
   it, and detaches when it no longer does.

@@ -15,6 +15,7 @@ from highhx.agent.session import AgentSession, AgentUI
 from highhx.agent.settings import AgentSettings
 from highhx.agent.sync import SessionSync
 from highhx.cloud.plans import AGENT, CLOUD_SESSIONS
+from highhx.core.errors import CloudError
 
 if TYPE_CHECKING:
     from highhx.cloud.account import Account, CloudAccount
@@ -62,8 +63,18 @@ def create_session(
     overrides: dict[str, Any] | None = None,
     resume: Resume | None = None,
 ) -> tuple[AgentSession, Account, bool]:
-    """Returns ``(session, account, resumed)``. Raises unless the account includes the agent."""
+    """Returns ``(session, account, resumed)``. Raises unless the platform confirms the agent.
+
+    This is the only production path that constructs the agent runtime. It requires a live
+    answer from the platform: a cached account (platform unreachable) is refused, so an
+    edited local cache can never start the runtime (and every model request is checked by
+    the platform again anyway)."""
     account = cloud.require(AGENT, what="The HighhX AI developer agent")
+    if account.cached:
+        raise CloudError(
+            "The HighhX AI agent needs the HighhX platform, which cannot be reached right now.",
+            hint="Local HighhX commands keep working; try again when you are back online.",
+        )
     settings = resolve_settings(app, account, overrides or {})
     provider = build_provider(settings, cloud, account)
     context = gather(app)

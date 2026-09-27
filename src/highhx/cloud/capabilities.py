@@ -71,7 +71,8 @@ class Connection(StrEnum):
     CONNECTED = "connected"
     """Signed in; the platform answered."""
     CACHED = "cached"
-    """Signed in; the platform is unreachable, a recent account copy stands in."""
+    """Signed in; the platform is unreachable and only a local copy of the account is known.
+    A local copy is not proof of a plan (anyone can edit it), so it grants no platform capability."""
     UNAVAILABLE = "unavailable"
     """Signed in, but the account could not be confirmed (offline, expired sign-in …)."""
 
@@ -89,7 +90,12 @@ class Entitlements:
 
     @property
     def tier(self) -> str:
-        return "Pro" if self.has(Capability.AI_AGENT) else "Free"
+        """The plan to show. Offline, that is the cached plan (labelled as such); it unlocks nothing."""
+        if self.has(Capability.AI_AGENT):
+            return "Pro"
+        if self.connection == Connection.CACHED and self.account is not None and self.account.is_pro:
+            return "Pro"
+        return "Free"
 
     @property
     def signed_in(self) -> bool:
@@ -120,10 +126,21 @@ def local() -> Entitlements:
 
 
 def from_account(account: Account) -> Entitlements:
-    """Capabilities for ``account``: local ones plus the platform features it reports."""
+    """Capabilities for ``account``: local ones plus the platform features it reports.
+
+    Only an answer from the platform grants platform capabilities. A cached account (the
+    platform is unreachable) keeps the session local: without the platform no Pro
+    capability can work anyway, and the cache is a local file, not an entitlement.
+    """
+    if account.cached:
+        return Entitlements(
+            LOCAL,
+            Connection.CACHED,
+            account,
+            problem="HighhX platform unavailable. Local capabilities remain available.",
+        )
     granted = frozenset(c for c in PLATFORM if account.has(c.value))
-    connection = Connection.CACHED if account.cached else Connection.CONNECTED
-    return Entitlements(LOCAL | granted, connection, account)
+    return Entitlements(LOCAL | granted, Connection.CONNECTED, account)
 
 
 def resolve(cloud: CloudAccount) -> Entitlements:

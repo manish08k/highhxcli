@@ -93,6 +93,8 @@ def agent_run(
     }
     from highhx.agent.launch import interactive_terminal, start_interactive
 
+    if getattr(app, "interactive_session", False):
+        raise UsageError("You are already in the HighhX session.", hint="Type your request at the prompt.")
     if interactive_terminal(app):
         # The same interactive session as bare `highhx`; the account decides whether the AI agent attaches.
         return start_interactive(app, first=text or None, overrides=overrides, resume=Resume(resume_id, cont))

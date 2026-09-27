@@ -19,9 +19,18 @@ there. Platform capabilities are the plan features (`agent`, `agent.code_changes
 `agent.commands`, `agent.git`, `agent.deploy`, `agent.computer_use`, `cloud.sessions`)
 and exist only when the HighhX platform reports them for your account. The result
 shapes the CLI only: the platform checks the plan on every AI request, so nothing
-local can unlock a Pro capability. When the platform is unreachable the session keeps
-its local capabilities (a Pro account with a recent cached copy shows
-`Pro • Offline (cached)`; AI requests then fail and the session offers the local route).
+local can unlock a Pro capability. Only a live answer from the platform attaches the
+agent: the locally cached account copy is shown (`Pro • Offline (cached)`) but grants
+nothing, and `create_session` — the one constructor of the agent runtime — refuses it.
+While the platform is unreachable the session keeps its local capabilities and re-checks
+the platform (at most every 20 seconds) when a request needs the agent; when the platform
+is back and grants Pro, the agent attaches and handles that request. If the gateway fails
+during a Pro request, the session says so and offers the local route for it.
+
+Free never calls a model, never reads a provider API key (there is no bring-your-own-key
+path; provider keys live only on the platform) and never constructs the agent runtime —
+`tests/unit/agent/test_free_pro_boundary.py` checks this with tripwires on every AI entry
+point, a static scan of the package and an instrumented interpreter.
 
 Requests that need a capability the session lacks show a **HighhX Pro capability**
 panel naming it (AI code changes, AI git operations, AI-driven deployment, AI browser

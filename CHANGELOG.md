@@ -35,6 +35,27 @@ One interactive HighhX for both plans: run `highhx` and describe what you want.
 - Tool outcomes distinguish blocked / declined (⊘) and cancelled (○) from failures (✗);
   approvals render as panels.
 
+### Security
+
+- The AI agent runtime is only constructed on a live confirmation from the platform:
+  `create_session` refuses a cached account, and a cached account grants no platform
+  capability (the cache is an editable local file). Previously an edited cache could start
+  the runtime offline (it still could not reach a model — the gateway checks every request).
+- Free/Pro boundary tests: tripwires on every AI entry point, a static scan for
+  bring-your-own-key paths and vendor SDK imports, and an instrumented interpreter that
+  records environment lookups (no provider key is ever read on Free).
+
+### Fixed
+
+- `highhx do` and the session no longer treat file names as websites or applications
+  (`open main.py` opened `https://main.py`).
+- `highhx -v agent …`, `highhx -C DIR agent …` or a bare `highhx -v` typed inside the
+  session no longer start a nested session.
+- An unexpected error in one command or agent turn no longer ends the session.
+- Known requests that change files (`fix`, `install dependencies`) are confirmed first when
+  typed as free-form text in the session.
+- A signed-in session that started offline attaches the AI agent once the platform is back.
+
 ### Changed
 
 - The startup banner is the same for Free and Pro ("Developer command center" with git
