@@ -33,9 +33,350 @@ also accepts the global options below, before or after the command name.
 | 7 | Blocked by policy |
 | 8 | Validation failed |
 | 9 | Findings reported (security, audit) |
+| 10 | HighhX account required (sign in with `highhx login`, or the plan lacks the feature) |
 | 124 | Timed out |
 | 127 | Command not found |
 | 130 | Cancelled (Ctrl+C) |
+
+## HighhX Pro — AI developer agent
+
+### `highhx agent`
+
+HighhX Pro: an AI developer agent in your terminal.
+
+Describe what you want in plain language — "fix my failing tests",
+"explain how this project works", "make this project production ready".
+The agent inspects the project, proposes a plan, works through HighhX's
+tools (tests, checks, builds, git, security, deploy …) and verifies the
+result. Every risky action goes through HighhX's policies and approvals.
+
+Running `highhx agent` without a subcommand runs `highhx agent run`.
+
+#### `highhx agent models`
+
+AI providers and models the HighhX gateway can route agent requests to.
+
+```
+highhx agent models [OPTIONS]
+```
+
+#### `highhx agent run`
+
+Without PROMPT (in a terminal) start an interactive session; with PROMPT,
+or when input/output is not a terminal, handle that one request and exit.
+
+  highhx agent
+  highhx agent "why is the application crashing?"
+  highhx agent --continue
+  highhx agent --mode read-only "find security issues"
+  echo "run all the tests and fix whatever fails" | highhx agent --yes --mode auto-edit
+
+Exit code: 0 when the request completed, 1 when it stopped early (step limit,
+output limit, refusal, interruption), 10 without a HighhX Pro account.
+
+```
+highhx agent run [OPTIONS] [PROMPT]...
+```
+
+| Option | Description |
+|---|---|
+| `--continue, -c` | Continue the most recent session in this project. |
+| `--resume` | Resume a saved session (see `highhx agent sessions`). |
+| `--provider` | AI provider (default: account setting, else highhx). |
+| `--model` | Model to use (default: provider default). |
+| `--mode` | Approvals: ask (default), auto-edit (normal changes without asking), read-only. |
+| `--max-steps` | Maximum tool steps per request. |
+| `--effort` | Reasoning effort, where the model supports it. |
+
+#### `highhx agent sessions`
+
+Saved sessions (newest first). Resume one with `highhx agent --resume ID`.
+
+```
+highhx agent sessions [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--all` | Sessions from every project, not just this one. |
+| `--limit` | Maximum sessions to list. (default: `20`) |
+
+#### `highhx agent stop`
+
+Cancel running `highhx agent` processes: the current model request is cancelled
+(also on the platform), retries stop, running commands and their child processes are
+terminated, and the session is saved as cancelled.
+
+```
+highhx agent stop [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--all` | Stop agents in every project, not just this one. |
+| `--session` | Stop the agent working on this session. |
+
+## Automation (no AI)
+
+### `highhx do`
+
+Understands fixed, unambiguous requests without AI and runs the matching
+HighhX command or automation step:
+
+  highhx do run the tests
+  highhx do "open chrome and search for Adele"
+  highhx do open localhost:3000
+  highhx do start the dev server
+
+Requests that need understanding or several adaptive steps ("fix whatever is
+failing") are for the AI agent: `highhx agent "…"` (HighhX Pro).
+
+```
+highhx do [OPTIONS] REQUEST...
+```
+
+### `highhx computer`
+
+Deterministic UI automation: open apps and pages, observe controls by role and
+name, click, type, press keys and run flow files — each step is checked by the
+HighhX safety policy, sensitive steps (submit, pay, delete …) ask for
+confirmation, and every step is verified and recorded in `highhx audit`.
+
+Targets are selectors: `Search`, `button:Search`, `textbox="Email"`, `link:Docs#2`.
+
+| Option | Description |
+|---|---|
+| `--headless` | Run the HighhX browser without a window (default: visible). |
+
+#### `highhx computer browser`
+
+The HighhX browser uses its own profile (never your personal one) and a DevTools
+port bound to 127.0.0.1.
+
+##### `highhx computer browser start`
+
+Start Chrome/Chromium/Edge/Brave for HighhX automation.
+
+```
+highhx computer browser start [OPTIONS]
+```
+
+##### `highhx computer browser stop`
+
+Close the HighhX browser and forget its session.
+
+```
+highhx computer browser stop [OPTIONS]
+```
+
+#### `highhx computer click`
+
+Click the control SELECTOR (e.g. `button:Search`). Sensitive controls ask first.
+
+```
+highhx computer click [OPTIONS] SELECTOR
+```
+
+| Option | Description |
+|---|---|
+| `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+
+#### `highhx computer observe`
+
+Observe the browser page or the frontmost application semantically.
+
+```
+highhx computer observe [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+| `--app` | Desktop source: application to inspect (default: frontmost). |
+| `--actions` | Also list the valid action ids. |
+
+#### `highhx computer open`
+
+`highhx computer open https://example.com` · `highhx computer open Calculator`.
+
+```
+highhx computer open [OPTIONS] TARGET
+```
+
+#### `highhx computer press`
+
+Press KEY in the focused control. Enter in a form counts as submitting it.
+
+```
+highhx computer press [OPTIONS] {enter|tab|escape|backspace|arrowdown|arrowup|pagedown|pageup|space}
+```
+
+| Option | Description |
+|---|---|
+| `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+
+#### `highhx computer run`
+
+Run the steps in FLOW_FILE (open, click, type, press, select, scroll, expect,
+launch, wait). Each step is resolved deterministically, safety-checked,
+executed and verified; the flow stops at the first failing step.
+
+```
+highhx computer run [OPTIONS] FLOW_FILE
+```
+
+| Option | Description |
+|---|---|
+| `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+
+#### `highhx computer scroll`
+
+Scroll the page or window.
+
+```
+highhx computer scroll [OPTIONS] {up|down}
+```
+
+| Option | Description |
+|---|---|
+| `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+
+#### `highhx computer select`
+
+Choose OPTION (value or visible text) in the list SELECTOR.
+
+```
+highhx computer select [OPTIONS] SELECTOR OPTION
+```
+
+| Option | Description |
+|---|---|
+| `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+
+#### `highhx computer status`
+
+Report native accessibility, browser, OCR and vision availability on this machine.
+
+```
+highhx computer status [OPTIONS]
+```
+
+#### `highhx computer type`
+
+Replace the content of the field SELECTOR with TEXT (or $VAR with --from-env).
+
+```
+highhx computer type [OPTIONS] SELECTOR [TEXT]
+```
+
+| Option | Description |
+|---|---|
+| `--from-env` | Type the value of this environment variable (never shown or logged). |
+| `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+
+## Account
+
+### `highhx login`
+
+Sign in with the browser (device code), or with an API token from stdin:
+
+  highhx login
+  echo "$HIGHHX_TOKEN" | highhx login --with-token
+
+New users create their account in the same browser flow. Credentials are
+stored in your user config directory (mode 0600), never in the project.
+HIGHHX_TOKEN in the environment overrides stored credentials.
+
+```
+highhx login [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--with-token` | Read an API token from stdin (CI, headless machines). |
+| `--api-url` | HighhX platform URL (self-hosted / development). |
+| `--no-browser` | Print the sign-in link instead of opening a browser. |
+
+### `highhx logout`
+
+Revoke this machine's token on the platform and delete it locally.
+
+```
+highhx logout [OPTIONS]
+```
+
+### `highhx account`
+
+Your HighhX platform account. Sign in with `highhx login`.
+
+HighhX Free is the full developer CLI; HighhX Pro adds the AI developer agent
+(`highhx agent`).
+
+Running `highhx account` without a subcommand runs `highhx account status`.
+
+#### `highhx account billing`
+
+Open the billing portal (change or cancel your subscription, download invoices).
+
+```
+highhx account billing [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--no-browser` | Print the link instead of opening a browser. |
+
+#### `highhx account plans`
+
+What each plan includes. No account needed.
+
+```
+highhx account plans [OPTIONS]
+```
+
+#### `highhx account settings`
+
+Show or change account-wide agent settings (project `agent:` config and flags override them).
+
+```
+highhx account settings [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--provider` | Default AI provider. |
+| `--model` | Default model (e.g. claude-opus-5, gpt-5, gemini-2.5-pro). |
+| `--approval` | Default approval mode. |
+| `--upstream` | Upstream used by the managed HighhX provider. |
+| `--sync` | Sync agent session metadata to your account. |
+
+#### `highhx account status`
+
+Show the signed-in account, its plan and features, and this period's AI usage.
+
+```
+highhx account status [OPTIONS]
+```
+
+#### `highhx account upgrade`
+
+Start a HighhX Pro subscription through the platform's secure checkout.
+
+```
+highhx account upgrade [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--no-browser` | Print the checkout link instead of opening a browser. |
+
+#### `highhx account usage`
+
+Tokens and requests used through the HighhX AI gateway this period, by model.
+
+```
+highhx account usage [OPTIONS]
+```
 
 ## Project
 
@@ -1067,6 +1408,21 @@ highhx history [OPTIONS] [EXECUTION_ID]
 | `--limit, -n` |  (default: `20`) |
 | `--kind` | Filter: command, workflow, deploy, release … |
 | `--status` |  |
+
+### `highhx audit`
+
+Every action HighhX automation classified and decided on — by the agent or by
+`highhx computer` / `highhx do` — with its risk, decision (allowed, confirmed,
+denied, blocked), outcome and verification. Values are redacted.
+
+```
+highhx audit [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--limit` | Number of entries. (default: `30`) |
+| `--session` | Only entries from one agent session. |
 
 ### `highhx report`
 

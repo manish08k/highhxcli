@@ -750,6 +750,61 @@
         }
       },
       "additionalProperties": false
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "highhx",
+            "anthropic",
+            "openai",
+            "gemini"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "approval": {
+          "type": "string",
+          "enum": [
+            "ask",
+            "auto-edit",
+            "read-only"
+          ]
+        },
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 128000
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "instructions": {
+          "type": "string",
+          "description": "Extra instructions for the HighhX agent in this project"
+        },
+        "sync_sessions": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "description": "HighhX Pro agent settings for this project"
     }
   },
   "additionalProperties": false

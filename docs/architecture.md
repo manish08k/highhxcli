@@ -4,6 +4,8 @@ HighhX is layered so that every side effect passes through one place where safet
 rules are enforced.
 
 ```text
+agent/               HighhX Pro: session loop, tools, permissions, planner, providers (see below)
+    ↓
 commands/            thin CLI modules: parse args → call a service → render
     ↓
 domain services      project, workflows, environment, dependencies, testing, building,
@@ -82,3 +84,39 @@ project, history goes to the user data directory.
 - `deployment/strategy.py` — `register_strategy(type, factory)`.
 - `integrations/cloud` — provider registry for `type: plugin:<name>` targets.
 - `templates/<stack>/` — project templates rendered by `highhx init`.
+
+## The agent layer (HighhX Pro)
+
+```text
+highhx agent ─▶ repl / ui ─▶ session ─┬─▶ model provider ──▶ HighhX gateway │ Anthropic │ OpenAI │ Gemini
+                                       │     (streamed events)
+                                       └─▶ tools ─▶ permissions ─▶ domain services / Engine.run ─▶ history
+```
+
+| Module | Responsibility |
+|---|---|
+| `agent/session.py` | The loop: model → tool calls → results → model, step limits, retries, cancellation, persistence |
+| `agent/model/` | `ModelProvider` protocol and streaming adapters; provider-neutral `messages` / `streaming` events |
+| `agent/tools/` | Tools wrapping existing services (`TestRunner`, `Builder`, `GitManager`, scanner, `DeploymentManager` …) |
+| `agent/permissions.py` | Path confinement, secret files, `agent:*` policy actions, approval modes and session grants |
+| `agent/planner.py` | Plans (`propose_plan` / `update_plan`) and live progress |
+| `agent/context.py`, `memory.py`, `prompts.py` | Project context, `.highhx/memory.md`, the system prompt |
+| `agent/history.py`, `sync.py` | Transcripts in the state database (migration 3); metadata sync to the platform |
+| `agent/ui.py`, `repl.py` | Rich terminal UI and slash commands |
+| `cloud/` | Platform client (stdlib HTTP + SSE, protocol versioning, resumable streams), credentials, plans |
+| `safety/` | Shared by Free and Pro: action descriptors, semantic classifier, confirmation tickets, action gate, audit log, untrusted-content framing |
+| `computer/` | Computer use: semantic observations, action candidates, runtime (observe → act → verify), Chrome DevTools, macOS Accessibility, OCR, flows, deterministic intents |
+| `agent/state.py`, `agent/running.py` | Session state machine; registry of running agents (kill switch) |
+| `agent/model/resilience.py` | Backoff with jitter and a circuit breaker for model calls |
+
+The session installs itself as the engine's output sink and approval prompter, so
+engine prompts and command output flow through the agent UI instead of colliding with
+it. Tools never spawn processes directly — they call the same services and `Engine.run`
+as the commands do.
+
+## The platform (`server/`)
+
+A separate package (`highhx-platform`, FastAPI + SQLAlchemy) that imports the CLI's
+plan definitions (`highhx.cloud.plans`), wire format (`highhx.cloud.sse`,
+`highhx.agent.streaming`) and provider adapters, so both ends share one implementation.
+See [platform.md](platform.md).

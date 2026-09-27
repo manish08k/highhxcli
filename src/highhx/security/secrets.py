@@ -120,6 +120,11 @@ SECRET_PATTERNS: tuple[SecretPattern, ...] = (
         "high",
     ),
     _p("stripe-key", "Stripe secret key", r"\b(?P<secret>(?:sk|rk)_live_[A-Za-z0-9]{20,})\b", "critical"),
+    _p("stripe-test-key", "Stripe test key", r"\b(?P<secret>(?:sk|rk)_test_[A-Za-z0-9]{20,})\b", "medium"),
+    _p("stripe-webhook-secret", "Stripe webhook signing secret", r"\b(?P<secret>whsec_[A-Za-z0-9]{20,})\b", "high"),
+    _p("anthropic-key", "Anthropic API key", r"\b(?P<secret>sk-ant-[A-Za-z0-9_\-]{20,})", "critical"),
+    _p("openai-key", "OpenAI API key", r"\b(?P<secret>sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_\-]{32,})", "critical"),
+    _p("highhx-token", "HighhX platform token", r"\b(?P<secret>hhx_[A-Za-z0-9_\-]{30,})", "critical"),
     _p("google-api-key", "Google API key", r"\b(?P<secret>AIza[0-9A-Za-z\-_]{35})\b", "high"),
     _p("npm-token", "npm access token", r"\b(?P<secret>npm_[A-Za-z0-9]{36})\b", "critical"),
     _p("pypi-token", "PyPI upload token", r"\b(?P<secret>pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_\-]{50,})\b", "critical"),
@@ -210,6 +215,64 @@ def find_secrets(
     return matches
 
 
+# Shapes that are always secret in output and logs, but too broad for the source scanner.
+# Whole PEM private-key blocks (the scanner only needs the header line).
+_PEM_BLOCK = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----.*?-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----", re.S
+)
+REDACTION_ONLY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # HTTP credentials: `Authorization: Bearer …`, `Proxy-Authorization: Basic …`, `Cookie: …`, `Set-Cookie: …`.
+    re.compile(r"(?im)^(?P<keep>\s*(?:proxy-)?authorization\s*:\s*)(?P<secret>.+)$"),
+    re.compile(r"(?im)^(?P<keep>\s*(?:set-)?cookie\s*:\s*)(?P<secret>.+)$"),
+    re.compile(r"(?i)(?P<keep>\b(?:bearer|basic)\s+)(?P<secret>[A-Za-z0-9._~+/=\-]{12,})"),
+    re.compile(
+        r"(?i)(?P<keep>[\"']?(?:authorization|x-api-key|api[_-]?key|x-auth-token)[\"']?\s*[:=]\s*[\"']?)(?P<secret>[^\s\"',;]{8,})"
+    ),
+    # `password=…`, `DB_PASSWORD: …`, `--password …` in logs and command lines.
+    re.compile(
+        r"(?i)(?P<keep>(?:\b[\w.-]*(?:password|passwd|pwd|secret|token|credential)\b[\"']?\s*[:=]\s*[\"']?|--(?:password|token|secret)[= ]))"
+        r"(?!(?:\d+|true|false|null|none)\b)(?P<secret>[^\s\"',;&]{4,})"
+    ),
+)
+# 13-19 digits (optionally in space/dash groups) that are not part of a longer number or a decimal.
+_CARD_RE = re.compile(r"(?<![\d.,])(?:\d[ -]?){12,18}\d(?![\d.,]\d)")
+# Issuer prefixes: Visa, Mastercard, Amex, Discover, JCB, Diners, UnionPay, Maestro.
+_CARD_PREFIX = re.compile(r"^(?:4|5[1-5]|2[2-7]|3[47]|6011|65|64[4-9]|35|30[0-5]|36|38|62|5[06-9]|6[37])")
+
+
+def _luhn_ok(digits: str) -> bool:
+    total = 0
+    for index, char in enumerate(reversed(digits)):
+        value = int(char)
+        if index % 2:
+            value *= 2
+            if value > 9:
+                value -= 9
+        total += value
+    return total % 10 == 0
+
+
+_CARD_CONTEXT = re.compile(r"(?i)(?:card|cc|credit|debit|pan|visa|mastercard|amex|payment)\W{0,20}$")
+
+
+def _redact_cards(text: str) -> str:
+    """Payment card numbers: grouped ones (``4242 4242 4242 4242``) by issuer prefix + Luhn;
+    ungrouped digit runs only when a card keyword precedes them, so ids, timestamps and other
+    large numbers in JSON are left alone."""
+
+    def _sub(m: re.Match[str]) -> str:
+        raw = m.group(0)
+        digits = re.sub(r"[ -]", "", raw)
+        if not (13 <= len(digits) <= 19 and _CARD_PREFIX.match(digits) and _luhn_ok(digits)):
+            return raw
+        grouped = bool(re.fullmatch(r"\d{4}(?:[ -]\d{4}){2,3}(?:[ -]\d{1,3})?|\d{4}[ -]\d{6}[ -]\d{5}", raw))
+        if grouped or _CARD_CONTEXT.search(text[max(0, m.start() - 30) : m.start()]):
+            return REDACTED
+        return raw
+
+    return _CARD_RE.sub(_sub, text)
+
+
 class Redactor:
     """Removes known secret values and secret-looking tokens from text.
 
@@ -250,11 +313,19 @@ class Redactor:
         compiled = self._compiled
         if compiled is not None:
             text = compiled.sub(REDACTED, text)
+        text = _PEM_BLOCK.sub(REDACTED, text)
         for pattern in SECRET_PATTERNS:
             if pattern.id in ("generic-secret-assignment",):
                 continue
             text = _redact_pattern(pattern, text)
-        return text
+        for regex in REDACTION_ONLY_PATTERNS:
+            if "secret" in regex.groupindex:
+                text = regex.sub(
+                    lambda m: m.group("keep") + REDACTED if REDACTED not in m.group("secret") else m.group(0), text
+                )
+            else:
+                text = regex.sub(REDACTED, text)
+        return _redact_cards(text)
 
 
 def _looks_like_path(value: str) -> bool:

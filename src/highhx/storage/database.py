@@ -74,6 +74,20 @@ class Database:
             else:
                 self._conn.execute("COMMIT")
 
+    @contextlib.contextmanager
+    def immediate_transaction(self) -> Iterator[None]:
+        """Like :meth:`transaction`, but takes the database write lock up front (other
+        processes wait up to the busy timeout instead of racing)."""
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                self._conn.execute("ROLLBACK")
+                raise
+            else:
+                self._conn.execute("COMMIT")
+
     def close(self) -> None:
         with self._lock, contextlib.suppress(sqlite3.Error):
             self._conn.close()

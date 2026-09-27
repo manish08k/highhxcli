@@ -22,6 +22,7 @@ EXIT_CODES = (
     (7, "Blocked by policy"),
     (8, "Validation failed"),
     (9, "Findings reported (security, audit)"),
+    (10, "HighhX account required (sign in with `highhx login`, or the plan lacks the feature)"),
     (124, "Timed out"),
     (127, "Command not found"),
     (130, "Cancelled (Ctrl+C)"),

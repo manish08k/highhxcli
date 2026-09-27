@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "highhx-platform"
+version = "0.2.0"
+description = "HighhX Platform — accounts, Pro subscriptions, AI gateway and usage behind the HighhX CLI."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = [
+    "highhxcli[ai]",
+    "fastapi>=0.110",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.1"]
+dev = ["pytest>=8.0", "httpx>=0.27", "psycopg[binary]>=3.1", "embedded-postgres>=16; sys_platform != 'win32'"]
+
+[project.scripts]
+highhx-platform = "highhx_platform.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/highhx_platform"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+addopts = "-ra"

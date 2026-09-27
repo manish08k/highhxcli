@@ -37,6 +37,7 @@ from highhx.utils.paths import user_data_dir
 
 if TYPE_CHECKING:
     from highhx.building.builder import Builder
+    from highhx.cloud.account import CloudAccount
     from highhx.database.manager import DatabaseManager
     from highhx.dependencies.manager import DependencyManager
     from highhx.deployment.manager import DeploymentManager
@@ -259,6 +260,14 @@ class App:
             except HighhXError:
                 pass
         return facts
+
+    # ------------------------------------------------------------------ cloud
+    @cached_property
+    def cloud(self) -> CloudAccount:
+        """The HighhX platform account (sign-in, plan, AI gateway). Never required by Free commands."""
+        from highhx.cloud.account import CloudAccount
+
+        return CloudAccount()
 
     # --------------------------------------------------------------- services
     @cached_property

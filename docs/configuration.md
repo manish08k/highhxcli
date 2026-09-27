@@ -143,6 +143,16 @@ hooks:
 
 workspace:
   members: ["apps/*", "packages/*"]
+
+agent:                          # HighhX Pro agent (see agent.md)
+  provider: highhx              # highhx | anthropic | openai | gemini
+  model: claude-opus-5
+  approval: ask                 # ask | auto-edit | read-only
+  max_steps: 60                 # tool steps per request (capped by your plan)
+  max_tokens: 32000             # output tokens per model response
+  effort: high                  # low | medium | high | xhigh | max
+  instructions: "Use pnpm, never npm."
+  sync_sessions: true
 ```
 
 Command strings are split without a shell unless they use shell syntax (pipes,
@@ -185,6 +195,10 @@ See [security.md](security.md#policies).
 | `HIGHHX_NON_INTERACTIVE` | Never prompt (deny instead) |
 | `HIGHHX_DATA_DIR`, `HIGHHX_CONFIG_DIR`, `HIGHHX_CACHE_DIR` | Override user directories |
 | `HIGHHX_ASCII` | ASCII status symbols |
+| `HIGHHX_TOKEN` | HighhX platform token (overrides `highhx login`) |
+| `HIGHHX_API_URL` | HighhX platform URL (self-hosted / development) |
+| `HIGHHX_BROWSER` | Browser binary for `highhx computer` (default: Chrome/Chromium/Edge/Brave) |
+| `HIGHHX_HEADLESS` | Run the HighhX browser without a window (always on Linux without a display) |
 | `NO_COLOR` | Disable colors |
 
 HighhX sets `HIGHHX_WORKFLOW`, `HIGHHX_EXECUTION_ID`, `HIGHHX_STEP_ID`,

@@ -93,9 +93,36 @@ itself. Plugins with symbolic links are rejected, and plugin names are validated
   (`${{ steps.x.outputs.y }}`) into its command line — pass it through `env:` instead.
 - Every command is risk-classified *after* variables are substituted.
 
+## Automation safety (Free and Pro)
+
+`highhx computer`, `highhx do` and the agent share one deterministic safety layer
+(`highhx/safety`): commands and UI actions are classified semantically; sensitive or
+irreversible actions (submit, pay, delete, install, publish, send, deploy, credential and
+permission changes, security controls, production targets, destructive SQL) need explicit
+confirmation bound to the exact action by a single-use HMAC ticket; catastrophic actions are
+blocked; every decision is written to a redacted audit log (`highhx audit`). Details:
+[agent.md](agent.md#safety) and [computer-use.md](computer-use.md).
+
+## The AI agent (HighhX Pro)
+
+`highhx agent` adds no new execution path: commands run through the same engine
+(risk → policy → approval → execute → history). In addition the agent is confined to
+the project root (symlinks resolved), never reads or writes secret files (`.env*`,
+private keys, credential files), cannot modify `.git/` or `.highhx/state`, honours
+`forbidden_files`, and asks before normal-risk changes in the default `ask` mode.
+Agent actions have policy names (`agent:write`, `agent:exec`, `agent:deploy:<target>` …).
+Everything sent to the model is redacted first. Details: [agent.md](agent.md#safety).
+
 ## Data
 
-Everything stays local: `.highhx/state/` (SQLite) and `.highhx/logs/` (text files),
-both git-ignored. HighhX makes network requests only when you ask for something that
-needs the network (health checks you configured, installing a plugin from a git URL,
-package managers you invoke).
+Free commands keep everything local: `.highhx/state/` (SQLite) and `.highhx/logs/`
+(text files), both git-ignored. HighhX makes network requests only when you ask for
+something that needs the network (health checks you configured, installing a plugin
+from a git URL, package managers you invoke).
+
+With HighhX Pro, `highhx agent` sends the conversation — your requests, the project
+overview, and the (redacted) file contents, command output and UI text the agent reads — to
+the HighhX platform's AI gateway, which forwards it to the configured model provider. Session metadata (title, model,
+token counts, status) is stored in your HighhX account; transcripts stay in the
+project's local state database. Platform credentials live in your user config
+directory with owner-only permissions.

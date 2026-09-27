@@ -15,6 +15,9 @@ from highhx.core.errors import ExitCode, HighhXError
 from highhx.core.lifecycle import Lifecycle
 
 SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("HighhX Pro — AI developer agent", ("agent",)),
+    ("Automation (no AI)", ("do", "computer")),
+    ("Account", ("login", "logout", "account")),
     ("Project", ("init", "status", "info", "dev", "start", "stop", "restart", "check")),
     ("Code & tasks", ("run", "exec", "script", "task", "watch", "fix")),
     ("Dependencies", ("deps",)),
@@ -25,7 +28,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Security", ("security",)),
     ("Containers, services & data", ("docker", "services", "ports", "db")),
     ("Workflows & automation", ("workflow", "schedule", "hook", "trigger", "watchers")),
-    ("Observability", ("logs", "history", "report", "trace")),
+    ("Observability", ("logs", "history", "audit", "report", "trace")),
     ("Extensibility & team", ("plugin", "config", "policy", "workspace", "profile")),
     ("Diagnostics", ("doctor", "diagnose", "repair", "debug")),
 )
@@ -176,14 +179,34 @@ CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 
 @click.version_option(__version__, "--version", "-V", prog_name="highhx", message="%(prog)s %(version)s")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """HighhX — your local developer command center.
+    """HighhX — your developer command center.
 
-    Local-first and offline-first: no cloud service, no API keys. Every risky
-    action is classified (safe / normal / dangerous / critical) and needs
-    approval; use --dry-run to preview anything.
+    HighhX Free: every command below except `agent` works locally, with no
+    account. HighhX Pro adds `highhx agent`, an AI developer agent backed by the
+    HighhX platform. Every risky action is classified (safe / normal / dangerous
+    / critical) and needs approval; use --dry-run to preview anything.
     """
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
+        app = ctx.find_object(App)
+        if app is not None and not app.options.json:
+            _guide(app)
+
+
+def _guide(app: App) -> None:
+    """Next-step guidance for a bare `highhx`: initialize the project, then try Pro."""
+    out = app.output
+    out.plain()
+    if not app.initialized:
+        out.info(f"{app.root.name} is not a HighhX project yet — run `highhx init` to set it up.")
+    else:
+        out.info("Try `highhx status`, `highhx check` or `highhx doctor`.")
+    try:
+        signed_in = app.cloud.signed_in
+    except HighhXError:
+        signed_in = False
+    if not signed_in:
+        out.note("HighhX Pro: `highhx login`, then `highhx agent` — describe what you want in plain language.")
 
 
 for option in global_options(hidden=False):

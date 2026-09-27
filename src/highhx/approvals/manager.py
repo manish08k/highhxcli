@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -69,6 +70,19 @@ class ApprovalManager:
         self.dry_run = dry_run
         self._lock = threading.Lock()
         self.history: list[tuple[ApprovalRequest, ApprovalDecision]] = []
+        self._preapproved = threading.local()
+
+    @contextlib.contextmanager
+    def preapproved(self, max_risk: RiskLevel) -> Iterator[None]:
+        """Within this block, bypassable requests up to ``max_risk`` are approved without asking
+        again — used after a person confirmed the exact action through HighhX's confirmation
+        broker. Non-bypassable rules still require their own interactive confirmation."""
+        previous = getattr(self._preapproved, "risk", None)
+        self._preapproved.risk = max_risk
+        try:
+            yield
+        finally:
+            self._preapproved.risk = previous
 
     def decide(self, request: ApprovalRequest) -> ApprovalDecision:
         """Decide without raising."""
@@ -82,6 +96,9 @@ class ApprovalManager:
         )
         if request.risk <= self.policy.auto_approve and not non_bypassable:
             return ApprovalDecision(True, "auto")
+        preapproved = getattr(self._preapproved, "risk", None)
+        if preapproved is not None and request.risk <= preapproved and not non_bypassable:
+            return ApprovalDecision(True, "confirmed-ticket")
         if self.dry_run:
             return ApprovalDecision(True, "dry-run", "dry run: nothing will be executed")
         if self.assume_yes and not non_bypassable and request.risk <= self.policy.yes_max_risk:

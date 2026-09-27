@@ -85,6 +85,70 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         # The expiring cache table was never used by any feature; drop it.
         "DROP TABLE IF EXISTS cache;",
     ),
+    (
+        3,
+        """
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            root TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            turns INTEGER NOT NULL DEFAULT 0,
+            usage TEXT NOT NULL DEFAULT '{}',
+            plan TEXT,
+            remote_id TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated ON agent_sessions(updated_at);
+
+        CREATE TABLE IF NOT EXISTS agent_messages (
+            session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+            seq INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, seq)
+        );
+        """,
+    ),
+    (
+        4,
+        """
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            session_id TEXT,
+            account_id TEXT,
+            actor TEXT NOT NULL,
+            tool TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target TEXT,
+            risk TEXT,
+            categories TEXT NOT NULL DEFAULT '[]',
+            decision TEXT NOT NULL,
+            ticket_id TEXT,
+            status TEXT NOT NULL,
+            verified INTEGER,
+            duration REAL,
+            error TEXT,
+            details TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+        CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_log(session_id);
+        ALTER TABLE agent_sessions ADD COLUMN account_id TEXT;
+        CREATE INDEX IF NOT EXISTS idx_agent_sessions_account ON agent_sessions(account_id, root);
+        """,
+    ),
+    (
+        5,
+        # One HighhX process at a time may drive a session (host:pid of the holder).
+        "ALTER TABLE agent_sessions ADD COLUMN lease_owner TEXT;",
+    ),
 )
 
 LATEST_VERSION = MIGRATIONS[-1][0]
@@ -96,14 +160,30 @@ def current_version(db: Database) -> int:
     return int(row["v"]) if row and row["v"] is not None else 0
 
 
+def _statements(script: str) -> list[str]:
+    """Split a migration script into statements (the scripts contain no literal semicolons)."""
+    return [statement.strip() for statement in script.split(";") if statement.strip()]
+
+
 def apply_migrations(db: Database) -> list[int]:
-    """Apply pending migrations in order. Returns the versions applied."""
+    """Apply pending migrations in order. Returns the versions applied.
+
+    Several HighhX processes may open a fresh database at the same moment (a workflow and
+    `highhx history`, say). Pending migrations are applied inside one ``BEGIN IMMEDIATE``
+    transaction and the version is re-read after taking the write lock, so exactly one
+    process applies each migration and the others see the result — non-idempotent steps
+    such as ``ALTER TABLE … ADD COLUMN`` never run twice.
+    """
+    if current_version(db) >= LATEST_VERSION:
+        return []
     applied: list[int] = []
-    version = current_version(db)
-    for number, script in MIGRATIONS:
-        if number <= version:
-            continue
-        db.executescript(script)
-        db.execute("INSERT INTO schema_version (version) VALUES (?)", (number,))
-        applied.append(number)
+    with db.immediate_transaction():
+        version = current_version(db)
+        for number, script in MIGRATIONS:
+            if number <= version:
+                continue
+            for statement in _statements(script):
+                db.execute(statement)
+            db.execute("INSERT INTO schema_version (version) VALUES (?)", (number,))
+            applied.append(number)
     return applied

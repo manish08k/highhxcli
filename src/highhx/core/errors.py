@@ -24,6 +24,7 @@ class ExitCode(IntEnum):
     POLICY_VIOLATION = 7
     VALIDATION = 8
     FINDINGS = 9
+    ACCOUNT = 10
     TIMEOUT = 124
     COMMAND_NOT_FOUND = 127
     CANCELLED = 130
@@ -184,3 +185,61 @@ class IntegrationError(HighhXError):
     """An external integration (Docker, SSH, Kubernetes, database …) failed."""
 
     category = "integration"
+
+
+class AccountError(HighhXError):
+    """Signing in to the HighhX platform is required, or the session expired."""
+
+    exit_code = ExitCode.ACCOUNT
+    category = "account"
+
+
+class PlanRequiredError(AccountError):
+    """The signed-in account's plan does not include a feature (e.g. HighhX Pro)."""
+
+    category = "plan_required"
+
+
+class QuotaExceededError(AccountError):
+    """The account used up its AI allowance for the current billing period."""
+
+    category = "quota"
+
+
+class CloudError(HighhXError):
+    """The HighhX platform could not be reached or returned an error."""
+
+    category = "cloud"
+    status: int | None = None
+    """HTTP status when the platform answered with an error; None for connection problems."""
+    code: str | None = None
+    """The platform's error code (e.g. ``provider_unavailable``), when it sent one."""
+
+
+class ModelProviderError(HighhXError):
+    """An AI model provider failed (bad credentials, rate limit, outage …)."""
+
+    category = "model"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        hint: str | None = None,
+        details: Sequence[str] | None = None,
+        status: int | None = None,
+    ) -> None:
+        super().__init__(message, hint=hint, details=details)
+        self.retryable = retryable
+        self.status = status
+
+
+class OutcomeUnknownError(IntegrationError):
+    """An action was sent but its result never arrived (e.g. the connection dropped).
+
+    It may or may not have taken effect, so it is recorded as ``unknown`` and never
+    repeated automatically: the caller must observe the current state and decide again.
+    """
+
+    outcome_unknown = True

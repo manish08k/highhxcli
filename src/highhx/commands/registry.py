@@ -14,12 +14,17 @@ def all_commands() -> list[click.Command]:
     from highhx.commands.build.build import build
     from highhx.commands.build.clean import clean
     from highhx.commands.build.package import package
+    from highhx.commands.cloud.account import account
+    from highhx.commands.cloud.agent import agent
+    from highhx.commands.cloud.login import login, logout
     from highhx.commands.code.exec import exec_command
     from highhx.commands.code.fix import fix
     from highhx.commands.code.run import run
     from highhx.commands.code.script import script
     from highhx.commands.code.task import task
     from highhx.commands.code.watch import watch
+    from highhx.commands.computer.do import do
+    from highhx.commands.computer.main import computer
     from highhx.commands.database.main import db
     from highhx.commands.dependencies.main import deps
     from highhx.commands.deployment.deploy import deploy
@@ -32,6 +37,7 @@ def all_commands() -> list[click.Command]:
     from highhx.commands.docker.main import docker
     from highhx.commands.environment.main import env
     from highhx.commands.git.main import git
+    from highhx.commands.observability.audit import audit
     from highhx.commands.observability.history import history
     from highhx.commands.observability.logs import logs
     from highhx.commands.observability.report import report
@@ -114,4 +120,11 @@ def all_commands() -> list[click.Command]:
         trace,
         diagnose,
         repair,
+        agent,
+        do,
+        computer,
+        audit,
+        login,
+        logout,
+        account,
     ]

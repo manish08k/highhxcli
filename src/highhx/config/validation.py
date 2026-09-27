@@ -258,6 +258,21 @@ CONFIG_SCHEMA = Obj(
         "triggers": Prop(Map(List(Str(min_length=1)))),
         "hooks": Prop(Map(Str(min_length=1))),
         "workspace": Prop(Obj({"members": Prop(List(Str()))})),
+        "agent": Prop(
+            Obj(
+                {
+                    "provider": Prop(Str(choices=("highhx", "anthropic", "openai", "gemini"))),
+                    "model": Prop(Str(min_length=1)),
+                    "approval": Prop(Str(choices=("ask", "auto-edit", "read-only"))),
+                    "max_steps": Prop(Int(minimum=1, maximum=500)),
+                    "max_tokens": Prop(Int(minimum=1024, maximum=128_000)),
+                    "effort": Prop(Str(choices=("low", "medium", "high", "xhigh", "max"))),
+                    "instructions": Prop(Str(), description="Extra instructions for the HighhX agent in this project"),
+                    "sync_sessions": Prop(Bool()),
+                },
+                description="HighhX Pro agent settings for this project",
+            )
+        ),
     }
 )
 

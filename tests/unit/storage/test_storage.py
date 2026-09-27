@@ -107,3 +107,29 @@ def test_concurrent_writes_are_safe(db: Database) -> None:
     for t in threads:
         t.join()
     assert len(history.get(exec_id).steps) == 20
+
+
+def test_concurrent_processes_migrate_a_fresh_database_once(tmp_path: Path) -> None:
+    """Regression: two HighhX processes opening a new database raced on ALTER TABLE migrations
+    ("duplicate column name") and one silently ran without history."""
+    import subprocess
+    import sys
+
+    db_path = tmp_path / "state" / "highhx.db"
+    code = (
+        "import sys; from pathlib import Path; from highhx.storage.database import Database; "
+        "from highhx.storage.migrations import LATEST_VERSION, current_version; "
+        "db = Database.open(Path(sys.argv[1])); assert current_version(db) == LATEST_VERSION; db.close()"
+    )
+    procs = [
+        subprocess.Popen([sys.executable, "-c", code, str(db_path)], stderr=subprocess.PIPE, text=True)
+        for _ in range(8)
+    ]
+    errors = [p.communicate()[1] for p in procs]
+    assert [p.returncode for p in procs] == [0] * 8, errors
+    db = Database.open(db_path)
+    try:
+        versions = [r["version"] for r in db.query("SELECT version FROM schema_version ORDER BY version")]
+    finally:
+        db.close()
+    assert versions == list(range(1, LATEST_VERSION + 1))

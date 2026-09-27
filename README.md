@@ -1,9 +1,17 @@
 # HighhX
 
-**HighhX is a local-first developer command center.** One CLI — `highhx` — detects
+**HighhX is a developer command center for your terminal.** One CLI — `highhx` — detects
 your project, runs your workflows, manages environments, dependencies, tests,
 builds, git, releases, deployments, services and databases, and keeps a searchable
 history of everything it did. Every risky action is classified and needs approval.
+
+| | |
+|---|---|
+| **HighhX Free** | Deterministic HighhX: the full developer CLI plus browser/desktop automation with known targets (`highhx computer`, `highhx do`). Local, no account, no AI. |
+| **HighhX Pro** | Everything in Free plus `highhx agent` — an AI developer agent that plans, changes code, runs your tools, operates browsers and apps (AI computer use), recovers from failures and verifies the result. |
+
+Free and Pro share one execution platform: the same tools, safety policy, confirmations,
+verification and audit trail. The AI only chooses actions; it never gets its own way to run them.
 
 ```text
 $ highhx doctor
@@ -28,6 +36,7 @@ Suggested actions
 - [Why HighhX](#why-highhx)
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [HighhX Pro: the AI developer agent](#highhx-pro-the-ai-developer-agent)
 - [Commands](#commands)
 - [Workflows](#workflows)
 - [Configuration](#configuration)
@@ -42,8 +51,10 @@ Most projects accumulate a pile of scripts, Makefile targets, README snippets an
 CI YAML that only half the team remembers. HighhX gives every project the same
 front door:
 
-- **Local-first and offline-first.** No cloud backend, no account, no API keys, no AI.
-  Everything — history, logs, deployment state — lives in `.highhx/` on your machine.
+- **Local-first CLI.** Every Free command works without an account or network.
+  History, logs and deployment state live in `.highhx/` on your machine.
+- **An AI agent that uses your real tools (Pro).** `highhx agent` works through HighhX's
+  own commands and safety system — not a chatbot pasting shell snippets.
 - **Detects instead of asking.** Python (pip/uv/poetry/pdm/pipenv), Node (npm/pnpm/yarn/bun),
   React, Next.js, Flutter/Dart, Java (Maven/Gradle), C/C++ (CMake/Make), Go, Rust, Docker,
   common databases and monorepos — from real manifests and lockfiles, not file extensions.
@@ -105,12 +116,93 @@ highhx logs            # output of the last execution (secrets redacted)
 └── logs/                # execution logs (git-ignored)
 ```
 
+## HighhX Pro: the AI developer agent
+
+```text
+$ highhx agent
+
+╭──────────────────────────────────────────╮
+│                HIGHHX PRO                │
+│            AI DEVELOPER AGENT            │
+╰──────────────────────────────────────────╯
+Project   shop
+Stack     Python, FastAPI
+Branch    main
+Status    clean
+AI        Connected HighhX (managed)
+
+What would you like me to do? (/help for commands)
+
+❯ run all the tests and fix whatever fails
+
+╭─ Plan ───────────────────────────────────────────╮
+│  1. Run the test suite                           │
+│  2. Investigate the failures                     │
+│  3. Fix the root cause                           │
+│  4. Re-run tests, lint and type checks           │
+╰─ Get the test suite green ───────────────────────╯
+Proceed? [Y/n]
+
+✓ Run tests — 3 tests failing (4.1s)
+✓ Read src/shop/cart.py — 88 lines
+⚠ Action requires approval
+  Edit src/shop/cart.py (+2 -1)
+  …diff…
+Proceed? [y/N/a=always this session] y
+✓ Edit src/shop/cart.py — +2 -1
+✓ Run tests — Tests passing — 48 passed (pytest) (4.3s)
+✓ Run checks — all checks passed
+
+Fixed the discount rounding in `cart.total()` (it rounded before applying tax).
+All 48 tests pass; lint and type checks are clean.
+
+4 steps  ·  1 file changed (/undo)  ·  38.2k tokens  ·  41s
+```
+
+Ask for what you want in plain language — *explain how this project works*, *find and
+fix the bugs*, *add authentication*, *find security issues*, *why is the application
+crashing?*, *prepare this project for release*, *deploy this*. The agent inspects the
+project, proposes a plan for multi-step work, uses HighhX's capabilities as tools
+(code search and edits, tests, checks, fixers, builds, dependencies, git, security scans,
+doctor/diagnose/repair, workflows, deploy and rollback), verifies what it did and
+summarises it.
+
+- **Same safety system.** Commands run through the HighhX engine: risk classification,
+  `policies.yaml`, approvals and history. File edits show a diff and ask (unless you
+  choose `--mode auto-edit`); pushes, deploys and rollbacks always ask; production
+  deploys need typed confirmation. The agent cannot leave the project, read secret files
+  or touch `.git/`. `--mode read-only` investigates without changing anything.
+- **Slash commands.** `/help` `/status` `/plan` `/context` `/model` `/mode` `/history`
+  `/changes` `/undo` `/memory` `/usage` `/clear` `/quit`.
+- **Sessions.** Saved per project: `highhx agent --continue`, `--resume ID`, `highhx agent sessions`.
+- **Scriptable.** `highhx agent "…"` outside a terminal (or with `--json`) handles one request
+  and exits — `--yes --mode auto-edit` for unattended runs in CI.
+- **Providers.** All Pro AI goes through the HighhX platform (authenticated, plan-checked,
+  metered); choose the upstream — Anthropic, OpenAI or Gemini — with `highhx account settings`
+  or `/model`. No provider key is needed on your machine.
+- **Kill switch.** `highhx agent stop` (or Ctrl+C) cancels the model request, retries, running
+  commands and their child processes immediately.
+- **Computer use.** The agent observes browsers and apps semantically and chooses among valid
+  actions; see [docs/computer-use.md](docs/computer-use.md).
+
+```bash
+highhx login                 # browser sign-in (creates your account)
+highhx account upgrade       # HighhX Pro checkout
+highhx agent                 # interactive
+highhx agent "why is the application crashing?"
+```
+
+Guides: [docs/agent.md](docs/agent.md) · [docs/computer-use.md](docs/computer-use.md) · [docs/platform.md](docs/platform.md).
+
 ## Commands
 
 Full reference with every option: [docs/commands.md](docs/commands.md).
 
 | Area | Commands |
 |---|---|
+| HighhX Pro | `agent` `agent sessions` `agent models` `agent stop` |
+| Automation (no AI) | `do` `computer status/open/observe/click/type/select/press/scroll/run` `computer browser start/stop` |
+| Account | `login` `logout` `account` `account plans/usage/upgrade/billing/settings` |
 | Project | `init` `status` `info` `dev` `start` `stop` `restart` `check` |
 | Code & tasks | `run <workflow>` `exec <command>` `script <name>` `task <name>` `watch` `fix` |
 | Dependencies | `deps` `deps install` `deps update` `deps outdated` `deps audit` `deps clean` |
@@ -121,7 +213,7 @@ Full reference with every option: [docs/commands.md](docs/commands.md).
 | Security | `security` `security scan/secrets/deps/config/report` |
 | Containers & data | `docker up/down/logs` `services` `ports` `db status/migrate/seed/backup/restore` |
 | Workflows & automation | `workflow list/validate/create/graph` `schedule` `hook` `trigger` `watchers` |
-| Observability | `logs [--follow]` `history [id]` `report` `trace` |
+| Observability | `logs [--follow]` `history [id]` `audit` `report` `trace` |
 | Extensibility & team | `plugin list/install/remove/update/search/trust` `config` `policy` `workspace` `profile` |
 | Diagnostics | `doctor` `diagnose` `repair` `debug` |
 
@@ -272,6 +364,10 @@ Details: [docs/security.md](docs/security.md).
 - **Secrets.** Secret values are never printed: `env` masks them, logs and history are
   redacted (known secret values plus token patterns), and `security secrets` reports
   file/line/type only. New `.env` files get owner-only permissions and are git-ignored.
+- **The agent.** Uses the same engine, policies and approvals as you do, plus path
+  confinement, secret-file protection and redaction of everything sent to the model.
+  Agent actions have policy names (`agent:write`, `agent:exec`, `agent:deploy:<target>` …)
+  so `policies.yaml` can restrict or forbid them.
 - **No claims.** `highhx security` reports concrete findings from local checks. An empty
   report does not mean a project is secure, and HighhX never says it is.
 
@@ -280,11 +376,14 @@ Report vulnerabilities in HighhX itself as described in [SECURITY.md](SECURITY.m
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest                 # unit, integration, security and end-to-end tests
+pip install -e ".[dev]" -e "./server[dev]"
+pytest                 # CLI: unit, integration, security and end-to-end tests
+(cd server && pytest)  # platform API + live CLI ↔ platform integration tests
 ruff check . && ruff format --check .
 mypy                   # strict typing of src/highhx
 ```
+
+The HighhX Platform backend lives in [`server/`](server/README.md).
 
 Architecture: [docs/architecture.md](docs/architecture.md) · Development guide:
 [docs/development.md](docs/development.md) · Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
