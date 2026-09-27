@@ -140,7 +140,9 @@ class AnthropicProvider:
         params = build_params(request, model)
         api = client.beta.messages if "betas" in params else client.messages
         try:
-            with api.stream(**params) as stream, cancellable(cancel, stream.close):
+            with api.stream(**params) as stream, cancellable(
+                cancel, getattr(stream, "close", lambda: None)
+            ):
                 for event in stream:
                     if cancel is not None and cancel.cancelled:
                         raise OperationCancelledError("Model response cancelled.")
