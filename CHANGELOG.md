@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-28
+
 HighhX Free becomes deterministic computer automation: natural language → deterministic
 resolver → JSON action plan → verified automation, with no AI and no account.
 
@@ -22,6 +24,8 @@ resolver → JSON action plan → verified automation, with no AI and no account
 - **Automation bridge** (`highhx.automation.engine`): protocol v1 with 14 validated
   operations, a terminal guard for keyboard input, the built-in Python engine, and the
   **C#/.NET engine** source (`engine/dotnet`, `highhx-automation`) used when installed.
+  The C# engine ships as source only: it has not been compiled or run for this release (no
+  .NET SDK was available); the Python engine is the default and what the tests exercise.
 - **Verification strategies** (`highhx.verification`): page open, search results, media
   playing, app running/frontmost, file exists, exit code, output captured; unobservable
   steps are reported as not verified.
@@ -32,8 +36,9 @@ resolver → JSON action plan → verified automation, with no AI and no account
 - Deterministic evals (`tests/evals/automation.yaml`).
 - **JEv / advanced reasoning is HighhX Pro only:** one gate (`highhx.decision.advanced`)
   used by session start, the session and one-shot requests; only the platform grants it.
-  No separate JEv service exists yet — today the Pro agent provides it. Free never loads
-  the agent runtime, a model provider, the gate or a vendor SDK on its automation path.
+  No separate JEv service exists yet (the gate is interface-ready) — today the Pro agent
+  provides it. Free never loads the agent runtime, a model provider, the gate or a vendor
+  SDK on its automation path.
 - **One automation bridge for Free and Pro:** `ComputerSession.automation()` is shared by
   Free's actions and the Pro agent's desktop computer-use tools (which previously called
   macOS Accessibility directly), so both reach the C#/.NET engine when it is installed.

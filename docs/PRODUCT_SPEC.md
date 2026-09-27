@@ -43,7 +43,7 @@ Two plans share that engine and one interface:
 
 ```text
 $ highhx
-  (Knight)  HighhX v0.5.0 · Developer command center · ~/code/shop · main • clean · Free • Local
+  (Knight)  HighhX v0.6.0 · Developer command center · ~/code/shop · main • clean · Free • Local
 
 ❯ run the tests and then build
 ◉ run the tests  project.test · low
