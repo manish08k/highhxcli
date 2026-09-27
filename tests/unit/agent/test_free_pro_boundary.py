@@ -124,7 +124,8 @@ def test_free_session_never_touches_the_ai_stack(agent_project: Path, make_app, 
     out = buffer.getvalue()
     assert tripwires == []  # no runtime, provider, gateway or key lookup
     assert repl.session is None
-    assert out.count("HighhX Pro capability") >= len(SPEC_REQUESTS) + 5
+    # every open-ended request, plus /model (twice) and /mode, which need the agent
+    assert out.count("HighhX Pro capability") >= len(SPEC_REQUESTS) + 3
     assert out.count("already in the HighhX session") == 4
     assert "Unexpected error" not in out
 
@@ -144,7 +145,7 @@ def test_every_request_that_needs_reasoning_goes_to_the_pro_panel() -> None:
 
     for request in SPEC_REQUESTS:
         planned = route(request)
-        assert planned.intent is None and planned.capability is not None, request
+        assert planned.resolution is None and planned.capability is not None, request
         assert "HighhX Pro" in planned.reason
 
 
@@ -428,10 +429,14 @@ def test_real_targets_still_work(text: str, kind: str) -> None:
 def test_file_changing_intents_are_confirmed(agent_project: Path, make_app, capsys) -> None:
     (agent_project / "tidy.py").write_text("x=1\n")
     app = make_app(agent_project)
-    repl, buffer, script = free_repl(app, "fix", "n", "/quit")
+    repl, buffer, script = free_repl(app, "format the code", "n", "fix", "", "/quit")
     repl.run()
-    assert any("applies formatter and linter fixes" in p for p in script.prompts)
-    assert "◉" not in buffer.getvalue()  # declined: nothing ran
+    out = buffer.getvalue()
+    assert any("Approve?" in p for p in script.prompts)  # the central approval (medium risk)
+    assert "Approval required" in out and "medium" in out and "project.fix" in out
+    assert "not approved" in out and "✓" not in out  # declined: nothing ran
+    assert (agent_project / "tidy.py").read_text() == "x=1\n"
+    assert "AI code changes require HighhX Pro." in out  # a bare "fix" is open-ended: never guessed
 
 
 # ------------------------------------------------------------ errors and permissions
@@ -451,7 +456,7 @@ def test_a_crashing_agent_turn_does_not_end_the_session(agent_project: Path, mak
     session, _p, _ = make_session(agent_project, [RuntimeError("provider bug")], ui=ui)
     assert AgentREPL(session, ui, None, pro_account(), read_line=script).run() == 0
     out = buffer.getvalue()
-    assert "Unexpected error: RuntimeError: provider bug" in out and "Turns" in out
+    assert "Unexpected error: RuntimeError: provider bug" in out and "Agent session" in out
 
 
 def test_shell_commands_obey_approvals(agent_project: Path, make_app) -> None:
@@ -462,7 +467,7 @@ def test_shell_commands_obey_approvals(agent_project: Path, make_app) -> None:
     repl, buffer, _ = free_repl(app, f"!rm -rf {victim}", "/quit")
     repl.run()
     assert (victim / "keep.txt").exists()
-    assert "✗ rm -rf" in buffer.getvalue()
+    assert "rm -rf" in buffer.getvalue() and "not approved" in buffer.getvalue()  # denied at the central gate
 
 
 def test_platform_features_are_plan_features() -> None:

@@ -178,7 +178,14 @@ def run_process(
 
     timed_out = cancelled = False
     try:
-        while proc.poll() is None:
+        while True:
+            # Returns as soon as the process exits (no fixed sleep after it finished); deadline
+            # and cancellation are still checked at least every POLL_INTERVAL.
+            try:
+                proc.wait(timeout=POLL_INTERVAL)
+                break
+            except subprocess.TimeoutExpired:
+                pass
             if deadline.expired:
                 timed_out = True
                 _terminate(proc, own_group=own_group)
@@ -187,10 +194,6 @@ def run_process(
                 cancelled = True
                 _terminate(proc, own_group=own_group)
                 break
-            if cancel is not None:
-                cancel.wait(POLL_INTERVAL)
-            else:
-                time.sleep(POLL_INTERVAL)
     except KeyboardInterrupt:
         cancelled = True
         _terminate(proc, own_group=own_group)

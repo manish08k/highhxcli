@@ -2,23 +2,26 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import tempfile
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from highhx.approvals.risk import RiskLevel
 from highhx.core.engine import Engine
-from highhx.core.errors import OperationCancelledError, WorkflowError
+from highhx.core.errors import HighhXError, OperationCancelledError, WorkflowError
 from highhx.core.events import STEP_FINISHED, STEP_STARTED, WORKFLOW_FINISHED, WORKFLOW_STARTED
 from highhx.core.result import CommandResult, Status, StepResult, WorkflowResult
 from highhx.execution.cancellation import CancellationToken
 from highhx.execution.command import CommandSpec
 from highhx.utils.hashing import new_id
 from highhx.utils.platform import system_name
+from highhx.workflows import running
 from highhx.workflows.conditions import EvalContext, ExpressionError, evaluate_condition
 from highhx.workflows.dependency_graph import DependencyGraph
 from highhx.workflows.loader import WorkflowLoader
@@ -26,6 +29,10 @@ from highhx.workflows.resolver import resolve_inputs, reusable_workflows
 from highhx.workflows.schema import StepSpec, WorkflowSpec
 from highhx.workflows.validator import validate_spec
 from highhx.workflows.variables import interpolate, interpolate_mapping, try_interpolate
+
+if TYPE_CHECKING:
+    from highhx.actions.executor import ActionExecutor, Planned
+    from highhx.actions.spec import ActionResult
 
 MAX_NESTING = 8
 
@@ -97,12 +104,25 @@ class WorkflowEngine:
         root: Path,
         reporter: WorkflowReporter | None = None,
         project_name: str | None = None,
+        actions: Callable[[], ActionExecutor] | None = None,
     ) -> None:
         self.engine = engine
         self.loader = loader
         self.root = root
         self.reporter: WorkflowReporter = reporter or NullReporter()
         self.project_name = project_name
+        self._actions_factory = actions
+        self._actions: ActionExecutor | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def actions(self) -> ActionExecutor:
+        """The action executor for `action:` steps (created on first use)."""
+        if self._actions is None:
+            if self._actions_factory is None:
+                raise WorkflowError("This workflow engine cannot run action steps (no action executor).")
+            self._actions = self._actions_factory()
+        return self._actions
 
     # ---------------------------------------------------------------- setup
     def load(self, workflow: str | WorkflowSpec) -> WorkflowSpec:
@@ -183,12 +203,15 @@ class WorkflowEngine:
         inputs: Mapping[str, Any] | None = None,
         env: Mapping[str, str] | None = None,
         cancel: CancellationToken | None = None,
+        resume: Mapping[str, StepResult] | None = None,
         _depth: int = 0,
     ) -> WorkflowResult:
         """Run a workflow to completion and return its result.
 
         Raises :class:`WorkflowError` for invalid workflows and
         :class:`OperationCancelledError` if interrupted (after recording history).
+        ``resume`` maps steps that already succeeded in an earlier run to their results: they are
+        not run again (their outputs are reused) — see :meth:`resume_state`.
         """
         if _depth > MAX_NESTING:
             raise WorkflowError("Workflows are nested too deeply (possible recursion).")
@@ -199,8 +222,19 @@ class WorkflowEngine:
         if self.engine.dry_run:
             return self._dry_run(spec, graph, resolved_inputs)
 
-        with self.engine.operation("workflow", spec.key or spec.name, metadata={"workflow": spec.name}) as op:
+        metadata: dict[str, Any] = {"workflow": spec.name, "key": spec.key, "inputs": dict(resolved_inputs)}
+        if resume:
+            metadata["resumed_steps"] = sorted(resume)
+        completed_actions: list[tuple[str, Planned, ActionResult]] = []
+        finish_order: list[str] = []
+        with self.engine.operation("workflow", spec.key or spec.name, metadata=metadata) as op:
             execution_id = op.execution_id or new_id()
+            registration = (
+                running.registered(execution_id, spec.key or spec.name, self.root)
+                if _depth == 0
+                else contextlib.nullcontext()
+            )
+            registration.__enter__()
             parent_token = cancel or self.engine.ctx.cancel
             token = parent_token.child()
             timed_out = threading.Event()
@@ -259,8 +293,21 @@ class WorkflowEngine:
                 return f"skipped: condition '{step.condition}' is false"
 
             def execute(node: str, step_token: CancellationToken) -> StepResult:
+                if resume and node in resume and resume[node].status == Status.SUCCESS:
+                    earlier = resume[node]
+                    return StepResult(
+                        node, Status.SUCCESS, outputs=earlier.outputs, message="already completed (resumed)"
+                    )
                 return self._execute_step(
-                    spec, spec.step(node), step_token, scheduler, resolved_inputs, workflow_env, execution_id, _depth
+                    spec,
+                    spec.step(node),
+                    step_token,
+                    scheduler,
+                    resolved_inputs,
+                    workflow_env,
+                    execution_id,
+                    _depth,
+                    completed_actions,
                 )
 
             def on_start(node: str) -> None:
@@ -268,6 +315,8 @@ class WorkflowEngine:
                 self.reporter.step_started(spec, spec.step(node), _depth)
 
             def on_finish(result: StepResult) -> None:
+                with self._lock:
+                    finish_order.append(result.step_id)
                 if result.status in (Status.FAILED, Status.TIMEOUT) and not result.allowed_failure:
                     failed_flag.set()
                 self.engine.ctx.events.emit(
@@ -282,6 +331,7 @@ class WorkflowEngine:
             finally:
                 if timer is not None:
                     timer.cancel()
+                registration.__exit__(None, None, None)
 
             ordered = {sid: results[sid] for sid in spec.step_ids}
             if timed_out.is_set():
@@ -298,6 +348,13 @@ class WorkflowEngine:
             else:
                 status = Status.SUCCESS
 
+            rollback: list[dict[str, Any]] = []
+            if status in (Status.FAILED, Status.TIMEOUT) and spec.on_failure == "rollback":
+                rollback = self._rollback(
+                    spec, ordered, finish_order, completed_actions, workflow_env, resolved_inputs, execution_id
+                )
+                op.metadata["rollback"] = rollback
+
             out_ctx = self._base_context(spec, resolved_inputs, ordered, execution_id, workflow_env, strict=False)
             outputs: dict[str, str] = {}
             for key, expr in spec.outputs.items():
@@ -312,6 +369,7 @@ class WorkflowEngine:
                 steps=ordered,
                 duration=time.monotonic() - began,
                 outputs=outputs,
+                rollback=rollback,
             )
             self._record(op.execution_id, result)
             op.metadata.update(
@@ -358,6 +416,7 @@ class WorkflowEngine:
         workflow_env: Mapping[str, str],
         execution_id: str,
         depth: int,
+        completed_actions: list[tuple[str, Planned, ActionResult]] | None = None,
     ) -> StepResult:
         began = time.monotonic()
         results = scheduler.snapshot()
@@ -383,6 +442,9 @@ class WorkflowEngine:
                 policy_action=f"workflow:{spec.key}:{step.id}",
             )
             approved = True
+
+        if step.action:
+            return self._action_step(step, token, ctx, began, completed_actions)
 
         if step.uses:
             try:
@@ -461,6 +523,129 @@ class WorkflowEngine:
             duration=time.monotonic() - began,
             allowed_failure=step.continue_on_error and status in (Status.FAILED, Status.TIMEOUT),
         )
+
+    def _action_inputs(self, values: Mapping[str, Any], ctx: EvalContext) -> dict[str, Any]:
+        def expand(value: Any) -> Any:
+            if isinstance(value, str):
+                return interpolate(value, ctx)
+            if isinstance(value, list):
+                return [expand(v) for v in value]
+            if isinstance(value, dict):
+                return {k: expand(v) for k, v in value.items()}
+            return value
+
+        return {key: expand(value) for key, value in values.items()}
+
+    def _action_step(
+        self,
+        step: StepSpec,
+        token: CancellationToken,
+        ctx: EvalContext,
+        began: float,
+        completed_actions: list[tuple[str, Planned, ActionResult]] | None,
+    ) -> StepResult:
+        assert step.action is not None
+        try:
+            inputs = self._action_inputs(step.with_, ctx)
+        except ExpressionError as exc:
+            return StepResult(step.id, Status.FAILED, message=f"variable error: {exc}")
+        try:
+            planned = self.actions.plan(step.action, inputs)
+        except HighhXError as exc:
+            detail = "; ".join(exc.details[:3])
+            return StepResult(step.id, Status.FAILED, message=exc.message + (f": {detail}" if detail else ""))
+        result = self.actions.execute(planned, cancel=token)
+        if result.ok and completed_actions is not None:
+            with self._lock:
+                completed_actions.append((step.id, planned, result))
+        status = {
+            "ok": Status.SUCCESS,
+            "cancelled": Status.CANCELLED,
+            "timeout": Status.TIMEOUT,
+        }.get(result.status, Status.SUCCESS if result.ok else Status.FAILED)
+        outputs = {k: v if isinstance(v, str) else json.dumps(v, default=str) for k, v in result.output.items()}
+        return StepResult(
+            step.id,
+            status,
+            outputs=outputs,
+            message=result.summary if result.ok else (result.error or result.summary or result.status),
+            duration=time.monotonic() - began,
+            allowed_failure=step.continue_on_error and status in (Status.FAILED, Status.TIMEOUT),
+        )
+
+    def _rollback(
+        self,
+        spec: WorkflowSpec,
+        results: Mapping[str, StepResult],
+        finish_order: list[str],
+        completed_actions: list[tuple[str, Planned, ActionResult]],
+        workflow_env: Mapping[str, str],
+        inputs: Mapping[str, Any],
+        execution_id: str,
+    ) -> list[dict[str, Any]]:
+        """Undo the steps that completed, newest first (on_failure: rollback). Every undo goes through
+        the same classification and approval as any other action; a failing undo is reported and the
+        rollback continues with the next step."""
+        actions = {step_id: (planned, result) for step_id, planned, result in completed_actions}
+        order = [s for s in reversed(finish_order) if results.get(s) and results[s].status == Status.SUCCESS]
+        report: list[dict[str, Any]] = []
+        ctx = self._base_context(spec, inputs, results, execution_id, workflow_env, strict=False)
+        self.engine.ctx.events.emit("workflow.rollback", workflow=spec.name, steps=len(order))
+        for step_id in order:
+            step = spec.step(step_id)
+            undo = step.rollback
+            if undo is None:
+                continue
+            entry: dict[str, Any] = {"step": step_id}
+            try:
+                if undo.compensate and step_id in actions:
+                    planned, result = actions[step_id]
+                    done = self.actions.compensate(planned, result) or "nothing to undo"
+                    entry.update(ok=not done.startswith("compensation failed"), detail=done)
+                elif undo.action:
+                    outcome = self.actions.run(undo.action, self._action_inputs(undo.with_, ctx))
+                    entry.update(ok=outcome.ok, detail=outcome.summary or outcome.error)
+                else:
+                    ok = True
+                    for raw in undo.run:
+                        command = interpolate(raw, ctx)
+                        outcome_cmd = self.engine.run(
+                            CommandSpec(command, cwd=self.root, env=dict(workflow_env), name=f"{step_id}-rollback"),
+                            action=f"Undo step '{step_id}' of workflow '{spec.name}': `{command}`",
+                            policy_action=f"workflow:{spec.key}:{step_id}:rollback",
+                            record=False,
+                        )
+                        ok = ok and outcome_cmd.ok
+                        if not outcome_cmd.ok:
+                            break
+                    entry.update(ok=ok, detail=" && ".join(undo.run))
+            except (HighhXError, ExpressionError) as exc:
+                entry.update(ok=False, detail=str(getattr(exc, "message", exc)))
+            report.append(entry)
+        return report
+
+    # ---------------------------------------------------------------- resume
+    def resume_state(self, execution_id: str) -> tuple[str, dict[str, Any], dict[str, StepResult]]:
+        """``(workflow, inputs, completed steps)`` of a recorded run, for :meth:`run` (``resume=``)."""
+        history = self.engine.history
+        if history is None:
+            raise WorkflowError("Workflow history is unavailable (run `highhx init` to enable it).")
+        record = history.get(execution_id)
+        if record.kind != "workflow":
+            raise WorkflowError(f"{record.id} is a {record.kind}, not a workflow run.")
+        if record.status in ("success", "running"):
+            raise WorkflowError(
+                f"Workflow run {record.id} is {record.status}; only failed, cancelled or timed-out runs can be resumed."
+            )
+        key = str(record.metadata.get("key") or record.name)
+        inputs = dict(record.metadata.get("inputs") or {})
+        undone = {str(r.get("step")) for r in record.metadata.get("rollback") or [] if r.get("ok")}
+        completed = {
+            step.step_id: StepResult(step.step_id, Status.SUCCESS, outputs=dict(step.outputs or {}))
+            for step in record.steps
+            if step.status == "success" and ":" not in step.step_id and step.step_id not in undone
+        }
+        return key, inputs, completed
 
     # -------------------------------------------------------------- dry run
     def plan_commands(self, spec: WorkflowSpec, inputs: Mapping[str, Any]) -> dict[str, list[str]]:

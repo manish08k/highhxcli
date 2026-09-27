@@ -493,6 +493,13 @@ class ChromeBrowser:
         if result.get("error"):
             raise IntegrationError(f"Could not {action} {element_id}: {result['error']}")
 
+    def screenshot(self, *, cancel: CancellationToken | None = None) -> bytes:
+        """The current page as PNG bytes (read-only; nothing on the page changes)."""
+        import base64
+
+        data = self._connection(cancel).call("Page.captureScreenshot", {"format": "png"}, cancel=cancel)
+        return base64.b64decode(str(data.get("data") or ""))
+
     def click(self, element_id: str, *, cancel: CancellationToken | None = None) -> None:
         self._act(element_id, "click", cancel=cancel)
 

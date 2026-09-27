@@ -16,7 +16,7 @@ from highhx.workflows.dependency_graph import DependencyGraph
 from highhx.workflows.loader import WorkflowLoader
 from highhx.workflows.parser import normalize_document, parse_workflow, schema_errors
 from highhx.workflows.resolver import reusable_workflows
-from highhx.workflows.schema import WorkflowSpec
+from highhx.workflows.schema import StepSpec, WorkflowSpec
 from highhx.workflows.variables import find_expressions
 
 SHELL_BUILTINS = frozenset(
@@ -193,6 +193,7 @@ def validate_spec(
                     graph,
                     report,
                 )
+        _check_action_step(step, where, report, check_tools=check_tools)
         if step.cwd and base_dir is not None and "${{" not in step.cwd and not (base_dir / step.cwd).is_dir():
             report.warnings.append(f"{where}.cwd: directory '{step.cwd}' does not exist")
         if step.timeout is not None and step.timeout == 0:
@@ -206,6 +207,9 @@ def validate_spec(
             report.errors.append(
                 f"steps.{step.id}: can never run because it depends on '{blocked[0]}', whose condition is always false"
             )
+
+    if spec.on_failure == "rollback" and not any(step.rollback for step in spec.steps):
+        report.warnings.append("on_failure: rollback, but no step defines `rollback:` — nothing would be undone")
 
     for key, value in spec.env.items():
         for expr in find_expressions(value):
@@ -232,6 +236,48 @@ def validate_spec(
                     )
                     report.errors.extend(f"steps.{step.id}.with: '{step.uses}' has no input '{n}'" for n in unknown)
     return report
+
+
+def _static_inputs(values: dict[str, Any]) -> dict[str, Any] | None:
+    """Inputs without ``${{ }}`` expressions (those can be checked before the run), else None."""
+    if any("${{" in str(v) for v in values.values()):
+        return None
+    return dict(values)
+
+
+def _check_action_step(step: StepSpec, where: str, report: ValidationReport, *, check_tools: bool) -> None:
+    from highhx.actions.catalog import default_catalog
+
+    catalog = default_catalog()
+    if step.action:
+        spec = catalog.get(step.action)
+        if spec is None:
+            names = catalog.names()
+            report.errors.append(f"{where}.action: unknown action '{step.action}'{did_you_mean(step.action, names)}")
+        else:
+            inputs = _static_inputs(step.with_)
+            if inputs is not None:
+                report.errors.extend(f"{where}.with{problem}" for problem in spec.validate(inputs))
+    rollback = step.rollback
+    if rollback is None:
+        return
+    if rollback.compensate:
+        spec = catalog.get(step.action) if step.action else None
+        if spec is None or spec.compensate is None:
+            report.errors.append(
+                f"{where}.rollback: true needs an action step whose action can be undone"
+                + (f" ('{step.action}' cannot)" if step.action else "")
+            )
+    if rollback.action:
+        target = catalog.get(rollback.action)
+        if target is None:
+            report.errors.append(f"{where}.rollback.action: unknown action '{rollback.action}'")
+        else:
+            inputs = _static_inputs(rollback.with_)
+            if inputs is not None:
+                report.errors.extend(f"{where}.rollback.with{problem}" for problem in target.validate(inputs))
+    for index, command in enumerate(rollback.run):
+        _check_command(command, f"{where}.rollback[{index}]", report, check_tools=check_tools, needs_approval=True)
 
 
 def validate_data(

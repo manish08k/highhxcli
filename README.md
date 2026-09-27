@@ -1,19 +1,31 @@
 # HighhX
 
-**HighhX is a developer command center for your terminal.** One CLI — `highhx` — detects
-your project, runs your workflows, manages environments, dependencies, tests,
-builds, git, releases, deployments, services and databases, and keeps a searchable
-history of everything it did. Every risky action is classified and needs approval.
+**HighhX is a developer automation CLI.** Run `highhx` in a project and describe what you
+want. Everything HighhX does — a command you typed, a sentence, a workflow step, or a step
+the AI agent proposed — is an **action** from one catalog, run by one executor that rates its
+risk deterministically, asks when the risk calls for it, executes with timeouts and
+cancellation, verifies the result, records it and can undo it where that is possible.
 
 | | |
 |---|---|
-| **HighhX Free** | The interactive `highhx` session and the full developer CLI: known requests in plain language run locally without AI, plus every command, shell commands with risk checks and approvals, and browser/desktop automation with known targets (`highhx computer`, `highhx do`). Local, no account, no AI. |
-| **HighhX Pro** | The same session with the AI developer agent attached — it plans, changes code, runs your tools, operates browsers and apps (AI computer use), recovers from failures and verifies the result. |
+| **HighhX Free — deterministic developer automation** | The interactive session and the full developer CLI: plain language for known, fully specified requests, 61 actions (files, git, packages, docker, databases, services, browser, deployments, security, workflows, shell), workflows with rollback, resume and cancel, `/plan` + `/approve`, `/undo`, voice with local speech-to-text. No AI, no account. |
+| **HighhX Pro — deterministic automation + AI developer agent** | The same session with the AI agent attached: open-ended requests, planning, repository-wide changes, debugging, refactoring, AI computer use — proposed as action graphs that the same executor validates, rates, approves and runs. Autonomous tasks: *"fix the login bug and make sure all tests pass"* runs until HighhX itself has verified the tests. |
 
 Run `highhx` in a terminal and describe what you want. Free and Pro share one interface and
 one execution platform: the same tools, safety policy, confirmations, verification and audit
 trail. Your plan only decides which capabilities the session has — the HighhX platform grants
 and enforces them. The AI only chooses actions; it never gets its own way to run them.
+
+## Documentation
+
+[Product specification](docs/PRODUCT_SPEC.md) (start here) ·
+[Architecture](docs/ARCHITECTURE.md) · [Action engine](docs/ACTION_ENGINE.md) ·
+[Safety model](docs/SAFETY_MODEL.md) · [Security](docs/SECURITY.md) ·
+[Free and Pro](docs/FREE_PRO.md) · [Agent runtime](docs/AGENT_RUNTIME.md) ·
+[Automation](docs/AUTOMATION.md) · [Voice](docs/VOICE.md) ·
+[Observability](docs/OBSERVABILITY.md) · [Plugin system](docs/PLUGIN_SYSTEM.md) ·
+[CLI reference](docs/CLI_REFERENCE.md) ([all commands](docs/commands.md)) ·
+[Roadmap](docs/ROADMAP.md) · [Contributing](docs/CONTRIBUTING.md)
 
 ```text
 $ highhx doctor
@@ -35,6 +47,7 @@ Suggested actions
   → Set it with `highhx env set DATABASE_URL --profile development` or export it in your shell.
 ```
 
+- [Documentation](#documentation)
 - [Why HighhX](#why-highhx)
 - [Installation](#installation)
 - [Quick start](#quick-start)
@@ -128,7 +141,7 @@ so scripts and CI are unaffected.
 ```text
 $ highhx
 
-  (the Knight)   HighhX v0.4.0
+  (the Knight)   HighhX v0.5.0
                  Developer command center
                  ~/code/shop
                  main • clean
@@ -154,13 +167,17 @@ $ highhx
 ╰─────────────────────────────────────────────────────╯
 ```
 
-- **Plain language first.** On Free, requests that map to a known action (*run the tests*,
-  *run the checks*, *build*, *show git status*, *security scan*, *open localhost:3000* …)
-  run the matching HighhX command — deterministically, no AI. Requests that need
-  understanding name the Pro capability they need and offer the local commands that can
-  do part of the job. On Pro the AI agent handles every request.
-- **`!command`** runs a shell command through the HighhX engine (risk classification,
-  policy, approval, history); **`highhx <command>`** runs any HighhX command in the session.
+- **Plain language first.** On Free, a deterministic resolver turns known, fully specified
+  requests into actions — *run the tests and then build*, *stop the backend*, *deploy
+  staging*, *commit all changes with message "…"*, *open localhost 3000* — using your
+  project's services, targets and workflows as entities. It never guesses: open-ended
+  requests show what HighhX Pro would do and the local actions that can do part of the job.
+  On Pro the AI agent handles every request.
+- **Preview, approve, undo.** `/plan <request>` shows each step with its risk; `/approve`
+  runs exactly that plan; `/undo` reverts the last file changes; `/retry` re-runs a failed
+  request; `/resume` and `/cancel` operate workflow runs.
+- **`!command`** runs a shell command as an action (classified, approved by risk,
+  audited — `rm -rf /` never runs); **`highhx <command>`** runs any HighhX command in the session.
 - **Input.** ↑/↓ history (kept across sessions), line editing, `\` at the end of a line or
   a `"""` block for multi-line input, Ctrl+C interrupts the running request, Ctrl+D exits.
 - **Status line.** `Free • Local`, `Free • Connected`, `Pro • Connected`,
@@ -170,13 +187,20 @@ $ highhx
   fails during a Pro request, the session says so and offers the local route for it.
 - **Deterministic means predictable.** Free never calls a model or reads a provider API key.
   File names are never treated as websites (`open main.py` is not `https://main.py`), and
-  known requests that change files (`fix`, `install dependencies`) ask first.
+  changes are approved according to one risk table ([docs/SAFETY_MODEL.md](docs/SAFETY_MODEL.md)).
 - **Plan changes apply in place.** Run `highhx login` (or `/account` after upgrading) inside
   the session and it re-checks your account: the AI agent attaches when the platform grants
   it, and detaches when it no longer does.
-- **Slash commands.** `/help` `/status` `/tools` `/context` `/config` `/account` `/usage`
-  `/history` `/memory` `/pro` `/clear` `/quit`, plus the agent's `/plan` `/model` `/mode`
-  `/changes` `/undo` (Pro).
+- **Slash commands**, grouped in `/help`: run (`/plan` `/approve` `/deny` `/retry` `/run`),
+  review (`/status` `/history` `/changes` `/undo` `/doctor`), workflows (`/workflows`
+  `/workflow` `/resume` `/cancel`), project (`/init` `/context` `/tools` `/config` `/memory`),
+  account & AI (`/login` `/account` `/pro` `/usage`, and the agent's `/model` `/mode`),
+  session (`/voice` `/clear` `/help` `/quit`). `/status` shows what is waiting on you and which
+  command acts on it. See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md).
+- **First run.** The first session shows a short *Getting started*: `/init`, a first request,
+  `/plan` + `/approve`, and `/login` for Pro.
+- **Voice.** `highhx voice` or `/voice on`: push-to-talk with a local speech-to-text engine;
+  transcripts are confirmed before they run ([docs/VOICE.md](docs/VOICE.md)).
 
 ## HighhX Pro: the AI developer agent
 
@@ -187,7 +211,7 @@ $ highhx
      ▐▀▌
     ▗ ▄ ▖
    ▗▚▐█▌▞▖
-  ▗▚█▐█▌█▞▖      HighhX v0.4.0
+  ▗▚█▐█▌█▞▖      HighhX v0.5.0
    ▟█▐█▌█▙       Developer command center
   ▐▐█▌█▐█▌▌      ~/code/shop
   █▗▜▌█▐▛▖█      main • clean
@@ -425,7 +449,7 @@ stored in your user data directory, so a cloned repository cannot enable its own
 
 ## Security model
 
-Details: [docs/security.md](docs/security.md).
+Details: [docs/SECURITY.md](docs/SECURITY.md).
 
 - **Approvals.** Every command is classified (safe / normal / dangerous / critical).
   Anything above `approvals.auto_approve` asks; critical actions require typing a word.
@@ -458,7 +482,7 @@ mypy                   # strict typing of src/highhx
 
 The HighhX Platform backend lives in [`server/`](server/README.md).
 
-Architecture: [docs/architecture.md](docs/architecture.md) · Development guide:
+Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Development guide:
 [docs/development.md](docs/development.md) · Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Contributing

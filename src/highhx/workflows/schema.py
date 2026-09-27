@@ -62,12 +62,22 @@ APPROVAL_SCHEMA = OneOf(
 
 
 def _step_check(step: dict[str, Any]) -> list[str]:
-    has_run, has_uses = "run" in step, "uses" in step
-    if has_run == has_uses:
-        return ["a step needs exactly one of 'run' or 'uses'"]
-    if "with" in step and not has_uses:
-        return ["'with' is only valid together with 'uses'"]
+    kinds = [k for k in ("run", "uses", "action") if k in step]
+    if len(kinds) != 1:
+        return ["a step needs exactly one of 'run', 'uses' or 'action'"]
+    if "with" in step and kinds[0] == "run":
+        return ["'with' is only valid together with 'uses' or 'action'"]
     return []
+
+
+ROLLBACK_SCHEMA = OneOf(
+    [
+        Bool(description="true: undo an action step with the action's own compensation"),
+        Str(min_length=1, description="A command that undoes the step"),
+        List(Str(min_length=1), min_items=1),
+        Obj({"action": Prop(Str(min_length=1), required=True), "with": Prop(Map(SCALAR))}),
+    ]
+)
 
 
 STEP_SCHEMA = Obj(
@@ -77,7 +87,14 @@ STEP_SCHEMA = Obj(
         "description": Prop(Str()),
         "run": Prop(OneOf([Str(min_length=1), List(Str(min_length=1), min_items=1)]), description="Command(s) to run"),
         "uses": Prop(Str(min_length=1), description="Name of another workflow to run as this step"),
-        "with": Prop(Map(SCALAR), description="Inputs for the workflow referenced by 'uses'"),
+        "action": Prop(Str(min_length=1), description="A HighhX action to run (see `highhx actions`)"),
+        "with": Prop(
+            Map(OneOf([SCALAR, List(SCALAR), Map(SCALAR)])),
+            description="Inputs for 'uses' (workflow inputs) or 'action' (action inputs)",
+        ),
+        "rollback": Prop(
+            ROLLBACK_SCHEMA, description="How to undo this step when the workflow fails (on_failure: rollback)"
+        ),
         "depends_on": Prop(OneOf([Str(check=_identifier), List(Str(check=_identifier), unique=True)])),
         "if": Prop(OneOf([Str(min_length=1), Bool()]), description="Condition expression (or true/false)"),
         "env": Prop(ENV_MAP),
@@ -122,6 +139,10 @@ WORKFLOW_SCHEMA = Obj(
         "settings": Prop(SETTINGS_SCHEMA),
         "steps": Prop(List(STEP_SCHEMA, min_items=1), required=True),
         "outputs": Prop(Map(Str())),
+        "on_failure": Prop(
+            Str(choices=("stop", "rollback")),
+            description="stop (default), or rollback: undo completed steps in reverse order",
+        ),
     }
 )
 
@@ -150,13 +171,25 @@ class InputSpec:
 
 
 @dataclass
+class RollbackSpec:
+    """How a completed step is undone: the action's own compensation, commands, or another action."""
+
+    compensate: bool = False
+    run: list[str] = field(default_factory=list)
+    action: str | None = None
+    with_: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class StepSpec:
     id: str
     name: str | None = None
     description: str = ""
     run: list[str] = field(default_factory=list)
     uses: str | None = None
+    action: str | None = None
     with_: dict[str, Any] = field(default_factory=dict)
+    rollback: RollbackSpec | None = None
     depends_on: list[str] = field(default_factory=list)
     condition: str | None = None
     env: dict[str, str] = field(default_factory=dict)
@@ -191,6 +224,7 @@ class WorkflowSpec:
     settings: WorkflowSettings = field(default_factory=WorkflowSettings)
     outputs: dict[str, str] = field(default_factory=dict)
     triggers: list[str] = field(default_factory=list)
+    on_failure: str = "stop"
     source: Path | None = None
     key: str | None = None
     """Identifier used on the command line (file stem)."""

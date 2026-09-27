@@ -27,4 +27,4 @@ Of particular interest:
 - plugin code running without `plugins.allow_code`, without a per-user trust record, or after its files changed,
 - path traversal or deletion outside the project in `clean`, `deps clean` or repairs.
 
-See [docs/security.md](docs/security.md) for the security model.
+See [docs/SECURITY.md](docs/SECURITY.md) for the security model.

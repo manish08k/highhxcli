@@ -13,6 +13,7 @@ from highhx.workflows.schema import (
     WORKFLOW_SCHEMA,
     ApprovalSpec,
     InputSpec,
+    RollbackSpec,
     StepSpec,
     WorkflowSettings,
     WorkflowSpec,
@@ -65,6 +66,18 @@ def _condition(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
+def _rollback(value: Any) -> RollbackSpec | None:
+    if value is None or value is False:
+        return None
+    if value is True:
+        return RollbackSpec(compensate=True)
+    if isinstance(value, str):
+        return RollbackSpec(run=[value])
+    if isinstance(value, list):
+        return RollbackSpec(run=[str(v) for v in value])
+    return RollbackSpec(action=str(value["action"]), with_=dict(value.get("with") or {}))
+
+
 def _step(data: dict[str, Any]) -> StepSpec:
     run = data.get("run")
     depends = data.get("depends_on") or []
@@ -74,7 +87,9 @@ def _step(data: dict[str, Any]) -> StepSpec:
         description=data.get("description") or "",
         run=[run] if isinstance(run, str) else list(run or []),
         uses=data.get("uses"),
+        action=data.get("action"),
         with_=dict(data.get("with") or {}),
+        rollback=_rollback(data.get("rollback")),
         depends_on=[depends] if isinstance(depends, str) else list(depends),
         condition=_condition(data.get("if")),
         env=_str_map(data.get("env")),
@@ -124,6 +139,7 @@ def parse_workflow(data: Any, *, source: Path | None = None, key: str | None = N
         ),
         outputs={k: str(v) for k, v in (data.get("outputs") or {}).items()},
         triggers=[triggers] if isinstance(triggers, str) else list(triggers),
+        on_failure=str(data.get("on_failure") or "stop"),
         source=source,
         key=key or (source.stem if source else data["name"]),
     )

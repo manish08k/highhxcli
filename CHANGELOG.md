@@ -6,6 +6,60 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-27
+
+The action engine: one catalog, one executor, for everything HighhX runs — and autonomous
+tasks that HighhX itself verifies.
+
+### Added
+
+- **Autonomous tasks (Pro):** a request that says when it is done ("…and make sure all tests
+  pass") runs until HighhX has verified it — checks derived deterministically, run by HighhX
+  after every attempt, failures with their real output fed back, bounded attempts, a
+  verified/unverified report; `/task`, `highhx agent --verify`, `/retry` for another round.
+- **Action engine** (`highhx.actions`): 61 actions (project, filesystem, git, package, docker,
+  database, service, browser, computer, deployment, security, workflow, shell) with input
+  schemas, outputs, a risk floor, permissions, timeouts, idempotency-aware retries,
+  verification and compensation; one executor for typed commands, plain language, workflow
+  steps and the AI agent; action graphs with whole-graph validation and rollback.
+- **Five risk levels and one approval table** (safe · low · medium · high · critical);
+  critical needs a typed confirmation; `rm -rf` and remote-code pipes are critical; the gate
+  shows the five-level risk.
+- **Deterministic resolver** with entities from the project (services, deploy targets,
+  environments, workflows, files, URLs, quoted messages) and all-or-nothing compound requests.
+- **Session:** `/run`, `/plan` → `/approve` / `/deny` (approve exactly the previewed plan),
+  `/retry`, `/resume`, `/cancel`, `/workflows`, `/workflow …`, `/voice`; `/changes` and
+  `/undo` on Free; `!command` runs as the `shell.run` action.
+- **Workflows:** `action:` steps, `rollback:` per step and `on_failure: rollback`,
+  `highhx workflow run | inspect | runs | resume | cancel`; resume reuses completed steps and
+  re-runs rolled-back ones; cancellation across processes.
+- **Pro:** `run_actions` — the agent proposes structured action graphs executed by the same
+  engine (plan-feature gated, never pre-approved, no UI actions); agent events.
+- **Voice:** push-to-talk with local speech-to-text (whisper.cpp, Vosk) and OS speech;
+  `highhx voice`, `/voice`; transcripts are confirmed before they run.
+- **Observability:** structured, redacted JSON Lines events (`highhx events`), session ids.
+- `highhx actions list | show | plan | run`; plugin commands as bounded
+  `plugin.<plugin>.<command>` actions; structured project context.
+- Documentation: product specification, architecture, action engine, safety model, security,
+  Free/Pro, agent runtime, automation, voice, observability, plugin system, CLI reference,
+  roadmap, contributing.
+
+### Changed
+
+- The session reads as one product: `/help` grouped by purpose; `/status` is the hub for
+  pending plans (`/approve`, `/deny`), the last failure (`/retry`) and running workflows
+  (`/cancel`); `/history` is a ✓ ✗ ⊘ timeline; `/changes` shows created/modified/deleted;
+  empty states say what to do next; new `/init`, `/doctor` and `/login`; a *Getting started*
+  panel on the first run; `highhx init` points to the first task.
+- Approval prompts give a plain reason and show exactly what will change: a diff for file
+  writes, what a delete removes, source → destination for moves.
+- Command-backed actions in `--json` mode print their own output to stderr, so a command
+  still emits exactly one JSON document.
+- Command execution waits on the process instead of polling every 50 ms: dispatching a
+  command through the full safety pipeline went from ~59 ms to ~3 ms.
+- File search follows `.gitignore`; deterministic failures are never retried.
+- `docs/architecture.md` → `docs/ARCHITECTURE.md`, `docs/security.md` → `docs/SECURITY.md`.
+
 ## [0.4.0] - 2026-09-27
 
 One interactive HighhX for both plans: run `highhx` and describe what you want.

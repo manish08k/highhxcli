@@ -44,6 +44,12 @@ class ConfirmationRequest:
     details: tuple[str, ...] = ()
     confirm_word: str | None = None
     """When set, the person must type this word (critical actions)."""
+    risk_label: str | None = None
+    """The risk as the caller rates it (the action catalog's five levels), when it has one."""
+
+    @property
+    def risk_name(self) -> str:
+        return self.risk_label or self.risk.label
 
 
 class ConfirmPrompter(Protocol):
@@ -126,6 +132,7 @@ class ConfirmationBroker:
             irreversible=verdict.irreversible,
             details=tuple(details),
             confirm_word=("approve" if critical else None),
+            risk_label=verdict.risk_label,
         )
         if not self.prompter.confirm_action(request):
             raise ApprovalDeniedError(f"Cancelled: {action.summary}", details=verdict.reasons)

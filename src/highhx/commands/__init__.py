@@ -36,6 +36,7 @@ from highhx.ui.prompts import ConsolePrompter
 from highhx.utils.paths import user_data_dir
 
 if TYPE_CHECKING:
+    from highhx.actions.executor import ActionExecutor
     from highhx.building.builder import Builder
     from highhx.cloud.account import CloudAccount
     from highhx.database.manager import DatabaseManager
@@ -350,7 +351,18 @@ class App:
             root=self.root,
             reporter=WorkflowConsoleReporter(self.output),
             project_name=self.config.project_name,
+            actions=self.user_actions,
         )
+
+    def user_actions(self) -> ActionExecutor:
+        """An action executor for the user's own deterministic actions, asking on this terminal."""
+        from highhx.actions.executor import ActionExecutor
+        from highhx.agent.ui import TerminalUI
+
+        prompter = TerminalUI(self.output.err_console, self.output.symbols, interactive=self.options.is_interactive())
+        executor = ActionExecutor.for_user(self, prompter)
+        self._closers.append(executor.close)
+        return executor
 
     @cached_property
     def service_registry(self) -> ServiceRegistry:

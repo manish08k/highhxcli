@@ -2,6 +2,21 @@
 
 HighhX runs commands on your machine with your privileges. Its job is to make risky
 actions visible and deliberate, and to keep secrets out of places they don't belong.
+How risk and approval are decided is specified in [SAFETY_MODEL.md](SAFETY_MODEL.md);
+the plan boundary in [FREE_PRO.md](FREE_PRO.md).
+
+## Threat model
+
+| Threat | Mitigation |
+|---|---|
+| A risky command runs by accident | Deterministic classification, five-level approval table, typed confirmation for critical, blocked catastrophic actions |
+| Approval of one thing runs another | Single-use HMAC tickets bound to the action's canonical digest |
+| The AI agent is manipulated by content it reads (prompt injection) | Tool output framed as untrusted data; the agent cannot pre-approve; risk decided by HighhX; secrets never sent |
+| Automation escapes the project | Path confinement (symlinks resolved), `.git/` and HighhX state protected, `forbidden_files` |
+| Secrets leak into output, logs, events or the model | Redaction of everything printed, logged, recorded or sent; secret files never read |
+| A local file grants paid features | Platform capabilities only from a live platform answer; the gateway checks the plan on every request |
+| A plugin is more powerful than it declares | Declared risk only raises the floor; plugin actions never reach the agent; code plugins need per-user trust of their exact contents |
+| A spoken command is misheard | Transcripts are confirmed before anything runs; approvals still apply |
 
 ## Risk levels
 
@@ -126,3 +141,23 @@ the HighhX platform's AI gateway, which forwards it to the configured model prov
 token counts, status) is stored in your HighhX account; transcripts stay in the
 project's local state database. Platform credentials live in your user config
 directory with owner-only permissions.
+
+## Event log
+
+`highhx events` reads structured JSON Lines events from the user data directory. Every line
+passes through the redactor before it is written; events carry names, statuses and short
+summaries — never file contents or environment values. Environment *names* appear in the
+project context; their values never do.
+
+## Plugins and the action engine
+
+Declared plugin commands appear as `plugin.<plugin>.<command>` actions for the user only.
+Their declared risk can raise the floor but never lower it below LOW, the classifier still
+rates the concrete command, they run with the plugin command's isolated environment (no
+project secrets) and are never offered to the AI agent.
+
+## Voice
+
+Voice uses local programs only (recorders, a speech-to-text engine you installed with a model
+on disk, the OS speech synthesizer). Audio is written to a private temporary directory and
+deleted after transcription; nothing is uploaded. See [VOICE.md](VOICE.md).

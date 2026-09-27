@@ -15,7 +15,7 @@ from highhx.core.errors import ExitCode, HighhXError
 from highhx.core.lifecycle import Lifecycle
 
 SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Interactive session & AI agent (HighhX Pro)", ("agent",)),
+    ("Interactive session & AI agent (HighhX Pro)", ("agent", "voice")),
     ("Automation (no AI)", ("do", "computer")),
     ("Account", ("login", "logout", "account")),
     ("Project", ("init", "status", "info", "dev", "start", "stop", "restart", "check")),
@@ -27,8 +27,8 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Deployment", ("deploy", "rollback", "environments")),
     ("Security", ("security",)),
     ("Containers, services & data", ("docker", "services", "ports", "db")),
-    ("Workflows & automation", ("workflow", "schedule", "hook", "trigger", "watchers")),
-    ("Observability", ("logs", "history", "audit", "report", "trace")),
+    ("Workflows & automation", ("workflow", "actions", "schedule", "hook", "trigger", "watchers")),
+    ("Observability", ("logs", "history", "events", "audit", "report", "trace")),
     ("Extensibility & team", ("plugin", "config", "policy", "workspace", "profile")),
     ("Diagnostics", ("doctor", "diagnose", "repair", "debug")),
 )

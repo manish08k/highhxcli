@@ -48,6 +48,14 @@ def _read_stdin_prompt() -> str:
 )
 @click.option("--max-steps", type=click.IntRange(1, 500), help="Maximum tool steps per request.")
 @click.option("--effort", type=click.Choice(EFFORTS), help="Reasoning effort, where the model supports it.")
+@click.option(
+    "--verify",
+    "verify",
+    metavar="CHECKS",
+    help="Task mode: work until HighhX verifies these checks (comma list of test, check, build; `none` disables). "
+    "Default: what the request states (e.g. 'make sure all tests pass').",
+)
+@click.option("--attempts", type=click.IntRange(1, 10), help="Task mode: attempts before giving up (default 3).")
 @pass_app
 def agent_run(
     app: App,
@@ -59,6 +67,8 @@ def agent_run(
     mode: str | None,
     max_steps: int | None,
     effort: str | None,
+    verify: str | None,
+    attempts: int | None,
 ) -> int:
     """In a terminal, start the interactive HighhX session (the same one as bare
     `highhx`; PROMPT becomes the first request). When input/output is not a
@@ -132,6 +142,17 @@ def agent_run(
         with registered(session_id, app.root):
             return AgentREPL(session, ui, cloud, account).run(text or None, resumed=resumed)
 
+    from highhx.agent.tasks import CHECKS, definition_of_done
+
+    keys = definition_of_done(text) if verify is None else [k.strip() for k in verify.split(",") if k.strip()]
+    keys = [k for k in keys if k != "none"]
+    unknown = [k for k in keys if k not in CHECKS]
+    if unknown:
+        session.close()
+        raise UsageError(f"Unknown check(s): {', '.join(unknown)}.", hint="Use test, check and/or build.")
+    if keys:
+        return _run_task(app, session, ui, text, keys, attempts)
+
     try:
         with registered(session_id, app.root):
             result = session.run_turn(text, cancel=app.ctx.cancel)
@@ -162,6 +183,33 @@ def agent_run(
         ui.print()
         ui.footer(parts)
     return 0 if completed else int(ExitCode.FAILURE)
+
+
+def _run_task(app: App, session: Any, ui: Any, goal: str, keys: list[str], attempts: int | None) -> int:
+    """One-shot task: the agent works until HighhX verifies the checks (or attempts run out)."""
+    from highhx.agent.running import registered
+    from highhx.agent.tasks import MAX_ATTEMPTS, TaskRunner, TaskSpec
+
+    spec = TaskSpec.build(app, goal, keys, max_attempts=attempts or MAX_ATTEMPTS)
+    human = app.output.human
+    if human:
+        ui.task_started(goal, [c.name for c in spec.checks], spec.max_attempts, spec.missing)
+    runner = TaskRunner(
+        session,
+        app.user_actions(),
+        on_attempt=ui.task_attempt if human else None,
+        on_check=(lambda c: ui.task_check(c.name, c.action, c.ok, c.summary)) if human else None,
+    )
+    try:
+        with registered(session.record.id if session.record else None, app.root):
+            report = runner.run(spec, cancel=app.ctx.cancel)
+    finally:
+        session.close()
+    if app.options.json:
+        app.output.json({**report.to_dict(), "session_id": session.record.id if session.record else None})
+    elif not app.options.quiet:
+        ui.task_report(report)
+    return 0 if report.ok else (130 if report.status == "cancelled" else int(ExitCode.FAILURE))
 
 
 @agent.command("sessions", short_help="List saved agent sessions.")

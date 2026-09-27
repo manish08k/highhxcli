@@ -54,6 +54,63 @@ READ_ONLY_DIRS = (".git", ".highhx/state", ".highhx/logs", ".highhx/backups")
 HIDDEN_DIRS = (".git", ".highhx/state", ".highhx/logs", ".highhx/backups")
 
 
+def relative_to_root(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root.resolve()).as_posix() or "."
+    except ValueError:
+        return path.as_posix()
+
+
+def is_secret_path(rel: str) -> bool:
+    """Files whose contents must never leave the machine or be handled by automation."""
+    name = rel.rsplit("/", 1)[-1]
+    if name in SECRET_FILE_EXCEPTIONS:
+        return False
+    if any(fnmatch.fnmatch(name, p) for p in SECRET_FILE_PATTERNS):
+        return True
+    # Data files named like secrets (`secrets.yaml`, `db_password.txt`) — not source code about them.
+    stem, _, suffix = name.partition(".")
+    return any(hint in stem.upper() for hint in SECRET_NAME_HINTS) and (
+        not suffix or f".{suffix.rsplit('.', 1)[-1]}" in DATA_SUFFIXES
+    )
+
+
+def confine_path(app: App, raw: str, *, write: bool = False, must_exist: bool = False, for_agent: bool = True) -> Path:
+    """Resolve a (possibly untrusted) path and enforce confinement: inside the project root,
+    never secret files, never HighhX state, never files the project policy forbids.
+    Raises :class:`ToolError`. Shared by the AI agent's tools and HighhX actions."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ToolError("path must be a non-empty string")
+    if "\x00" in raw:
+        raise ToolError("path contains a NUL byte")
+    root = app.root.resolve()
+    candidate = Path(raw.strip()).expanduser()
+    target = (candidate if candidate.is_absolute() else root / candidate).resolve()
+    if target != root and not target.is_relative_to(root):
+        raise ToolError(f"{raw} is outside the project ({root}); only project files are accessible")
+    rel = relative_to_root(root, target)
+    if is_secret_path(rel):
+        if not for_agent:
+            raise ToolError(f"{rel} may contain secrets; HighhX automation never reads or changes secret files.")
+        raise ToolError(
+            f"{rel} may contain secrets; HighhX never sends secret files to the AI model. "
+            "Ask the user to make that change themselves."
+        )
+    if any(rel == d or rel.startswith(d + "/") for d in HIDDEN_DIRS) and not write:
+        raise ToolError(f"{rel} is internal state and is not readable by the agent")
+    if write:
+        if rel == ".":
+            raise ToolError("cannot write the project root itself")
+        if any(rel == d or rel.startswith(d + "/") for d in READ_ONLY_DIRS):
+            raise ToolError(f"{rel} is protected; the agent cannot modify it")
+        forbidden = app.policy.forbidden_matches([rel])
+        if forbidden:
+            raise ToolError(f"{rel} matches forbidden_files in .highhx/policies.yaml")
+    if must_exist and not target.exists():
+        raise ToolError(f"{rel} does not exist")
+    return target
+
+
 class AgentPermissions:
     def __init__(
         self,
@@ -104,47 +161,11 @@ class AgentPermissions:
 
     def resolve(self, raw: str, *, write: bool = False, must_exist: bool = False) -> Path:
         """Resolve a model-supplied path and enforce confinement. Raises :class:`ToolError`."""
-        if not isinstance(raw, str) or not raw.strip():
-            raise ToolError("path must be a non-empty string")
-        if "\x00" in raw:
-            raise ToolError("path contains a NUL byte")
-        root = self.root.resolve()
-        candidate = Path(raw.strip()).expanduser()
-        target = (candidate if candidate.is_absolute() else root / candidate).resolve()
-        if target != root and not target.is_relative_to(root):
-            raise ToolError(f"{raw} is outside the project ({root}); only project files are accessible")
-        rel = self.relative(target)
-        if self.is_secret(rel):
-            raise ToolError(
-                f"{rel} may contain secrets; HighhX never sends secret files to the AI model. "
-                "Ask the user to make that change themselves."
-            )
-        if any(rel == d or rel.startswith(d + "/") for d in HIDDEN_DIRS) and not write:
-            raise ToolError(f"{rel} is internal state and is not readable by the agent")
-        if write:
-            if rel == ".":
-                raise ToolError("cannot write the project root itself")
-            if any(rel == d or rel.startswith(d + "/") for d in READ_ONLY_DIRS):
-                raise ToolError(f"{rel} is protected; the agent cannot modify it")
-            forbidden = self.app.policy.forbidden_matches([rel])
-            if forbidden:
-                raise ToolError(f"{rel} matches forbidden_files in .highhx/policies.yaml")
-        if must_exist and not target.exists():
-            raise ToolError(f"{rel} does not exist")
-        return target
+        return confine_path(self.app, raw, write=write, must_exist=must_exist)
 
     @staticmethod
     def is_secret(rel: str) -> bool:
-        name = rel.rsplit("/", 1)[-1]
-        if name in SECRET_FILE_EXCEPTIONS:
-            return False
-        if any(fnmatch.fnmatch(name, p) for p in SECRET_FILE_PATTERNS):
-            return True
-        # Data files named like secrets (`secrets.yaml`, `db_password.txt`) — not source code about them.
-        stem, _, suffix = name.partition(".")
-        return any(hint in stem.upper() for hint in SECRET_NAME_HINTS) and (
-            not suffix or f".{suffix.rsplit('.', 1)[-1]}" in DATA_SUFFIXES
-        )
+        return is_secret_path(rel)
 
     # -------------------------------------------------------------- approvals
     def action(

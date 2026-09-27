@@ -235,10 +235,13 @@ class AgentSession:
 
     # ------------------------------------------------------------------ setup
     def _build_registry(self) -> ToolRegistry:
+        from highhx.agent.tools.actions import RunActionsTool
+
         return ToolRegistry.for_session(
             features=self.features,
             read_only=self.settings.approval == ApprovalMode.READ_ONLY,
             initialized=self.app.initialized,
+            extra=[RunActionsTool(self.features)],
         )
 
     def _system_prompt(self) -> str:
@@ -350,6 +353,9 @@ class AgentSession:
             self.sync.start(self.record, self.context)
         self.journal.begin_turn()
         self._persist(Message.user(text))
+        self.app.ctx.events.emit(
+            "agent.turn", session=self.record.id if self.record else None, turn=self.turns, text=text[:200]
+        )
         result = TurnResult(text="")
         usage_before = Usage(**self.usage.to_dict())
         outcome = SessionState.FAILED
@@ -374,6 +380,14 @@ class AgentSession:
             )
             turn = self.journal.turns[-1] if self.journal.turns else []
             result.changed_files = list(dict.fromkeys(self.permissions.relative(c.path) for c in turn))
+            self.app.ctx.events.emit(
+                "agent.completed",
+                session=self.record.id if self.record else None,
+                stopped=result.stopped,
+                steps=result.steps,
+                changed=len(result.changed_files),
+                seconds=round(result.seconds, 2),
+            )
             if self.state == SessionState.WAITING_FOR_CONFIRMATION:
                 self.state = SessionState.RUNNING
             self.transition(outcome)
@@ -562,6 +576,14 @@ class AgentSession:
                 f"{call.name} timed out after {tool.timeout:.0f}s.\n{outcome.content}", code="timeout"
             )
         seconds = time.monotonic() - started
+        self.app.ctx.events.emit(
+            "agent.tool_call",
+            session=self.record.id if self.record else None,
+            tool=call.name,
+            ok=outcome.ok,
+            error_code=outcome.error_code,
+            seconds=round(seconds, 2),
+        )
         self.ui.tool_finished(tool, call, outcome, seconds)
         result.tools.append((call.name, outcome.ok))
         content = self.app.redactor.redact(outcome.content)

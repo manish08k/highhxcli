@@ -119,6 +119,9 @@ class ActionGate:
         details: Sequence[str] = (),
         engine_prompts: bool = False,
         always_confirm: bool = False,
+        min_risk: RiskLevel | None = None,
+        min_risk_reason: str = "",
+        risk_label: str | None = None,
     ) -> Authorization:
         """Decide whether ``action`` may run. Raises (and audits) when it may not.
 
@@ -127,6 +130,14 @@ class ActionGate:
         ``always_confirm``: ask explicitly even for low-risk actions (deployments).
         """
         verdict = self.policy.classify(action)
+        if min_risk is not None and verdict.risk < min_risk:
+            # The caller knows more than the wording of the action (e.g. a database migration).
+            verdict.risk = min_risk
+            if min_risk_reason and min_risk_reason not in verdict.reasons:
+                verdict.reasons.append(min_risk_reason)
+        elif min_risk_reason and not verdict.reasons:
+            verdict.reasons.append(min_risk_reason)  # a person is never asked without a reason
+        verdict.risk_label = risk_label
         try:
             if self.mode == ApprovalMode.READ_ONLY and verdict.risk > RiskLevel.SAFE:
                 raise ApprovalDeniedError(f"Not allowed in read-only mode: {action.summary}")

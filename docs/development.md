@@ -43,7 +43,7 @@ src/highhx/
   core/             engine, executor, context, results, errors, events, lifecycle
   execution/        processes, shells, env, timeouts, cancellation, retries, parallelism, isolation
   workflows/        schema, parser, loader, validator, graph, conditions, variables, scheduler, engine, templates
-  …                 domain packages (see docs/architecture.md)
+  …                 domain packages (see docs/ARCHITECTURE.md)
 templates/          project templates used by `highhx init` (packaged as highhx/_templates)
 schemas/            JSON Schemas generated from the code (tests keep them in sync)
 examples/           example .highhx/ setups (validated by tests)

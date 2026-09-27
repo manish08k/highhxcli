@@ -64,7 +64,9 @@ def init(app: App, stack: str | None) -> int:
         if plan.gitignore:
             out.info(f"{'Would add' if app.options.dry_run else 'Added'} {', '.join(plan.gitignore)} to .gitignore")
         out.plain("")
-        out.plain("Next: highhx doctor · highhx status · highhx workflow list")
+        out.plain(
+            "Next: run `highhx` and ask for your first task (e.g. “run the tests”) · `highhx doctor` checks your setup"
+        )
 
     out.emit(data, render)
     return 0

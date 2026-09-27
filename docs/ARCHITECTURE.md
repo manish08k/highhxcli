@@ -1,10 +1,15 @@
 # Architecture
 
 HighhX is layered so that every side effect passes through one place where safety
-rules are enforced.
+rules are enforced. Product-level behaviour is specified in [PRODUCT_SPEC.md](PRODUCT_SPEC.md).
 
 ```text
-agent/               HighhX Pro: session loop, tools, permissions, planner, providers (see below)
+interfaces           highhx (session) · highhx <command> · workflows · voice · the Pro agent
+    ↓
+actions/             resolver (text → actions) · catalog (61 actions) · policy (risk, approval)
+                     · executor (validate → classify → approve → run → verify → record) · graphs
+    ↓
+safety/              classifier · action gate · confirmation tickets · audit log
     ↓
 commands/            thin CLI modules: parse args → call a service → render
     ↓
@@ -24,6 +29,41 @@ integrations/        docker, kubernetes, ssh, terraform, databases, cloud (plugi
 Cross-cutting packages: `approvals/` (risk levels, rules, approval manager),
 `policy/` (policies.yaml), `storage/` (SQLite history, logs, cache), `observability/`
 (logging with redaction, events, metrics, tracing), `config/`, `ui/`, `utils/`.
+
+## Request flow
+
+Every entry point ends in the same executor:
+
+```text
+typed text ──▶ router ──▶ resolver ──▶ Resolution(steps) ─┐
+/run, highhx actions run ────────────────────────────────┤
+workflow `action:` step ─────────────────────────────────┼─▶ ActionExecutor.plan ─▶ execute
+agent run_actions graph ─▶ validate_graph ───────────────┤      (actor = user | agent)
+voice ──▶ local speech-to-text ──▶ confirmed text ──▶ router
+!command ──▶ shell.run ───────────────────────────────────┘
+
+execute: ActionGate.authorize (classifier + catalog floor + policy + approval, ticket)
+       → gate.executing (ticket redeemed, audit) → engine.operation (history)
+       → handler (timeout, cancellation, idempotent retries) → verify → events
+```
+
+| Package | Responsibility |
+|---|---|
+| `actions/spec.py` | `ActionSpec` (name, schema, outputs, risk floor, kind, permissions, timeout, retry, idempotence, verification, compensation, agent feature), `ActionResult`, `ActionContext` |
+| `actions/catalog.py` | The built-in catalog and per-project plugin actions |
+| `actions/policy.py` | Five risk levels, the approval table, action-level rules (e.g. `rm -rf` → critical) |
+| `actions/executor.py` | Planning, execution, compensation, action graphs |
+| `actions/resolver.py` | Deterministic grammar with entities from the project |
+| `actions/handlers/` | Command-backed actions (`delegate`), files, git, browser, project detection |
+| `actions/context.py` | Structured project context (names only, never secret values) |
+| `actions/events.py` | Event names, the JSON Lines event log |
+| `agent/router.py` | Free routing: resolve, or explain the Pro capability with local alternatives |
+| `agent/repl.py`, `agent/ui.py`, `agent/input.py` | The interactive session (one UI for Free and Pro) |
+| `agent/launch.py` | Session start: capabilities, agent attachment, event log |
+| `agent/tools/actions.py` | `run_actions`: the agent's structured action graphs |
+| `cloud/capabilities.py` | Capabilities from the platform-reported plan features |
+| `workflows/` | Parser, validator, DAG scheduler, engine (action steps, rollback, resume), running registry |
+| `voice/` | Engines (recorders, local speech-to-text, speech) and voice mode |
 
 ## Composition root
 
@@ -120,3 +160,23 @@ A separate package (`highhx-platform`, FastAPI + SQLAlchemy) that imports the CL
 plan definitions (`highhx.cloud.plans`), wire format (`highhx.cloud.sse`,
 `highhx.agent.streaming`) and provider adapters, so both ends share one implementation.
 See [platform.md](platform.md).
+
+## Runtime choice
+
+HighhX is a single Python runtime. A .NET worker for process orchestration was evaluated
+against measurements on the real engine (macOS, Apple silicon, Python 3.14):
+
+| Measurement | Before | After |
+|---|---|---|
+| raw `subprocess` spawn of `/usr/bin/true` | 1.8 ms | 1.8 ms |
+| `Engine.run` (policy, risk, approval, execute, redaction) | 58.7 ms | 3.4 ms |
+| 64-step workflow, 16 in parallel | 221 steps/s | 416 steps/s |
+
+The overhead was a fixed 50 ms sleep in the process wait loop — a Python detail, fixed by
+waiting on the process with a timeout (`execution/process.py`). The work HighhX orchestrates
+is I/O-bound subprocesses and network calls, where a second runtime brings no measurable
+gain but would cost every user a .NET runtime (or ~70 MB self-contained binaries per
+platform), a versioned IPC protocol, and a second implementation of cancellation, redaction
+and audit. The action handler contract (`ActionContext` → `ActionResult`) is
+transport-agnostic, so a native worker can be added behind it if a real bottleneck (e.g.
+Windows UI Automation) ever justifies one; see [ROADMAP.md](ROADMAP.md).

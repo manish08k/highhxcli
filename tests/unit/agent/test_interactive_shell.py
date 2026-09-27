@@ -16,7 +16,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import click
 import pytest
 from rich.console import Console
 
@@ -143,24 +142,24 @@ def test_resolve_rejected_token_keeps_local(fake_platform: type[FakeClient]) -> 
 
 # ------------------------------------------------------------------ routing
 @pytest.mark.parametrize(
-    ("text", "argv"),
+    ("text", "action"),
     [
-        ("run the tests", ["test"]),
-        ("show git status", ["git", "status"]),
-        ("please build", ["build"]),
-        ("security scan", ["security"]),
+        ("run the tests", "project.test"),
+        ("show git status", "git.status"),
+        ("please build", "project.build"),
+        ("security scan", "security.scan"),
     ],
 )
-def test_known_requests_run_deterministically(text: str, argv: list[str]) -> None:
+def test_known_requests_run_deterministically(text: str, action: str) -> None:
     planned = route(text)
-    assert planned.intent is not None and planned.intent.argv == argv and planned.capability is None
+    assert planned.resolution is not None and planned.resolution.action == action and planned.capability is None
 
 
 @pytest.mark.parametrize(
     ("text", "capability"),
     [
         ("Build a FastAPI authentication system.", Capability.AI_CODE_CHANGES),
-        ("Fix the failing tests", Capability.AI_CODE_CHANGES),
+        ("Fix the failing tests", Capability.AI_AGENT),  # debugging
         ("Refactor the authentication module.", Capability.AI_CODE_CHANGES),
         ("Add PostgreSQL support.", Capability.AI_CODE_CHANGES),
         ("Explain this repository.", Capability.AI_AGENT),
@@ -172,30 +171,25 @@ def test_known_requests_run_deterministically(text: str, argv: list[str]) -> Non
 )
 def test_open_ended_requests_name_the_capability(text: str, capability: Capability) -> None:
     planned = route(text)
-    assert planned.intent is None and planned.capability == capability
+    assert planned.resolution is None and planned.capability == capability
     assert "HighhX Pro" in planned.reason
 
 
 def test_local_alternatives_are_relevant() -> None:
-    assert local_alternatives("Fix the failing tests")[0].argv == ("test",)
-    assert ("deploy",) in [a.argv for a in local_alternatives("Deploy this application.")]
-    assert [a.argv for a in local_alternatives("Explain this repository.")] == [("info",), ("status",)]
+    assert local_alternatives("Fix the failing tests")[0].action == "project.test"
+    assert "deployment.deploy" in [a.action for a in local_alternatives("Deploy this application.")]
+    assert [a.action for a in local_alternatives("Explain this repository.")] == ["project.detect", "project.status"]
     assert local_alternatives("Build a FastAPI authentication system.") == ()  # not `highhx build`
     assert len(local_alternatives("fix failing tests, lint, build, deploy, security, git")) <= 3
 
 
-def test_every_local_alternative_is_a_real_command() -> None:
+def test_every_local_alternative_is_a_real_action() -> None:
+    from highhx.actions.catalog import default_catalog
     from highhx.agent import router
-    from highhx.cli import cli
 
-    actions = {action for _pattern, group in router._ALTERNATIVES for action in group}
-    ctx = click.Context(cli)
-    for action in actions:
-        command: click.Command | None = cli
-        for part in action.argv:
-            assert isinstance(command, click.Group), action
-            command = command.get_command(ctx, part)
-            assert command is not None, f"{action.command} is not a HighhX command"
+    catalog = default_catalog()
+    actions = {action.action for _pattern, group in router._ALTERNATIVES for action in group}
+    assert actions and all(name in catalog for name in actions), actions - set(catalog.names())
 
 
 def test_required_capability_default() -> None:
@@ -225,8 +219,8 @@ def test_free_startup_and_known_request(agent_project: Path, make_app, capsys) -
     out = buffer.getvalue()
     assert "Developer command center" in out and "main • clean" in out and "Free • Local" in out
     assert "not available" in out  # the AI line tells the truth
-    assert "◉ highhx git status" in out and "✓ highhx git status" in out
-    assert "◉ highhx test" in out and "✓ highhx test" in out  # a second turn in the same session
+    assert "◉ git status  git.status · safe" in out and "✓ git status" in out
+    assert "◉ run the tests  project.test · low" in out and "✓ run the tests" in out  # a second request
     assert "passed" in capsys.readouterr().out  # the real command's own output
     assert "Bye." in out
 
@@ -236,9 +230,10 @@ def test_free_open_ended_request_offers_pro_and_local_alternatives(agent_project
     repl, buffer, _ = free_repl(app, "Fix the failing tests", "1", "/quit")
     repl.run()
     out = buffer.getvalue()
-    assert "HighhX Pro capability" in out and "AI code changes require HighhX Pro." in out
-    assert "Run the tests" in out and "highhx test" in out
-    assert "✓ highhx test" in out  # continuing locally ran the real command
+    assert "HighhX Pro capability" in out and "AI debugging requires HighhX Pro." in out
+    assert "HighhX Pro can understand and execute this open-ended task." in out
+    assert "Run the tests" in out and "project.test" in out
+    assert "✓ Run the tests" in out  # continuing locally ran the real action
     assert "passed" in capsys.readouterr().out
 
 
@@ -259,7 +254,7 @@ def test_free_skip_does_nothing(agent_project: Path, make_app) -> None:
 
 
 def test_capability_panel_answers() -> None:
-    actions = (LocalAction("Run the tests", ("test",)), LocalAction("Diagnose", ("diagnose",)))
+    actions = (LocalAction("Run the tests", "project.test"), LocalAction("Diagnose", "security.diagnose"))
     for answer, expected in (("2", actions[1]), ("p", VIEW_PRO), ("", None), ("9", None)):
         ui, _buffer = make_ui(Script(answer))
         assert ui.capability_panel("AI code changes require HighhX Pro.", actions) == expected
@@ -295,7 +290,7 @@ def test_free_slash_commands(agent_project: Path, make_app, capsys) -> None:
     assert "Free • Local" in out and "not signed in" in out
     assert "Files indexed" in out and "No project memory yet" in out
     assert "sign in with `highhx login`" in out
-    assert "/plan is part of the AI agent, which requires HighhX Pro." in out
+    assert "/plan <request> previews what it would run" in out
     assert "/model is part of the AI agent" in out
     assert "Nothing is waiting for an answer" in out
 
@@ -305,7 +300,8 @@ def test_free_history_and_config_run_real_commands(agent_project: Path, make_app
     repl, buffer, _ = free_repl(app, "/history", "/config", "/quit")
     repl.run()
     out = buffer.getvalue()
-    assert "✓ highhx history" in out and "✓ highhx config show" in out
+    assert "Nothing has run in this session yet" in out and "highhx history" in out
+    assert "✓ highhx config show" in out
     assert "pyapp" in capsys.readouterr().out
 
 
@@ -408,8 +404,8 @@ def test_pro_platform_unavailable_falls_back_to_local(agent_project: Path, make_
     out = buffer.getvalue()
     assert "Cannot reach the HighhX platform" in out
     assert "HighhX platform unavailable. Local capabilities remain available." in out
-    assert any("Run highhx test locally instead (no AI)?" in p for p in script.prompts)
-    assert "✓ highhx test" in out
+    assert any("Run run the tests locally instead (no AI)?" in p for p in script.prompts)
+    assert "✓ run the tests" in out
     assert "Pro • Platform unavailable" in out  # /status tells the truth
     assert "passed" in capsys.readouterr().out
 

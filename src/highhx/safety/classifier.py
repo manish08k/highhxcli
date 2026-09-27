@@ -74,6 +74,8 @@ class SafetyVerdict:
     """Never allowed through automation (e.g. deleting the filesystem root)."""
     agent_blocked: bool = False
     """Never allowed when the AI proposes it (e.g. typing into a password field)."""
+    risk_label: str | None = None
+    """How the caller rates the risk on its own scale (shown to the person), if different."""
 
     @property
     def requires_confirmation(self) -> bool:

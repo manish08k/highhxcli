@@ -23,12 +23,16 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from types import FrameType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import click
 from rich.markup import escape
 from rich.table import Table
 
+from highhx.actions import events as ev
+from highhx.actions.executor import ActionExecutor, Planned
+from highhx.actions.policy import Approval
+from highhx.actions.resolver import Resolution, ResolverContext
+from highhx.actions.spec import ActionResult
 from highhx.agent.input import (
     CONTINUATION,
     CONTINUATION_MARKUP,
@@ -41,7 +45,7 @@ from highhx.agent.input import (
 from highhx.agent.memory import ProjectMemory
 from highhx.agent.model.registry import PROVIDER_NAMES, UPSTREAM_NAMES, provider_info
 from highhx.agent.permissions import ApprovalMode
-from highhx.agent.router import LocalAction, Route, route
+from highhx.agent.router import PRO_LEAD, LocalAction, route
 from highhx.agent.session import AgentSession, TurnResult
 from highhx.agent.ui import VIEW_PRO, TerminalUI, format_tokens
 from highhx.cloud import capabilities
@@ -62,6 +66,7 @@ if TYPE_CHECKING:
     from highhx.agent.context import ProjectContext
     from highhx.cloud.account import Account, CloudAccount
     from highhx.commands import App
+    from highhx.voice.mode import VoiceMode
 
 log = logging.getLogger(__name__)
 
@@ -73,11 +78,6 @@ _setup_readline = setup_readline
 ACCOUNT_COMMANDS = frozenset({"login", "logout", "account"})
 """HighhX commands after which the session re-checks the account's capabilities."""
 AGENT_SUBCOMMANDS_OK = frozenset({"sessions", "models", "stop", "--help", "-h"})
-CONFIRM_INTENTS: dict[tuple[str, ...], str] = {
-    ("fix",): "applies formatter and linter fixes to your files",
-    ("deps", "install"): "installs the project's dependencies",
-}
-"""Deterministic mappings that change files: typed as free-form text, they are confirmed first."""
 RECONNECT_SECONDS = 20.0
 STRAY_ANSWERS = frozenset({"y", "yes", "n", "no", "a", "always", "p"})
 """Answers typed when no question is open (a prompt already answered); never sent as a request."""
@@ -90,27 +90,58 @@ class SlashCommand:
     help: str
     agent: bool = False
     """Needs the AI agent (HighhX Pro)."""
+    group: str = "Session"
 
 
 SLASH_COMMANDS = (
-    SlashCommand("help", "/help", "Show commands and tips"),
-    SlashCommand("status", "/status", "Project, plan, account and session at a glance"),
-    SlashCommand("tools", "/tools", "What this session can do (local and Pro capabilities)"),
-    SlashCommand("plan", "/plan", "Show the current plan and its progress", agent=True),
-    SlashCommand("context", "/context", "What the session knows: project facts, memory, tools"),
-    SlashCommand("model", "/model [provider|model]", "Show or switch the AI provider / model", agent=True),
-    SlashCommand("mode", "/mode [ask|auto-edit|read-only]", "Show or change the approval mode", agent=True),
-    SlashCommand("config", "/config", "The effective project configuration"),
-    SlashCommand("account", "/account", "Your HighhX account and plan"),
-    SlashCommand("usage", "/usage", "AI usage this billing period"),
-    SlashCommand("history", "/history", "Recent agent sessions (Pro) or HighhX operations"),
-    SlashCommand("changes", "/changes", "Files the agent changed in this session", agent=True),
-    SlashCommand("undo", "/undo", "Revert the files changed in the last turn", agent=True),
-    SlashCommand("memory", "/memory [clear]", "Show (or clear) the project memory"),
-    SlashCommand("pro", "/pro", "What HighhX Pro adds, and how to get it"),
-    SlashCommand("clear", "/clear", "Start a fresh conversation (keeps memory and settings)"),
-    SlashCommand("quit", "/quit", "Exit (also /exit, Ctrl+D)"),
+    # Run: ask, preview, approve, try again
+    SlashCommand("plan", "/plan <request>", "Preview the steps, their risk and approvals — runs nothing", group="Run"),
+    SlashCommand("approve", "/approve", "Run the previewed plan exactly (critical steps still ask)", group="Run"),
+    SlashCommand("deny", "/deny", "Discard the previewed plan", group="Run"),
+    SlashCommand("retry", "/retry", "Run the last request that failed again", group="Run"),
+    SlashCommand("run", "/run <action> [k=v …]", "Run one catalog action, e.g. /run git.status", group="Run"),
+    SlashCommand(
+        "task",
+        "/task <goal> [--verify test,check,build]",
+        "Work until HighhX verifies it (tests, checks, build)",
+        agent=True,
+        group="Run",
+    ),
+    # Review: what happened
+    SlashCommand("status", "/status", "Plan, project, pending work and this session at a glance", group="Review"),
+    SlashCommand("history", "/history", "What this session ran, step by step", group="Review"),
+    SlashCommand("changes", "/changes", "Files changed in this session", group="Review"),
+    SlashCommand("undo", "/undo", "Revert the most recent file changes", group="Review"),
+    SlashCommand("doctor", "/doctor", "Check tools, configuration, environment and ports", group="Review"),
+    # Workflows
+    SlashCommand("workflows", "/workflows", "Workflows in this project", group="Workflows"),
+    SlashCommand(
+        "workflow", "/workflow <sub> …", "create · list · run · inspect · runs · resume · cancel", group="Workflows"
+    ),
+    SlashCommand("resume", "/resume [run-id]", "Resume the last failed or cancelled workflow run", group="Workflows"),
+    SlashCommand("cancel", "/cancel [run-id]", "Cancel a workflow running in another terminal", group="Workflows"),
+    # Project
+    SlashCommand("init", "/init", "Set up HighhX here: config, policies, workflows, history", group="Project"),
+    SlashCommand("context", "/context", "What HighhX knows about this project", group="Project"),
+    SlashCommand("tools", "/tools [category]", "Capabilities and the action catalog with risk levels", group="Project"),
+    SlashCommand("config", "/config", "The effective project configuration", group="Project"),
+    SlashCommand("memory", "/memory [clear]", "Project memory (facts kept across sessions)", group="Project"),
+    # Account & AI
+    SlashCommand("login", "/login", "Sign in to HighhX (creates your account)", group="Account & AI"),
+    SlashCommand("account", "/account", "Your account and plan", group="Account & AI"),
+    SlashCommand("pro", "/pro", "What HighhX Pro adds, and how to get it", group="Account & AI"),
+    SlashCommand("usage", "/usage", "AI usage this billing period", group="Account & AI"),
+    SlashCommand("model", "/model [name]", "Show or switch the AI model", agent=True, group="Account & AI"),
+    SlashCommand(
+        "mode", "/mode [ask|auto-edit|read-only]", "The agent's approval mode", agent=True, group="Account & AI"
+    ),
+    # Session
+    SlashCommand("voice", "/voice [on|off|mute|status]", "Push-to-talk and spoken replies", group="Session"),
+    SlashCommand("clear", "/clear", "Start a fresh conversation (memory and settings stay)", group="Session"),
+    SlashCommand("help", "/help", "This list", group="Session"),
+    SlashCommand("quit", "/quit", "Exit (also /exit, Ctrl+D)", group="Session"),
 )
+HELP_GROUPS = ("Run", "Review", "Workflows", "Project", "Account & AI", "Session")
 
 
 @contextlib.contextmanager
@@ -158,6 +189,33 @@ def command_words(argv: list[str]) -> list[str]:
     return argv[index:]
 
 
+def parse_inputs(text: str) -> dict[str, Any]:
+    """``key=value …`` (values parsed as JSON when they are, else strings) or one JSON object."""
+    import json
+
+    text = text.strip()
+    if not text:
+        return {}
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise ValueError(f"Invalid JSON: {exc}") from None
+        if not isinstance(data, dict):
+            raise ValueError("Inputs must be a JSON object.")
+        return data
+    inputs: dict[str, Any] = {}
+    for token in shlex.split(text):
+        key, sep, value = token.partition("=")
+        if not sep or not key:
+            raise ValueError(f"Expected key=value, got {token!r}.")
+        try:
+            inputs[key] = json.loads(value)
+        except ValueError:
+            inputs[key] = value
+    return inputs
+
+
 def nested_session(argv: list[str]) -> bool:
     """``highhx`` / ``highhx agent …`` inside the session would start a second session
     (global options such as ``-v`` or ``-C DIR`` in front do not change that)."""
@@ -181,6 +239,10 @@ class AgentREPL:
         entitlements: Entitlements | None = None,
         session_factory: SessionFactory | None = None,
         read_line: Callable[[str], str] | None = None,
+        session_id: str | None = None,
+        first_run: bool = False,
+        voice: bool = False,
+        voice_mode: VoiceMode | None = None,
     ) -> None:
         if session is None and app is None:
             raise ValueError("an app is required without an agent session")
@@ -199,6 +261,23 @@ class AgentREPL:
         self._token: CancellationToken | None = None
         self._context: ProjectContext | None = None
         self._last_check = time.monotonic()
+        self._actions: ActionExecutor | None = None
+        self.first_run = first_run
+        self.last_task: Any = None
+        self.stats = {"actions": 0, "failed": 0}
+        self._voice_on_start = voice
+        self._voice: VoiceMode | None = voice_mode
+        self.last_summary = ""
+        """One sentence about the last request's outcome (spoken in voice mode)."""
+        self.pending: tuple[str, list[Planned]] | None = None
+        """A plan previewed with /plan, waiting for /approve or /deny."""
+        self.retryable: tuple[str, Any] | None = None
+        """The last request that did not succeed: ("steps", [steps]) or ("turn", text)."""
+        from highhx.utils.hashing import new_id
+
+        record = session.record if session is not None else None
+        self.session_id = session_id or (record.id if record is not None else f"s-{new_id()[:12]}")
+        self._resolver_context: ResolverContext | None = None
 
     # ---------------------------------------------------------------- state
     @property
@@ -246,9 +325,13 @@ class AgentREPL:
             if self.session.settings.approval != ApprovalMode.ASK:
                 rows.append(("Mode", f"[warn]{self.session.settings.approval}[/warn]"))
         else:
-            rows.append(("AI", "[dim]not available — local commands and known requests only (/pro)[/dim]"))
+            rows.append(
+                ("AI", "[dim]not available on Free — deterministic automation · /pro shows what the agent adds[/dim]")
+            )
         if not ctx.initialized:
-            rows.append(("Setup", "[warn]not initialized[/warn] [dim]— `highhx init` adds workflows & history[/dim]"))
+            rows.append(
+                ("Setup", "[warn]not set up yet[/warn] [dim]— /init adds config, policies, workflows & history[/dim]")
+            )
         if self.app.options.dry_run:
             rows.append(("Dry run", "[warn]on[/warn] [dim]— commands are previewed, not executed[/dim]"))
         return rows
@@ -283,12 +366,40 @@ class AgentREPL:
             self.ui.print(
                 f"[dim]Resumed session[/dim] [bold]{escape(title)}[/bold] [dim]({self.session.turns} turns)[/dim]\n"
             )
+        if self.first_run:
+            self.welcome()
         if self.session is not None:
             self.ui.print("What would you like me to do? [dim](/help for commands)[/dim]")
         else:
             self.ui.print(
                 "What would you like to do? [dim]Try “run the tests”, “show git status”, `!ls` or /help.[/dim]"
             )
+
+    def welcome(self) -> None:
+        """First session on this machine: the four steps from install to a first task."""
+        steps = []
+        if not self.context.initialized:
+            steps.append("[bold]/init[/bold] sets up HighhX in this project (config, policies, workflows)")
+        steps.append(
+            "[bold]run the tests[/bold], [bold]show git status[/bold], [bold]deploy staging[/bold] — ask in plain words"
+        )
+        steps.append("[bold]/plan <request>[/bold] previews what would run and its risk; [bold]/approve[/bold] runs it")
+        if self.session is None:
+            steps.append("[bold]/login[/bold] for HighhX Pro — the AI agent for open-ended tasks")
+        else:
+            steps.append("describe any task — the agent plans it, you approve changes, HighhX verifies them")
+        from rich.panel import Panel
+
+        body = "\n".join(f"[magenta]{n}.[/magenta] {step}" for n, step in enumerate(steps, start=1))
+        self.ui.print(
+            Panel(
+                body,
+                title="[bold magenta]Getting started[/bold magenta]",
+                title_align="left",
+                border_style="magenta",
+                padding=(0, 2),
+            )
+        )
 
     # --------------------------------------------------------------------- run
     def _on_terminate(self, _signum: int, _frame: FrameType | None) -> None:
@@ -308,9 +419,19 @@ class AgentREPL:
             if previous is not None:
                 signal.signal(signal.SIGTERM, previous)
 
+    @property
+    def voice(self) -> VoiceMode:
+        if self._voice is None:
+            from highhx.voice.mode import VoiceMode
+
+            self._voice = VoiceMode(self.ui, self.app.ctx.events)
+        return self._voice
+
     def _run(self, first: str | None = None, *, resumed: bool = False) -> int:
         save_history = _setup_readline()
         self.show_banner(resumed=resumed)
+        if self._voice_on_start:
+            self.voice.enable()
         pending = first
         interrupts = 0
         try:
@@ -325,13 +446,23 @@ class AgentREPL:
                     except EOFError:
                         break
                     except KeyboardInterrupt:
+                        if self._voice is not None:
+                            self._voice.interrupt()
                         interrupts += 1
                         if interrupts >= 2 or not self._running:
                             break
                         self.ui.print("\n[dim]Press Ctrl+C again or type /quit to exit.[/dim]")
                         continue
                 interrupts = 0
+                if self._voice is not None and self._voice.active and not text.strip():
+                    heard = self.voice.listen(self._read_line)
+                    if not heard:
+                        continue
+                    text = heard
+                self.last_summary = ""
                 self.handle(text)
+                if self._voice is not None and self._voice.active and self.last_summary:
+                    self._voice.speak(self.last_summary)
         finally:
             save_history()
             if self.session is not None:
@@ -381,7 +512,13 @@ class AgentREPL:
         elif text.lower() in STRAY_ANSWERS:
             self.ui.notice("info", "Nothing is waiting for an answer — describe what you want, or /help.")
         elif self.session is not None:
-            self.turn(text)
+            from highhx.agent.tasks import definition_of_done
+
+            keys = definition_of_done(text)
+            if keys:
+                self.run_task(text, keys)  # the request states when it is done: verify it
+            else:
+                self.turn(text)
         else:
             self.local_request(text)
 
@@ -409,6 +546,7 @@ class AgentREPL:
             if exc.hint:
                 self.ui.print(f"  [dim]{escape(exc.hint)}[/dim]")
             unreachable = exc.connection if isinstance(exc, ModelProviderError) else exc.status is None
+            self.retryable = ("turn", text)
             self.platform_fallback(text, unreachable=unreachable)
             return None
         except HighhXError as exc:
@@ -418,6 +556,7 @@ class AgentREPL:
                 self.ui.print(f"  [dim]{escape(exc.hint)}[/dim]")
             return None
         self._platform_reachable(True)
+        self.last_summary = result.text or ("Done." if result.stopped == "completed" else f"Stopped: {result.stopped}.")
         if result.stopped == "cancelled":
             self.ui.assistant_finished()
             self.ui.notice("warn", "Interrupted. The conversation is kept — tell me how to continue.")
@@ -436,6 +575,41 @@ class AgentREPL:
                 self.entitlements, connection=Connection.CACHED if cached else Connection.CONNECTED, problem=None
             )
 
+    def run_task(self, goal: str, keys: list[str], *, attempts: int | None = None) -> Any:
+        """An autonomous task: the agent works; HighhX verifies; failures go back; bounded attempts."""
+        from highhx.agent.tasks import MAX_ATTEMPTS, TaskRunner, TaskSpec
+
+        assert self.session is not None
+        spec = TaskSpec.build(self.app, goal, keys, max_attempts=attempts or MAX_ATTEMPTS)
+        self.ui.task_started(goal, [f"{c.name}" for c in spec.checks], spec.max_attempts, spec.missing)
+        runner = TaskRunner(
+            self.session,
+            self.actions,
+            on_attempt=self.ui.task_attempt,
+            on_check=lambda c: self.ui.task_check(c.name, c.action, c.ok, c.summary),
+            around_checks=self.local_io,
+        )
+        token = CancellationToken()
+        self._token = token
+        try:
+            with turn_interrupts(token):
+                report = runner.run(spec, cancel=token)
+        except (PlanRequiredError, AccountError, QuotaExceededError, ModelProviderError, CloudError) as exc:
+            self.ui.assistant_finished()
+            self.ui.notice("error", exc.message)
+            self.retryable = ("task", (goal, keys))
+            return None
+        self._platform_reachable(True)
+        self.last_task = report
+        self.ui.task_report(report)
+        self.last_summary = {
+            "verified": "Task verified.",
+            "done": "Task done.",
+            "unverified": "The task is not verified; checks are still failing.",
+        }.get(report.status, f"Task {report.status}.")
+        self.retryable = None if report.ok else ("task", (goal, keys))
+        return report
+
     def platform_fallback(self, text: str, *, unreachable: bool = True) -> None:
         """The AI request failed: say why, and offer the deterministic local route for this request."""
         if unreachable:
@@ -443,11 +617,11 @@ class AgentREPL:
             self.ui.notice("warn", "HighhX platform unavailable. Local capabilities remain available.")
         else:
             self.ui.notice("warn", "The AI request failed. Local capabilities remain available.")
-        planned = route(text)
-        if planned.intent is not None and self.ui.ask(
-            f"Run {planned.intent.description} locally instead (no AI)?", default=True
+        planned = route(text, self.resolver_context())
+        if planned.resolution is not None and self.ui.ask(
+            f"Run {planned.resolution.description} locally instead (no AI)?", default=True
         ):
-            self.run_intent(planned)
+            self.run_resolution(planned.resolution)
 
     def footer(self, result: TurnResult) -> None:
         parts = []
@@ -464,19 +638,16 @@ class AgentREPL:
 
     # ------------------------------------------------------------- local route
     def local_request(self, text: str) -> None:
-        """Without the AI agent: a deterministic intent, or the capability the request needs."""
-        planned = route(text)
-        if planned.intent is None and self.reconnect() and self.session is not None:
+        """Without the AI agent: deterministic actions, or the capability the request needs."""
+        planned = route(text, self.resolver_context())
+        if planned.resolution is None and self.reconnect() and self.session is not None:
             self.turn(text)  # the platform is back and grants the agent
             return
-        if planned.intent is not None:
-            intent = planned.intent
-            note = CONFIRM_INTENTS.get(tuple(intent.argv))
-            if note and not self.ui.ask(f"Run {intent.description} — {note}?", default=True):
-                return
-            self.run_intent(planned)
+        if planned.resolution is not None:
+            self.run_resolution(planned.resolution)
             return
         assert planned.capability is not None
+        self.events.emit(ev.INTENT_UNRESOLVED, text=text, capability=str(planned.capability))
         ent = self.entitlements
         if ent.connection == Connection.CACHED and ent.tier == "Pro":
             # A Pro plan (as last known) that cannot reach the platform: the gap is the connection.
@@ -486,32 +657,100 @@ class AgentREPL:
                 title="HighhX platform unavailable",
             )
             return
-        self.offer(planned.reason, planned.alternatives)
+        self.offer(planned.reason, planned.alternatives, lead=PRO_LEAD)
 
     def offer(
-        self, reason: str, alternatives: tuple[LocalAction, ...], *, title: str = "HighhX Pro capability"
+        self,
+        reason: str,
+        alternatives: tuple[LocalAction, ...],
+        *,
+        title: str = "HighhX Pro capability",
+        lead: str = "",
     ) -> None:
-        choice = self.ui.capability_panel(reason, alternatives, title=title)
+        self.last_summary = reason
+        choice = self.ui.capability_panel(reason, alternatives, title=title, lead=lead)
         if choice == VIEW_PRO:
             self.show_pro()
         elif isinstance(choice, LocalAction):
-            self.command(list(choice.argv))
+            self.run_action(choice.action, dict(choice.inputs), label=choice.label)
 
-    def run_intent(self, planned: Route) -> int:
-        assert planned.intent is not None
-        intent = planned.intent
-        if intent.kind == "command":
-            return self.command(list(intent.argv), label=intent.description)
-        from highhx.commands.computer.do import execute_intent
+    # ------------------------------------------------------------------ actions
+    @property
+    def actions(self) -> ActionExecutor:
+        """The user's own deterministic actions (Free and Pro alike)."""
+        if self._actions is None:
+            self._actions = ActionExecutor.for_user(self.app, self.ui)
+        return self._actions
 
-        return self._local(intent.description, lambda: execute_intent(self.app, intent), detail="local · no AI")
+    @property
+    def events(self) -> Any:
+        return self.app.ctx.events
 
-    def shell(self, command: str) -> int:
-        """``!command``: through `highhx exec` — risk classification, policy, approval, history."""
+    def resolver_context(self) -> ResolverContext:
+        if self._resolver_context is None:
+            self._resolver_context = ResolverContext.from_app(self.app)
+        return self._resolver_context
+
+    def run_resolution(self, resolution: Resolution) -> bool:
+        """Run the resolved steps in order; stop at the first that does not succeed."""
+        self.events.emit(
+            ev.INTENT_RESOLVED,
+            text=resolution.text,
+            rule=resolution.rule,
+            actions=[s.action for s in resolution.steps],
+        )
+        steps = list(resolution.steps)
+        for index, step in enumerate(steps):
+            result = self.run_action(step.action, dict(step.inputs), label=step.description or step.action)
+            if result is None or not result.ok:
+                self.retryable = ("steps", steps[index:])
+                return False
+        self.retryable = None
+        return True
+
+    def run_action(
+        self, name: str, inputs: dict[str, Any], *, label: str | None = None, planned: Planned | None = None
+    ) -> ActionResult | None:
+        """Plan (unless already planned) and execute one catalog action with live activity,
+        approvals and Ctrl+C. A ``planned`` action was previewed and approved with /approve."""
+        preapproved = planned is not None
+        if planned is None:
+            try:
+                planned = self.actions.plan(name, inputs)
+            except HighhXError as exc:
+                self.ui.notice("error", exc.message)
+                for detail in exc.details[:5]:
+                    self.ui.print(f"  [dim]{escape(detail)}[/dim]")
+                return None
+        shown = label or name
+        detail = f"{name} · {planned.decision.risk.label}"
+        token = CancellationToken()
+        self._token = token
+        self.ui.activity_started(shown, detail=detail)
+        result: ActionResult | None = None
+        try:
+            with self.local_io(), turn_interrupts(token):
+                result = self.actions.execute(planned, cancel=token, preapproved=preapproved)
+        except (KeyboardInterrupt, OperationCancelledError):
+            result = ActionResult(False, status="cancelled", error="cancelled")
+        except Exception as exc:  # a bug in one action must not end the session
+            self.unexpected(exc)
+            result = ActionResult(False, status="failed", error=f"{type(exc).__name__}: {exc}")
+        self.ui.action_finished(shown, result)
+        self.stats["actions"] += 1
+        if not result.ok:
+            self.stats["failed"] += 1
+        self.last_summary = f"{shown}: done." if result.ok else f"{shown}: {result.error or result.status}."
+        if name.split(".", 1)[0] in ("project", "workflow", "service", "deployment") or result.changed:
+            self._resolver_context = None  # the project may have changed
+        return result
+
+    def shell(self, command: str) -> ActionResult | None:
+        """``!command``: the shell.run action — classified, policy-checked, approved, audited."""
         if not command:
             self.ui.notice("info", "Usage: !<command>, e.g. !ls -la or !git log --oneline -5")
-            return int(ExitCode.USAGE)
-        return self.command(["exec", "--shell", command], label=command)
+            return None
+        return self.run_action("shell.run", {"command": command}, label=command)
 
     def command(self, argv: list[str], *, label: str | None = None) -> int:
         """Run a HighhX command in this session (the same code path as on the command line)."""
@@ -526,28 +765,9 @@ class AgentREPL:
         return code
 
     def _invoke(self, argv: list[str]) -> int:
-        from highhx.cli import _emit_error, cli
+        from highhx.actions.invoke import invoke_cli
 
-        options = dataclasses.replace(self.app.options)
-        try:
-            result = cli.main(args=list(argv), prog_name="highhx", standalone_mode=False, obj=self.app)
-            return int(result) if isinstance(result, int) and not isinstance(result, bool) else 0
-        except click.exceptions.Exit as exc:
-            return int(exc.exit_code)
-        except click.exceptions.Abort:
-            return int(ExitCode.CANCELLED)
-        except click.ClickException as exc:
-            exc.show()
-            return int(exc.exit_code)
-        except (KeyboardInterrupt, OperationCancelledError):
-            raise
-        except HighhXError as exc:
-            _emit_error(self.app, exc)
-            return int(exc.exit_code)
-        finally:
-            # Flags given to one command (`highhx status --json`) do not stick to the session.
-            for item in dataclasses.fields(options):
-                setattr(self.app.options, item.name, getattr(options, item.name))
+        return invoke_cli(self.app, argv)
 
     def _local(self, label: str, action: Callable[[], int], *, detail: str = "") -> int:
         token = CancellationToken()
@@ -669,29 +889,29 @@ class AgentREPL:
                 self.ui.print(f"  [dim]{escape(exc.hint)}[/dim]")
 
     def cmd_help(self, _arg: str) -> None:
-        table = Table.grid(padding=(0, 3))
-        table.add_column(style="bold magenta", no_wrap=True)
-        table.add_column()
-        table.add_column(style="dim")
-        for command in SLASH_COMMANDS:
-            table.add_row(escape(command.usage), escape(command.help), "Pro" if command.agent else "")
         if self.session is not None:
             self.ui.print(
-                "\n[bold]Just describe what you want[/bold] — e.g. [italic]fix my failing tests[/italic], "
-                "[italic]explain how this project works[/italic], [italic]prepare this project for release[/italic].\n"
+                "\n[bold]Describe what you want[/bold] — the AI agent plans it, you approve changes, HighhX "
+                "verifies them. [dim]e.g. fix the login bug and make sure all tests pass[/dim]\n"
             )
         else:
             self.ui.print(
                 "\n[bold]Describe what you want.[/bold] Known requests run locally without AI — "
-                "[italic]run the tests[/italic], [italic]run the checks[/italic], [italic]build[/italic], "
-                "[italic]show git status[/italic], [italic]security scan[/italic], [italic]open localhost:3000[/italic]. "
-                "Open-ended requests use the AI agent (HighhX Pro).\n"
+                "[italic]run the tests[/italic], [italic]show git status[/italic], [italic]deploy staging[/italic], "
+                "[italic]stop the backend[/italic]. Open-ended tasks are for the AI agent (/pro).\n"
             )
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="bold magenta", no_wrap=True)
+        table.add_column()
+        table.add_column(style="dim", no_wrap=True)
+        for group in HELP_GROUPS:
+            table.add_row(f"[bold]{escape(group)}[/bold]", "", "")
+            for command in (c for c in SLASH_COMMANDS if c.group == group):
+                table.add_row(f"  {escape(command.usage)}", escape(command.help), "Pro" if command.agent else "")
         self.ui.print(table)
         self.ui.print(
-            "\n[dim]!<command> runs a shell command (risk-checked, approval-gated); `highhx <command>` runs any "
-            'HighhX command. End a line with \\ or wrap text in """ for multi-line input. '
-            "Ctrl+C interrupts the current request; Ctrl+D exits.[/dim]"
+            "\n[dim]!<command> shell command (risk-checked) · highhx <command> any HighhX command · "
+            '\\ or """ multi-line · Ctrl+C interrupts · Ctrl+D exits[/dim]'
         )
 
     def cmd_quit(self, _arg: str) -> None:
@@ -711,13 +931,41 @@ class AgentREPL:
         if account is not None:
             rows.append(("Account", f"{escape(account.email)} · {escape(account.plan.name)}"))
         elif not self.entitlements.signed_in:
-            rows.append(("Account", "[dim]not signed in — `highhx login` for HighhX Pro[/dim]"))
+            rows.append(("Account", "[dim]not signed in — /login for HighhX Pro[/dim]"))
+        # What is waiting on you — each line names the command that acts on it.
+        if self.pending is not None:
+            text, plans = self.pending
+            rows.append(("Pending plan", f"{escape(text)} [dim]({len(plans)} step(s) — /approve or /deny)[/dim]"))
+        if self.retryable is not None:
+            kind, payload = self.retryable
+            if kind == "turn":
+                what = str(payload)
+            elif kind == "task":
+                what = f"task: {payload[0]}"
+            else:
+                what = ", ".join(step.action for step in payload)
+            rows.append(("Last failure", f"{escape(str(what))} [dim](/retry)[/dim]"))
+        from highhx.workflows import running
+
+        active = running.running()
+        if active:
+            names = ", ".join(f"{r.workflow} {r.execution_id[-6:]}" for r in active)
+            rows.append(("Running", f"{escape(names)} [dim](/cancel)[/dim]"))
+        changed = len({p for j in self._journals() for p in j.changed_paths()})
+        done = self.stats["actions"] - self.stats["failed"]
+        activity = (
+            f"{self.stats['actions']} action(s) · {done} ok · {self.stats['failed']} not ok · {changed} file(s) changed"
+        )
+        rows.append(("This session", f"{activity} [dim](/history, /changes)[/dim]"))
+        if self.last_task is not None:
+            task = self.last_task
+            hint = "" if task.ok else " [dim](/retry)[/dim]"
+            rows.append(("Last task", f"{escape(task.goal)} — {task.status} after {task.attempts} attempt(s){hint}"))
         s = self.session
         if s is not None:
             record = s.record
             rows += [
-                ("Session", escape(record.id if record else "not saved")),
-                ("Turns", str(s.turns)),
+                ("Agent session", escape(record.id if record else "not saved") + f" [dim]· {s.turns} turn(s)[/dim]"),
                 ("Tokens", f"{format_tokens(s.usage.input_tokens)} in · {format_tokens(s.usage.output_tokens)} out"),
                 (
                     "Approvals",
@@ -735,7 +983,20 @@ class AgentREPL:
             table.add_row(key, value)
         self.ui.print(table)
 
-    def cmd_tools(self, _arg: str) -> None:
+    def cmd_tools(self, arg: str) -> None:
+        catalog = self.actions.catalog
+        if arg:
+            specs = catalog.categories().get(arg.strip().lower())
+            if not specs:
+                self.ui.notice("warn", f"No action category '{arg}'. Categories: {', '.join(catalog.categories())}")
+                return
+            table = Table(box=None, header_style="dim", pad_edge=False)
+            for column in ("action", "risk", "description"):
+                table.add_column(column)
+            for spec in specs:
+                table.add_row(escape(spec.name), spec.risk.label, escape(spec.description))
+            self.ui.print(table)
+            return
         table = Table(box=None, header_style="dim", pad_edge=False)
         table.add_column("capability")
         table.add_column("")
@@ -744,26 +1005,248 @@ class AgentREPL:
             mark = "[ok]available[/ok]" if available else "[dim]HighhX Pro[/dim]"
             table.add_row(escape(LABELS[capability]), mark)
         self.ui.print(table)
+        grouped = catalog.categories()
+        self.ui.print(f"\n[bold]{len(catalog)} actions[/bold] [dim](run any with /run, or just ask)[/dim]")
+        rows = Table.grid(padding=(0, 2))
+        rows.add_column(style="bold magenta", no_wrap=True)
+        rows.add_column(overflow="fold")
+        for category, specs in grouped.items():
+            rows.add_row(category, escape("  ".join(s.name.split(".", 1)[1] for s in specs)))
+        self.ui.print(rows)
         if self.session is not None:
             names = self.session.registry.names()
             self.ui.print(f"\n[dim]Agent tools ({len(names)}):[/dim] {escape(', '.join(names))}")
-        else:
-            self.ui.print(
-                "\n[dim]Local tools run without AI: every `highhx` command, !shell commands and known requests. "
-                "Platform capabilities are granted by your HighhX account (/account).[/dim]"
-            )
+        self.ui.print("\n[dim]/tools <category> lists a category with risk levels.[/dim]")
 
-    def cmd_plan(self, _arg: str) -> None:
-        assert self.session is not None
-        plan = self.session.plan
+    def cmd_run(self, arg: str) -> None:
+        name, _, rest = arg.strip().partition(" ")
+        if not name:
+            self.ui.notice("info", "Usage: /run <action> [key=value …]  e.g. /run filesystem.read path=README.md")
+            return
+        try:
+            inputs = parse_inputs(rest)
+        except ValueError as exc:
+            self.ui.notice("warn", str(exc))
+            return
+        result = self.run_action(name, inputs)
+        if result is not None and not result.ok:
+            from highhx.actions.resolver import Step
+
+            self.retryable = ("steps", [Step(name, inputs, name)])
+        elif result is not None:
+            self.retryable = None  # /retry is about the last request
+
+    def cmd_approve(self, _arg: str) -> None:
+        if self.pending is None:
+            self.ui.notice("info", "No plan is waiting. /plan <request> previews one; /approve then runs it.")
+            return
+        text, plans = self.pending
+        self.pending = None
+        self.events.emit(ev.APPROVAL_GRANTED, text=text, actions=[p.spec.name for p in plans], mode="plan")
+        for index, planned in enumerate(plans):
+            result = self.run_action(planned.spec.name, planned.inputs, label=planned.spec.name, planned=planned)
+            if result is None or not result.ok:
+                from highhx.actions.resolver import Step
+
+                self.retryable = ("steps", [Step(p.spec.name, p.inputs, p.spec.name) for p in plans[index:]])
+                return
+
+    def cmd_deny(self, _arg: str) -> None:
+        if self.pending is None:
+            self.ui.notice("info", "No plan is waiting. /plan <request> previews one.")
+            return
+        text, plans = self.pending
+        self.pending = None
+        self.events.emit(ev.APPROVAL_DENIED, text=text, actions=[p.spec.name for p in plans], mode="plan")
+        self.ui.notice("info", "Plan discarded; nothing ran.")
+
+    def cmd_retry(self, _arg: str) -> None:
+        if self.retryable is None:
+            self.ui.notice("info", "Nothing to retry — the last request succeeded.")
+            return
+        kind, payload = self.retryable
+        self.retryable = None
+        if kind == "task":
+            goal, keys = payload
+            if self.session is not None:
+                self.run_task(goal, keys)
+            return
+        if kind == "turn":
+            if self.session is None:
+                self.local_request(str(payload))
+            else:
+                self.turn(str(payload))
+            return
+        from highhx.actions.resolver import Resolution
+
+        self.run_resolution(Resolution(tuple(payload), "retry", "retry"))
+
+    def cmd_resume(self, arg: str) -> None:
+        run_id = arg.strip()
+        if not run_id and self.app.history is not None:
+            runs = [
+                r
+                for r in self.app.history.list(kind="workflow", limit=50)
+                if r.status in ("failed", "cancelled", "timeout")
+            ]
+            run_id = runs[0].id if runs else ""
+        if not run_id:
+            self.ui.notice("info", "No failed or cancelled workflow run to resume. /workflow runs lists recent runs.")
+            return
+        self.command(["workflow", "resume", run_id])
+
+    def cmd_cancel(self, arg: str) -> None:
+        from highhx.workflows import running
+
+        active = running.running()
+        run_id = arg.strip() or (active[0].execution_id if len(active) == 1 else "")
+        if not run_id:
+            if not active:
+                self.ui.notice("info", "No workflow is running. Ctrl+C interrupts what this session is running.")
+            else:
+                self.ui.notice("info", "Several workflows are running — /cancel <run-id>:")
+                for entry in active:
+                    self.ui.print(f"  [dim]{entry.execution_id}  {escape(entry.workflow)}  pid {entry.pid}[/dim]")
+            return
+        self.command(["workflow", "cancel", run_id])
+
+    def cmd_task(self, arg: str) -> None:
+        from highhx.agent.tasks import CHECKS, definition_of_done
+
+        words = arg.split()
+        keys: list[str] | None = None
+        attempts: int | None = None
+        goal_words: list[str] = []
+        index = 0
+        while index < len(words):
+            word = words[index]
+            if word == "--verify" and index + 1 < len(words):
+                keys = [k.strip() for k in words[index + 1].split(",") if k.strip() and k.strip() != "none"]
+                index += 2
+                continue
+            if word == "--attempts" and index + 1 < len(words) and words[index + 1].isdigit():
+                attempts = max(1, min(10, int(words[index + 1])))
+                index += 2
+                continue
+            goal_words.append(word)
+            index += 1
+        goal = " ".join(goal_words)
+        if not goal:
+            self.ui.notice("info", "Usage: /task <goal> [--verify test,check,build] [--attempts N]")
+            return
+        unknown = [k for k in keys or [] if k not in CHECKS]
+        if unknown:
+            self.ui.notice("warn", f"Unknown check(s): {', '.join(unknown)}. Use test, check or build.")
+            return
+        self.run_task(goal, keys if keys is not None else definition_of_done(goal), attempts=attempts)
+
+    def cmd_doctor(self, _arg: str) -> None:
+        self.run_action("security.doctor", {}, label="doctor")
+
+    def cmd_init(self, _arg: str) -> None:
+        if self.context.initialized:
+            self.ui.notice("info", "HighhX is already set up here (.highhx/). /config shows the configuration.")
+            return
+        result = self.run_action("project.init", {}, label="set up HighhX")
+        if result is not None and result.ok:
+            self._context = None
+            self._resolver_context = None
+            self.ui.print("[dim]Next: try “run the tests”, or /workflows to see what was created.[/dim]")
+
+    def cmd_login(self, _arg: str) -> None:
+        self.command(["login"])
+
+    def cmd_voice(self, arg: str) -> None:
+        choice = arg.strip().lower() or ("off" if self._voice is not None and self._voice.active else "on")
+        voice = self.voice
+        if choice == "on":
+            voice.enable()
+        elif choice == "off":
+            voice.disable()
+        elif choice in ("mute", "unmute"):
+            voice.set_muted(choice == "mute")
+        elif choice == "status":
+            rows = [("Voice", "on" if voice.active else "off"), ("Replies", "muted" if voice.muted else "spoken")]
+            rows += [(k.capitalize(), v) for k, v in voice.engines.describe().items()]
+            self._grid(rows)
+            for note in voice.engines.notes:
+                self.ui.print(f"  [dim]• {escape(note)}[/dim]")
+        else:
+            self.ui.notice("warn", "Use /voice on, off, mute, unmute or status.")
+
+    def cmd_workflows(self, _arg: str) -> None:
+        self.command(["workflow", "list"])
+
+    def cmd_workflow(self, arg: str) -> None:
+        try:
+            argv = shlex.split(arg)
+        except ValueError as exc:
+            self.ui.notice("warn", f"Could not parse: {exc}")
+            return
+        if not argv:
+            self.ui.notice("info", "Usage: /workflow <create|list|run|inspect|cancel|resume> …")
+            return
+        self.command(["workflow", *argv])
+
+    def cmd_plan(self, arg: str) -> None:
+        if arg.strip():
+            self.preview(arg.strip())
+            return
+        plan = self.session.plan if self.session is not None else None
         if plan is None:
-            self.ui.notice("info", "No plan yet. Ask for multi-step work and I'll propose one first.")
+            self.ui.notice(
+                "info",
+                "Usage: /plan <request> previews what it would run."
+                + (" Ask the agent for multi-step work and it proposes a plan first." if self.session else ""),
+            )
             return
         counts = plan.counts()
         self.ui.print(f"\n[bold]Plan[/bold] [dim]— {escape(plan.goal)}[/dim]")
         self.ui.print(self.ui.plan_table(plan))
         self.ui.print(
             f"[dim]{counts['done']} done · {counts['failed']} failed · {counts['pending'] + counts['in_progress']} remaining[/dim]"
+        )
+
+    def preview(self, text: str) -> None:
+        """What a request would run — resolved deterministically — without running anything."""
+        planned = route(text, self.resolver_context())
+        if planned.resolution is None:
+            where = "the AI agent would plan and run it" if self.session else "it needs the AI agent (HighhX Pro)"
+            self.ui.notice("info", f"Not a known deterministic request — {where}.")
+            for alternative in planned.alternatives:
+                self.ui.print(f"  [dim]→ {escape(alternative.action)}  {escape(alternative.label)}[/dim]")
+            return
+        table = Table(box=None, header_style="dim", pad_edge=False)
+        for column in ("#", "action", "inputs", "risk", "approval"):
+            table.add_column(column)
+        for number, step in enumerate(planned.resolution.steps, start=1):
+            try:
+                p = self.actions.plan(step.action, dict(step.inputs))
+            except HighhXError as exc:
+                table.add_row(str(number), escape(step.action), "", "", f"[fail]{escape(exc.message)}[/fail]")
+                continue
+            approval = "blocked" if p.decision.blocked else ("asks" if p.asks else "runs")
+            inputs = ", ".join(f"{k}={v}" for k, v in step.inputs.items())
+            table.add_row(str(number), escape(step.action), escape(inputs), p.decision.risk.label, approval)
+        self.ui.print(f"[dim]{escape(planned.resolution.description)}[/dim]")
+        self.ui.print(table)
+        plans: list[Planned] = []
+        for step in planned.resolution.steps:
+            try:
+                plans.append(self.actions.plan(step.action, dict(step.inputs)))
+            except HighhXError:
+                self.pending = None
+                return
+        if any(p.decision.blocked for p in plans):
+            self.pending = None
+            self.ui.print("[warn]A step is blocked by policy — this plan cannot run.[/warn]")
+            return
+        self.pending = (planned.resolution.text, plans)
+        typed = any(p.decision.approval >= Approval.TYPED for p in plans)
+        self.ui.print(
+            "[dim]/approve runs exactly this plan"
+            + (" (critical steps still ask you to type approve)" if typed else "")
+            + " · /deny discards it[/dim]"
         )
 
     def cmd_context(self, _arg: str) -> None:
@@ -857,51 +1340,98 @@ class AgentREPL:
         self.show_pro()
 
     def cmd_history(self, _arg: str) -> None:
-        if self.session is None:
-            self.command(["history"])
-            return
-        store = self.session.store
-        if store is None:
-            self.ui.notice("warn", "Session history is unavailable (storage could not be opened).")
-            return
-        records = store.list(root=str(self.session.app.root), limit=15)
-        if not records:
-            self.ui.notice("info", "No sessions yet.")
-            return
-        table = Table(box=None, header_style="dim", pad_edge=False)
-        for column in ("id", "updated", "turns", "tokens", "title"):
-            table.add_column(column)
-        current = self.session.record.id if self.session.record else None
-        for r in records:
-            marker = " [magenta]●[/magenta]" if r.id == current else ""
-            table.add_row(
-                escape(r.id) + marker,
-                r.updated_at.replace("T", " ")[:16],
-                str(r.turns),
-                format_tokens(r.usage.total),
-                escape(r.title),
-            )
-        self.ui.print(table)
-        self.ui.print("\n[dim]Resume one with `highhx agent --resume <id>`.[/dim]")
+        from highhx.actions.events import read_events
+
+        marks = {
+            ev.INTENT_RESOLVED: "[magenta]❯[/magenta]",  # noqa: RUF001
+            ev.ACTION_COMPLETED: f"[ok]{self.ui.symbols.ok}[/ok]",
+            ev.ACTION_FAILED: f"[fail]{self.ui.symbols.fail}[/fail]",
+            ev.APPROVAL_DENIED: f"[warn]{self.ui.blocked_mark}[/warn]",
+        }
+        records = [r for r in read_events(session=self.session_id, limit=80) if r.get("event") in marks]
+        if records:
+            table = Table.grid(padding=(0, 2))
+            table.add_column(style="dim", no_wrap=True)
+            table.add_column(no_wrap=True)
+            table.add_column(overflow="fold")
+            for r in records[-25:]:
+                name = str(r.get("event"))
+                if name == ev.INTENT_RESOLVED:
+                    what = f"[bold]{escape(str(r.get('text', '')))}[/bold]"
+                elif name == ev.APPROVAL_DENIED:
+                    what = (
+                        f"{escape(str(r.get('action') or ', '.join(r.get('actions') or [])))} [dim]— not approved[/dim]"
+                    )
+                elif name == ev.ACTION_FAILED:
+                    what = f"{escape(str(r.get('action')))} [dim]— {escape(str(r.get('error') or r.get('status'))[:80])}[/dim]"
+                else:
+                    what = f"{escape(str(r.get('action')))} [dim]— {escape(str(r.get('summary', ''))[:80])}[/dim]"
+                table.add_row(str(r.get("ts", ""))[11:19], marks[name], what)
+            self.ui.print(table)
+        else:
+            self.ui.notice("info", "Nothing has run in this session yet — try “run the tests”.")
+        if self.session is not None and self.session.store is not None:
+            sessions = self.session.store.list(root=str(self.session.app.root), limit=10)
+            if sessions:
+                table = Table(box=None, header_style="dim", pad_edge=False)
+                for column in ("session", "updated", "turns", "tokens", "title"):
+                    table.add_column(column)
+                current = self.session.record.id if self.session.record else None
+                for rec in sessions:
+                    marker = " [magenta]●[/magenta]" if rec.id == current else ""
+                    table.add_row(
+                        escape(rec.id) + marker,
+                        rec.updated_at.replace("T", " ")[:16],
+                        str(rec.turns),
+                        format_tokens(rec.usage.total),
+                        escape(rec.title),
+                    )
+                self.ui.print()
+                self.ui.print(table)
+                self.ui.print("[dim]Resume one with `highhx agent --resume <id>`.[/dim]")
+        self.ui.print("[dim]Everything HighhX ran in this project: `highhx history` · events: `highhx events`.[/dim]")
+
+    def _journals(self) -> list[Any]:
+        journals = [self.actions.journal]
+        if self.session is not None:
+            journals.append(self.session.journal)
+        return journals
 
     def cmd_changes(self, _arg: str) -> None:
-        assert self.session is not None
-        paths = self.session.journal.changed_paths()
-        if not paths:
-            self.ui.notice("info", "No files changed in this session.")
+        first: dict[Any, Any] = {}
+        for journal in self._journals():
+            for turn in journal.turns:
+                for change in turn:
+                    first.setdefault(change.path, change)
+        if not first:
+            self.ui.notice("info", "No files changed in this session. Changes by actions and the agent appear here.")
             return
-        for path in paths:
-            state = "deleted" if not path.exists() else "modified"
-            self.ui.print(f"  [dim]{state:<9}[/dim] {escape(self.session.permissions.relative(path))}")
+        root = self.app.root.resolve()
+        for path, change in first.items():
+            state = "deleted" if not path.exists() else ("created" if change.before is None else "modified")
+            style = {"created": "ok", "deleted": "fail"}.get(state, "warn")
+            shown = path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path)
+            self.ui.print(f"  [{style}]{state:<8}[/{style}] {escape(shown)}")
+        self.ui.print(
+            f"[dim]{len(first)} file(s) · /undo reverts the most recent change · git diff shows details[/dim]"
+        )
 
     def cmd_undo(self, _arg: str) -> None:
-        assert self.session is not None
-        restored = self.session.undo()
-        if not restored:
-            self.ui.notice("info", "Nothing to undo.")
+        if self.session is not None and self.session.journal.last_changes():
+            restored = self.session.undo()
+            if restored:
+                self.ui.notice("info", f"Restored {len(restored)} file(s): {', '.join(restored)}")
+                self.session.note(
+                    f"The user undid your last changes to: {', '.join(restored)}. Those edits are reverted."
+                )
+                return
+        paths = self.actions.journal.undo_last()
+        if not paths:
+            self.ui.notice("info", "Nothing to undo — no files changed in this session.")
             return
-        self.ui.notice("info", f"Restored {len(restored)} file(s): {', '.join(restored)}")
-        self.session.note(f"The user undid your last changes to: {', '.join(restored)}. Those edits are reverted.")
+        root = self.app.root.resolve()
+        shown = [p.relative_to(root).as_posix() if p.is_relative_to(root) else str(p) for p in paths]
+        self.ui.notice("info", f"Restored {len(shown)} file(s): {', '.join(shown)}")
 
     def cmd_memory(self, arg: str) -> None:
         memory = self.session.memory if self.session is not None else self._memory()

@@ -10,6 +10,8 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING, Any
 
+from highhx.actions import events as ev
+from highhx.actions.events import EventLog
 from highhx.cloud import capabilities
 from highhx.cloud.capabilities import LOCAL, Capability, Connection
 from highhx.core.errors import CloudError, HighhXError, UsageError
@@ -35,6 +37,7 @@ def start_interactive(
     first: str | None = None,
     overrides: dict[str, Any] | None = None,
     resume: Resume | None = None,
+    voice: bool = False,
 ) -> int:
     from highhx.agent.bootstrap import Resume, create_session
     from highhx.agent.repl import AgentREPL
@@ -70,7 +73,37 @@ def start_interactive(
             )
     elif resume is not None and (resume.session_id or resume.latest):
         ui.notice("info", "Saved agent sessions are part of HighhX Pro — starting a local session.")
-    repl = AgentREPL(session, ui, cloud, account, app=app, entitlements=entitlements, session_factory=factory)
+    from highhx.actions.events import events_dir
+
+    first_run = not any(events_dir().glob("*.jsonl")) if events_dir().is_dir() else True
+    repl = AgentREPL(
+        session,
+        ui,
+        cloud,
+        account,
+        app=app,
+        entitlements=entitlements,
+        session_factory=factory,
+        voice=voice,
+        first_run=first_run,
+    )
     session_id = session.record.id if session is not None and session.record else None
-    with registered(session_id, app.root):
-        return repl.run(first, resumed=resumed)
+    log = EventLog(app.redactor, session_id=repl.session_id)
+    detach = log.attach(app.ctx.events)
+    if session is not None:
+        app.ctx.events.emit(ev.AGENT_STARTED, session=repl.session_id, provider=session.provider.name)
+    app.ctx.events.emit(
+        ev.SESSION_STARTED,
+        session=repl.session_id,
+        tier=entitlements.tier.lower(),
+        connection=str(entitlements.connection),
+        agent=session is not None,
+    )
+    try:
+        with registered(session_id, app.root):
+            return repl.run(first, resumed=resumed)
+    finally:
+        app.ctx.events.emit(ev.SESSION_ENDED, session=repl.session_id)
+        detach()
+        if repl._actions is not None:
+            repl._actions.close()

@@ -146,22 +146,113 @@
             "minLength": 1,
             "description": "Name of another workflow to run as this step"
           },
+          "action": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A HighhX action to run (see `highhx actions`)"
+          },
           "with": {
             "type": "object",
             "additionalProperties": {
               "oneOf": [
                 {
-                  "type": "string"
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
                 },
                 {
-                  "type": "number"
+                  "type": "array",
+                  "items": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  }
                 },
                 {
-                  "type": "boolean"
+                  "type": "object",
+                  "additionalProperties": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  }
                 }
               ]
             },
-            "description": "Inputs for the workflow referenced by 'uses'"
+            "description": "Inputs for 'uses' (workflow inputs) or 'action' (action inputs)"
+          },
+          "rollback": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "description": "A command that undoes the step"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "with": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "action"
+                ]
+              }
+            ],
+            "description": "How to undo this step when the workflow fails (on_failure: rollback)"
           },
           "depends_on": {
             "oneOf": [
@@ -323,6 +414,14 @@
       "additionalProperties": {
         "type": "string"
       }
+    },
+    "on_failure": {
+      "type": "string",
+      "enum": [
+        "stop",
+        "rollback"
+      ],
+      "description": "stop (default), or rollback: undo completed steps in reverse order"
     }
   },
   "additionalProperties": false,

@@ -30,6 +30,7 @@ from highhx.safety.confirmation import ConfirmationRequest
 from highhx.ui.terminal import Symbols
 
 if TYPE_CHECKING:
+    from highhx.actions.spec import ActionResult
     from highhx.agent.context import ProjectContext
     from highhx.agent.router import LocalAction
 
@@ -203,9 +204,116 @@ class TerminalUI:
                 f"[fail]{self.symbols.fail}[/fail] {escape(label)} [fail]— exit code {code}[/fail]{timing}"
             )
 
+    def action_finished(self, label: str, result: ActionResult) -> None:
+        """Outcome of one action: ✓ done · ⊘ blocked/declined · ○ cancelled · ✗ failed/timed out."""
+        self._pause()
+        timing = f" [dim]({result.seconds:.1f}s)[/dim]" if result.seconds >= 0.1 else ""
+        status = result.status
+        if result.ok:
+            summary = f" [dim]— {escape(result.summary)}[/dim]" if result.summary and result.summary != label else ""
+            mark = "[dim]◌[/dim]" if status == "planned" else f"[ok]{self.symbols.ok}[/ok]"
+            self.console.print(f"{mark} {escape(label)}{summary}{timing}")
+        elif status in ("blocked", "denied"):
+            why = "blocked by policy" if status == "blocked" else "not approved"
+            self.console.print(f"[warn]{self.blocked_mark}[/warn] {escape(label)} [warn]— {why}[/warn]")
+            if status == "blocked" and result.error:
+                self.console.print(f"  [dim]{escape(result.error)}[/dim]")
+        elif status == "cancelled":
+            self.console.print(f"[dim]{self.symbols.skip} {escape(label)} — cancelled[/dim]")
+        else:
+            why = "timed out" if status == "timeout" else (result.error or result.summary or "failed")
+            self.console.print(f"[fail]{self.symbols.fail}[/fail] {escape(label)} [fail]— {escape(why)}[/fail]{timing}")
+
+    # ------------------------------------------------------------------ tasks
+    def task_started(self, goal: str, checks: Sequence[str], attempts: int, missing: Sequence[str]) -> None:
+        self._pause()
+        done = ", ".join(checks) if checks else "the agent's own verification (no checks requested)"
+        body = f"[bold]{escape(goal)}[/bold]\n[dim]Done when:[/dim] {escape(done)} [dim]· up to {attempts} attempt(s)[/dim]"
+        if missing:
+            body += f"\n[warn]Cannot verify: {escape(', '.join(missing))} — no command configured (commands: in .highhx/config.yaml)[/warn]"
+        self.console.print()
+        self.console.print(
+            Panel(
+                body,
+                title=f"[{ACCENT}]Task[/{ACCENT}]",
+                title_align="left",
+                border_style="magenta",
+                box=ROUNDED,
+                padding=(0, 2),
+            )
+        )
+
+    def task_attempt(self, attempt: int, attempts: int) -> None:
+        if attempt > 1:
+            self._pause()
+            self.console.print(
+                f"\n[{ACCENT}]↻ Attempt {attempt}/{attempts}[/{ACCENT}] [dim]— the agent is fixing what failed[/dim]"
+            )
+
+    def task_check(self, name: str, action: str, ok: bool, summary: str) -> None:
+        self._pause()
+        mark = f"[ok]{self.symbols.ok}[/ok]" if ok else f"[fail]{self.symbols.fail}[/fail]"
+        self.console.print(
+            f"{mark} [bold]Verified by HighhX:[/bold] {escape(name)} [dim]({escape(action)}) — {escape(summary)}[/dim]"
+        )
+
+    def task_report(self, report: Any) -> None:
+        self._pause()
+        titles = {
+            "verified": ("ok", "Task verified"),
+            "done": ("ok", "Task done"),
+            "unverified": ("fail", "Task not verified"),
+            "stopped": ("warn", "Task stopped"),
+            "cancelled": ("warn", "Task cancelled"),
+        }
+        style, title = titles.get(report.status, ("warn", "Task"))
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="dim", no_wrap=True)
+        table.add_column(overflow="fold")
+        table.add_row("Goal", escape(report.goal))
+        if report.checks:
+            table.add_row(
+                "Checks",
+                "\n".join(
+                    f"{'[ok]' + self.symbols.ok + '[/ok]' if c.ok else '[fail]' + self.symbols.fail + '[/fail]'} {escape(c.name)}"
+                    for c in report.checks
+                ),
+            )
+        if report.missing:
+            table.add_row("Not verifiable", f"[warn]{escape(', '.join(report.missing))}[/warn]")
+        table.add_row("Attempts", str(report.attempts))
+        if report.changed_files:
+            shown = ", ".join(report.changed_files[:8]) + (" …" if len(report.changed_files) > 8 else "")
+            table.add_row("Changed", f"{escape(shown)} [dim](/changes · /undo)[/dim]")
+        cost = [f"{report.seconds:.0f}s"]
+        if report.usage.total:
+            cost.insert(0, f"{format_tokens(report.usage.total)} tokens")
+        table.add_row("Cost", " · ".join(cost))
+        if report.status == "unverified":
+            table.add_row(
+                "Next", "[dim]/retry to give the agent more attempts · /changes to review · /undo to revert[/dim]"
+            )
+        border = BORDERS.get(style, style) if style != "ok" else "green"
+        self.console.print()
+        self.console.print(
+            Panel(
+                table,
+                title=f"[{style}]{title}[/{style}]",
+                title_align="left",
+                border_style=border,
+                box=ROUNDED,
+                padding=(0, 2),
+            )
+        )
+
     # ------------------------------------------------------------ capability
     def capability_panel(
-        self, reason: str, alternatives: Sequence[LocalAction], *, title: str = "HighhX Pro capability"
+        self,
+        reason: str,
+        alternatives: Sequence[LocalAction],
+        *,
+        title: str = "HighhX Pro capability",
+        lead: str = "",
     ) -> LocalAction | str | None:
         """Explain a capability this session does not have and offer the local alternatives.
 
@@ -216,7 +324,7 @@ class TerminalUI:
         table.add_column(no_wrap=True, style=ACCENT)
         table.add_column(overflow="fold")
         table.add_column(overflow="fold", style="dim")
-        body: list[Any] = [f"[bold]{escape(reason)}[/bold]", ""]
+        body: list[Any] = ([escape(lead)] if lead else []) + [f"[bold]{escape(reason)}[/bold]", ""]
         if alternatives:
             body.append("Available locally, without AI:")
             for number, action in enumerate(alternatives, start=1):
@@ -376,6 +484,7 @@ class TerminalUI:
         table.add_column(style="dim", no_wrap=True)
         table.add_column(overflow="fold")
         risk_style = "fail" if request.risk.label == "critical" else "warn"
+        risk_name = request.risk_name
         table.add_row("Action", f"[bold]{escape(request.action)}[/bold]")
         table.add_row("Target", escape(request.target))
         table.add_row("Resource", escape(request.application))
@@ -383,7 +492,7 @@ class TerminalUI:
         if request.command:
             table.add_row("Command", escape(request.command))
         irreversible = " — destructive / potentially irreversible" if request.irreversible else ""
-        table.add_row("Risk", f"[{risk_style}]{request.risk.label}{irreversible}[/{risk_style}]")
+        table.add_row("Risk", f"[{risk_style}]{risk_name}{irreversible}[/{risk_style}]")
         table.add_row("Why", escape("; ".join(request.reasons)))
         self.console.print(
             Panel(

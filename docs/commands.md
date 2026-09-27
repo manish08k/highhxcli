@@ -38,7 +38,7 @@ also accepts the global options below, before or after the command name.
 | 127 | Command not found |
 | 130 | Cancelled (Ctrl+C) |
 
-## HighhX Pro — AI developer agent
+## Interactive session & AI agent (HighhX Pro)
 
 ### `highhx agent`
 
@@ -62,8 +62,9 @@ highhx agent models [OPTIONS]
 
 #### `highhx agent run`
 
-Without PROMPT (in a terminal) start an interactive session; with PROMPT,
-or when input/output is not a terminal, handle that one request and exit.
+In a terminal, start the interactive HighhX session (the same one as bare
+`highhx`; PROMPT becomes the first request). When input/output is not a
+terminal, or with --json, handle PROMPT as one AI agent request and exit.
 
   highhx agent
   highhx agent "why is the application crashing?"
@@ -72,7 +73,8 @@ or when input/output is not a terminal, handle that one request and exit.
   echo "run all the tests and fix whatever fails" | highhx agent --yes --mode auto-edit
 
 Exit code: 0 when the request completed, 1 when it stopped early (step limit,
-output limit, refusal, interruption), 10 without a HighhX Pro account.
+output limit, refusal, interruption), 10 without a HighhX Pro account
+(one-shot requests only; the interactive session works on every plan).
 
 ```
 highhx agent run [OPTIONS] [PROMPT]...
@@ -87,6 +89,8 @@ highhx agent run [OPTIONS] [PROMPT]...
 | `--mode` | Approvals: ask (default), auto-edit (normal changes without asking), read-only. |
 | `--max-steps` | Maximum tool steps per request. |
 | `--effort` | Reasoning effort, where the model supports it. |
+| `--verify` | Task mode: work until HighhX verifies these checks (comma list of test, check, build; `none` disables). Default: what the request states (e.g. 'make sure all tests pass'). |
+| `--attempts` | Task mode: attempts before giving up (default 3). |
 
 #### `highhx agent sessions`
 
@@ -115,6 +119,22 @@ highhx agent stop [OPTIONS]
 |---|---|
 | `--all` | Stop agents in every project, not just this one. |
 | `--session` | Stop the agent working on this session. |
+
+### `highhx voice`
+
+Opens the same session as `highhx`, with voice on: press Enter on an empty line to
+talk and Enter again to stop; the transcript is shown and confirmed before anything
+runs, and outcomes are spoken. Speech-to-text runs locally (whisper.cpp or Vosk with a
+model you installed) — see docs/VOICE.md. On Free, spoken requests are resolved
+deterministically; on Pro, the AI agent handles them.
+
+```
+highhx voice [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--check` | Only report which voice engines are available here. |
 
 ## Automation (no AI)
 
@@ -1225,10 +1245,20 @@ highhx db status [OPTIONS]
 
 ### `highhx workflow`
 
-Workflows are YAML files in .highhx/workflows (see docs/workflows.md).
-Run one with `highhx run <name>`.
+Workflows are YAML files in .highhx/workflows (see docs/AUTOMATION.md): commands,
+HighhX actions and other workflows as steps, with dependencies, conditions, retries,
+approvals and rollback. Run one with `highhx workflow run <name>` (or `highhx run`).
 
 Running `highhx workflow` without a subcommand runs `highhx workflow list`.
+
+#### `highhx workflow cancel`
+
+Interrupt the process running EXECUTION_ID. The run stops its commands, is recorded as
+cancelled and can be resumed later.
+
+```
+highhx workflow cancel [OPTIONS] EXECUTION_ID
+```
 
 #### `highhx workflow create`
 
@@ -1256,6 +1286,15 @@ highhx workflow graph [OPTIONS] NAME
 |---|---|
 | `--format` |  (default: `text`) |
 
+#### `highhx workflow inspect`
+
+TARGET is a workflow name (shows its steps: kind, dependencies, conditions, approvals,
+retries and rollback) or a run id (shows each step's status, exit code and error).
+
+```
+highhx workflow inspect [OPTIONS] TARGET
+```
+
 #### `highhx workflow list`
 
 List the workflows in .highhx/workflows (and those contributed by plugins) with
@@ -1264,6 +1303,49 @@ their description, event triggers and source.
 ```
 highhx workflow list [OPTIONS]
 ```
+
+#### `highhx workflow resume`
+
+Run the workflow of EXECUTION_ID again with the same inputs, reusing every step that
+already succeeded (and its outputs); the rest runs as usual, with approvals. Extra
+environment variables given to the first run are not stored — pass them again with -e.
+
+```
+highhx workflow resume [OPTIONS] EXECUTION_ID
+```
+
+| Option | Description |
+|---|---|
+| `--env, -e` | Environment for the resumed run (not stored). |
+
+#### `highhx workflow run`
+
+Run workflow NAME. Every step is classified and approved as it runs; with
+`on_failure: rollback` completed steps are undone when a later step fails.
+A failed or interrupted run can be resumed with `highhx workflow resume ID`.
+
+```
+highhx workflow run [OPTIONS] NAME
+```
+
+| Option | Description |
+|---|---|
+| `--input, -i` | Workflow input (repeatable). |
+| `--env, -e` | Extra environment variable (repeatable). |
+
+#### `highhx workflow runs`
+
+Workflow executions, newest first: status, duration, failed steps. Resume a failed run
+with `highhx workflow resume ID`, cancel a running one with `highhx workflow cancel ID`.
+
+```
+highhx workflow runs [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--running` | Only runs in progress right now. |
+| `--limit` |  (default: `20`) |
 
 #### `highhx workflow validate`
 
@@ -1279,6 +1361,60 @@ highhx workflow validate [OPTIONS] [NAMES]...
 |---|---|
 | `--strict` | Treat warnings as errors. |
 | `--no-tool-check` | Don't warn about commands missing from PATH. |
+
+### `highhx actions`
+
+Every capability HighhX executes is an action with an input schema, a risk level,
+required permissions, a timeout, a retry policy (idempotent actions only), verification
+and — where possible — a compensation for rollback. Plain-language requests, workflow
+steps and the AI agent all run actions through the same executor and approvals.
+
+Running `highhx actions` without a subcommand runs `highhx actions list`.
+
+#### `highhx actions list`
+
+List the actions (optionally one CATEGORY: project, filesystem, git, package, docker,
+database, service, browser, computer, deployment, security, workflow, shell) with their
+risk floor, retries (idempotent actions only) and whether they can be undone.
+
+```
+highhx actions list [OPTIONS] [CATEGORY]
+```
+
+#### `highhx actions plan`
+
+Validate NAME with INPUTS (key=value …) and rate it — the classifier's verdict on the
+concrete action, the catalog's floor and the approval rule — without running anything.
+
+```
+highhx actions plan [OPTIONS] NAME [INPUTS]...
+```
+
+| Option | Description |
+|---|---|
+| `--with-json` | Inputs as one JSON object. |
+
+#### `highhx actions run`
+
+Run NAME with INPUTS (key=value …). Medium and high risk actions ask (or run with
+--yes); critical ones need a typed confirmation in a terminal; blocked ones never run.
+
+```
+highhx actions run [OPTIONS] NAME [INPUTS]...
+```
+
+| Option | Description |
+|---|---|
+| `--with-json` | Inputs as one JSON object. |
+
+#### `highhx actions show`
+
+Show NAME's contract: input schema, outputs, risk floor, kind, permissions, timeout,
+retry policy, verification, compensation and the plan feature the AI agent needs.
+
+```
+highhx actions show [OPTIONS] NAME
+```
 
 ### `highhx schedule`
 
@@ -1408,6 +1544,21 @@ highhx history [OPTIONS] [EXECUTION_ID]
 | `--limit, -n` |  (default: `20`) |
 | `--kind` | Filter: command, workflow, deploy, release … |
 | `--status` |  |
+
+### `highhx events`
+
+The most recent events, oldest first. Events are stored as JSON Lines (secrets
+redacted) under the HighhX data directory, one file per day.
+
+```
+highhx events [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--session` | Only this interactive session. |
+| `--type` | Only events whose name starts with this (e.g. action.). |
+| `--limit, -n` |  (default: `50`) |
 
 ### `highhx audit`
 

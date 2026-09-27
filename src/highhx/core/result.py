@@ -103,6 +103,8 @@ class WorkflowResult:
     duration: float = 0.0
     outputs: dict[str, str] = field(default_factory=dict)
     dry_run: bool = False
+    rollback: list[dict[str, Any]] = field(default_factory=list)
+    """What was undone after a failure (on_failure: rollback), newest step first."""
 
     @property
     def ok(self) -> bool:
@@ -117,6 +119,7 @@ class WorkflowResult:
             "dry_run": self.dry_run,
             "outputs": self.outputs,
             "steps": [step.to_dict() for step in self.steps.values()],
+            "rollback": self.rollback,
         }
 
 

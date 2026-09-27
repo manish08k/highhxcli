@@ -6,6 +6,9 @@ import click
 
 
 def all_commands() -> list[click.Command]:
+    from highhx.commands.actions.events import events
+    from highhx.commands.actions.main import actions
+    from highhx.commands.actions.voice import voice
     from highhx.commands.automation.hook import hook
     from highhx.commands.automation.schedule import schedule
     from highhx.commands.automation.trigger import trigger
@@ -104,6 +107,9 @@ def all_commands() -> list[click.Command]:
         ports,
         db,
         workflow,
+        actions,
+        events,
+        voice,
         schedule,
         hook,
         trigger,

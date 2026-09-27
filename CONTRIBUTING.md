@@ -22,7 +22,7 @@ pytest && ruff check . && mypy
 - **Cross-platform.** Don't assume bash, `/usr/bin` or GNU tools; prefer Python APIs and
   `highhx.utils.platform` for platform differences.
 - **Thin commands.** CLI modules in `highhx/commands/` parse arguments and render results;
-  logic belongs in the domain packages (see [docs/architecture.md](docs/architecture.md)).
+  logic belongs in the domain packages (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
 
 ## Tests
 
