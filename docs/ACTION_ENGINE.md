@@ -27,7 +27,7 @@ through one `ActionExecutor`. Code: `src/highhx/actions/`.
 `highhx actions list [category]`, `highhx actions show NAME` and `/tools` print the catalog;
 `highhx actions plan NAME key=value …` rates an action without running it.
 
-## The catalog (61 actions)
+## The catalog (73 actions)
 
 | Category | Actions |
 |---|---|
@@ -57,6 +57,16 @@ Plugins add `plugin.<plugin>.<command>` actions per project ([PLUGIN_SYSTEM.md](
   and journaling; git operations through the engine; browser actions through the
   deterministic flow runner (element resolution, per-element safety check, re-observation);
   project detection. Output: structured data.
+
+## From plain language to actions
+
+Free's plain-language requests reach the executor as a **JSON action plan** built by the deterministic resolver
+([FREE_AUTOMATION.md](FREE_AUTOMATION.md)): each plan step names a catalog action and its
+parameters, and the plan runner executes the steps in order through `plan()` / `execute()`
+below — so the plan's risk is re-classified and approved exactly like any other action —
+then applies the step's verification strategy and stops at the first failure. Desktop UI
+actions (`computer.*`) perform their operations through the automation bridge
+(`ActionExecutor.automation()`), never by calling OS tools directly.
 
 ## Execution pipeline
 

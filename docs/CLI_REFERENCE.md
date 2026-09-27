@@ -9,6 +9,8 @@ will use most.
 | Command | What it does |
 |---|---|
 | `highhx` | The interactive session (in a terminal); prints help when piped or with `--json` / `--quiet` |
+| `highhx "request"` | A plain-language request — the same as `highhx agent "request"`: in a terminal, the session with it as the first message; otherwise (Free) the deterministic plan runs and exits (0 all steps verified · 1 a step failed · 10 open-ended: Pro). Real command names always win; a single unknown word is a usage error |
+| `highhx do [--plan] "request"` | Run a request deterministically (no AI) and exit; `--plan` shows the deterministic decision and the JSON action plan without running (`--json` for the data) |
 | `highhx agent ["request"]` | The same session (a request becomes the first message); one-shot AI request outside a terminal (Pro) |
 | `highhx agent --verify test[,check,build] "goal"` | Pro, headless: an autonomous task; exit 0 only when HighhX verified it (`--attempts N`, `--json` for the report) |
 | `highhx voice` | The session with voice on |
@@ -20,7 +22,7 @@ Global options work everywhere: `--json`, `--dry-run`, `--yes/-y`, `--force`, `-
 
 | Input | Purpose |
 |---|---|
-| plain language | Free: resolved to actions when it is a known request, else the Pro panel. Pro: the AI agent |
+| plain language | Free: the deterministic resolver plans it (open Gmail, play lofi on YouTube, switch to Slack, run the tests …) and each step runs and is verified; unknown names are explained; open-ended requests show the Pro panel. Pro: the AI agent |
 | `!command` | A shell command as the `shell.run` action (classified, approved by risk, audited) |
 | `highhx <command>` | Any HighhX command, in place |
 | Enter on an empty line | Talk (when voice is on) |
@@ -68,8 +70,17 @@ did (→ `/history`, `/changes`).
 | `highhx workflow run\|inspect\|runs\|resume\|cancel\|validate\|graph\|create\|list` | Workflows |
 | `highhx schedule`, `trigger`, `hook`, `watch` | Starting workflows automatically |
 | `highhx history`, `events`, `audit`, `logs` | What happened (see [OBSERVABILITY.md](OBSERVABILITY.md)) |
+| `highhx runs [list\|show [RUN_ID]\|stats]` | Plain-language automation runs: the deterministic decision, the plan, each step's result and verification; totals, failures, Pro escalations, most-used actions and targets |
+| `highhx computer status` | Browser, Accessibility, the automation engine in use (C#/.NET or Python) and the target registry |
 | `highhx login`, `logout`, `account` | HighhX account and plan |
 | `highhx plugin …`, `config …`, `policy …` | Extensions, configuration, policies |
+
+## Environment
+
+| Variable | Purpose |
+|---|---|
+| `HIGHHX_AUTOMATION_ENGINE` | `python`, `dotnet` or a path to `highhx-automation`; default: the .NET engine when installed, else Python ([engine/dotnet](../engine/dotnet/README.md)) |
+| `<config dir>/targets.yaml` | Your own websites, applications and project places ([FREE_AUTOMATION.md](FREE_AUTOMATION.md#the-target-registry)) |
 
 ## Exit codes
 

@@ -149,6 +149,30 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
         # One HighhX process at a time may drive a session (host:pid of the holder).
         "ALTER TABLE agent_sessions ADD COLUMN lease_owner TEXT;",
     ),
+    (
+        6,
+        # Plain-language automation runs (deterministic decision, JSON plan, per-step results): `highhx runs`.
+        """
+        CREATE TABLE IF NOT EXISTS automation_runs (
+            id TEXT PRIMARY KEY,
+            started_at TEXT NOT NULL,
+            request TEXT NOT NULL,
+            route TEXT NOT NULL,
+            intent TEXT,
+            target TEXT,
+            risk TEXT,
+            executor TEXT,
+            status TEXT NOT NULL,
+            verification TEXT,
+            duration REAL,
+            failure TEXT,
+            source TEXT,
+            decision TEXT NOT NULL DEFAULT '{}',
+            steps TEXT NOT NULL DEFAULT '[]'
+        );
+        CREATE INDEX IF NOT EXISTS idx_automation_runs_started ON automation_runs(started_at)
+        """,
+    ),
 )
 
 LATEST_VERSION = MIGRATIONS[-1][0]

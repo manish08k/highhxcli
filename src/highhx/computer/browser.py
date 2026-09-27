@@ -202,6 +202,8 @@ class CDPConnection:
         self.settled = 0
         """Loads that finished (or same-document navigations) since this connection opened."""
         self.loading_frames: set[str] = set()
+        self.main_frame = ""
+        """The top-level frame's id (from Page.frameNavigated), once known."""
 
     def call(
         self, method: str, params: dict[str, Any] | None = None, *, cancel: CancellationToken | None = None
@@ -254,6 +256,20 @@ class CDPConnection:
             self.settled += 1
         elif method == "Page.navigatedWithinDocument":
             self.settled += 1
+        elif method == "Page.frameDetached":
+            # an iframe removed while loading never reports frameStoppedLoading
+            self.loading_frames.discard(frame)
+        elif method == "Page.frameNavigated":
+            info = (message.get("params") or {}).get("frame") or {}
+            if not info.get("parentId") and info.get("id"):
+                self.main_frame = str(info["id"])
+
+    @property
+    def main_frame_loading(self) -> bool:
+        """The top-level document is loading (unknown main frame: any frame counts)."""
+        if not self.main_frame:
+            return bool(self.loading_frames)
+        return self.main_frame in self.loading_frames
 
     def close(self) -> None:
         self.ws.close()
@@ -263,6 +279,8 @@ NAVIGATION_STARTED = frozenset(
     {"Page.frameRequestedNavigation", "Page.frameScheduledNavigation", "Page.frameStartedLoading"}
 )
 NAVIGATION_GRACE = 0.5
+SUBFRAME_GRACE = 3.0
+"""How long to wait for iframes (ads, embeds) once the page itself is complete."""
 """Seconds an action gets to start a navigation (form submit, link) before the page counts as settled."""
 
 
@@ -326,6 +344,7 @@ class ChromeBrowser:
             "--no-first-run",
             "--no-default-browser-check",
             "--disable-features=Translate,OptimizationHints,MediaRouter",
+            "--autoplay-policy=no-user-gesture-required",  # "play …" starts media in HighhX's own profile
             "--disable-background-networking",
             "--password-store=basic",
             "--use-mock-keychain",
@@ -384,6 +403,8 @@ class ChromeBrowser:
                 pages = [json.loads(r.read())]
         self._conn = CDPConnection(pages[0]["webSocketDebuggerUrl"])
         self._conn.call("Page.enable", cancel=cancel)
+        tree = self._conn.call("Page.getFrameTree", cancel=cancel)
+        self._conn.main_frame = str(((tree.get("frameTree") or {}).get("frame") or {}).get("id") or "")
         self._conn.call("Runtime.enable", cancel=cancel)
         return self._conn
 
@@ -437,14 +458,20 @@ class ChromeBrowser:
                     raise OperationCancelledError("Browser operation cancelled.")
             if conn.navigations != before:
                 navigating = (conn, settled)
+        page_complete_at: float | None = None
         while time.monotonic() < deadline:
             try:
                 conn = self._connection(cancel)
-                done = self._eval("document.readyState", cancel) == "complete" and not conn.loading_frames
+                complete = self._eval("document.readyState", cancel) == "complete" and not conn.main_frame_loading
                 if navigating is not None and navigating[0] is conn:
-                    done = done and conn.settled > navigating[1]  # the navigation itself finished
-                if done:
-                    return
+                    complete = complete and conn.settled > navigating[1]  # the navigation itself finished
+                if complete:
+                    page_complete_at = page_complete_at or time.monotonic()
+                    # iframes (ads, embeds) get a short grace, not the whole timeout
+                    if not conn.loading_frames or time.monotonic() - page_complete_at >= SUBFRAME_GRACE:
+                        return
+                else:
+                    page_complete_at = None
             except (IntegrationError, WebSocketClosed):
                 pass
             if self._pause(cancel):
@@ -492,6 +519,10 @@ class ChromeBrowser:
             raise ElementNotFoundError(f"Element {element_id} is no longer on the page.")
         if result.get("error"):
             raise IntegrationError(f"Could not {action} {element_id}: {result['error']}")
+
+    def evaluate(self, expression: str, *, cancel: CancellationToken | None = None) -> Any:
+        """Evaluate a fixed HighhX script in the page (never text from a model or a page)."""
+        return self._eval(expression, cancel)
 
     def screenshot(self, *, cancel: CancellationToken | None = None) -> bytes:
         """The current page as PNG bytes (read-only; nothing on the page changes)."""

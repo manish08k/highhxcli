@@ -6,6 +6,46 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+HighhX Free becomes deterministic computer automation: natural language → deterministic
+resolver → JSON action plan → verified automation, with no AI and no account.
+
+### Added
+
+- **Deterministic decisions** (`highhx.decision.deterministic`): route (local / unknown /
+  Pro), intent, target, entities, clauses and a plan for every request; never a model.
+- **JSON action plans** (`highhx.plans`): versioned schema (`PLAN_SCHEMA`), validation,
+  planner and a plan runner that verifies every step and stops safely at the first failure.
+- **Language layer** (`highhx.language`): parser, verb grammar, entity extraction and a YAML
+  target registry (websites, applications, project places; extensible in `targets.yaml`).
+  New: Gmail, Google Drive, Google Calendar; *search X* without "for"; *open my project*,
+  *the readme*, *the source folder*; *show my files*; *switch to <app>* launches if needed.
+- **Automation bridge** (`highhx.automation.engine`): protocol v1 with 14 validated
+  operations, a terminal guard for keyboard input, the built-in Python engine, and the
+  **C#/.NET engine** source (`engine/dotnet`, `highhx-automation`) used when installed.
+- **Verification strategies** (`highhx.verification`): page open, search results, media
+  playing, app running/frontmost, file exists, exit code, output captured; unobservable
+  steps are reported as not verified.
+- **Tracing and metrics:** every request is traced (`automation_runs`); `highhx runs`,
+  `highhx runs show`, `highhx runs stats`.
+- **`highhx "request"`** on the command line — the same as `highhx agent "request"`; on Free
+  outside a terminal it runs the deterministic plan and exits. `highhx do --plan [--json]` previews.
+- Deterministic evals (`tests/evals/automation.yaml`).
+- **JEv / advanced reasoning is HighhX Pro only:** one gate (`highhx.decision.advanced`)
+  used by session start, the session and one-shot requests; only the platform grants it.
+  No separate JEv service exists yet — today the Pro agent provides it. Free never loads
+  the agent runtime, a model provider, the gate or a vendor SDK on its automation path.
+- **One automation bridge for Free and Pro:** `ComputerSession.automation()` is shared by
+  Free's actions and the Pro agent's desktop computer-use tools (which previously called
+  macOS Accessibility directly), so both reach the C#/.NET engine when it is installed.
+
+### Fixed
+
+- `highhx "show git status"` reported "No such command".
+- Heavy pages (ads, embeds) no longer hold browser steps for 30 s: iframes removed while
+  loading are forgotten and sub-frames get a short grace once the page is complete.
+- Applications in `/System/Applications/Utilities` (Terminal, Activity Monitor) are found.
+- `browser.play` can no longer hang the browser connection while a video's `play()` is pending.
+
 ## [0.5.0] - 2026-09-27
 
 The action engine: one catalog, one executor, for everything HighhX runs — and autonomous

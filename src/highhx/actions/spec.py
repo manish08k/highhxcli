@@ -126,6 +126,8 @@ class ActionSpec:
     environment: Callable[[Inputs], str | None] | None = field(default=None, repr=False, compare=False)
     policy_action: Callable[[Inputs], str] | None = field(default=None, repr=False, compare=False)
     aliases: tuple[str, ...] = ()
+    risk_for: Callable[[Inputs], Risk] | None = field(default=None, repr=False, compare=False)
+    """A higher floor for some inputs (e.g. pressing Enter is riskier than pressing Escape)."""
     preview: Callable[[App, Inputs], list[str]] | None = field(default=None, repr=False, compare=False)
     """What exactly will change, shown before approval (a diff for file writes …)."""
 

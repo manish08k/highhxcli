@@ -128,7 +128,7 @@ def test_every_action_is_fully_specified() -> None:
         if not spec.idempotent:
             assert spec.retries.attempts == 1, f"{spec.name} is not idempotent but retries"
         if spec.risk == Risk.SAFE:
-            assert spec.idempotent or spec.name == "git.branch" or spec.category in ("browser",), spec.name
+            assert spec.idempotent or spec.name == "git.branch" or spec.category in ("browser", "computer"), spec.name
 
 
 def test_undoable_actions_have_compensations() -> None:

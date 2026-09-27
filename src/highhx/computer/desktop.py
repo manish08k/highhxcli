@@ -76,14 +76,22 @@ def launch_command(name: str) -> list[str]:
     raise ToolNotFoundError(app, purpose="launch the application")
 
 
+def mac_app_dirs() -> tuple[str, ...]:
+    """Where macOS applications live (Terminal and Activity Monitor are in Utilities)."""
+    return (
+        "/Applications",
+        "/Applications/Utilities",
+        "/System/Applications",
+        "/System/Applications/Utilities",
+        str(Path.home() / "Applications"),
+    )
+
+
 def app_installed(name: str) -> bool:
     app = resolve_app(name)
     key = _platform_key()
     if key == "darwin":
-        return any(
-            Path(base, f"{app}.app").exists()
-            for base in ("/Applications", "/System/Applications", str(Path.home() / "Applications"))
-        )
+        return any(Path(base, f"{app}.app").exists() for base in mac_app_dirs())
     if key == "win32":
         return True  # `start` resolves registered applications; failures are reported when launching
     return bool(shutil.which(app))

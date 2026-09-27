@@ -1,0 +1,92 @@
+# Deterministic evals for HighhX Free's automation layer (the deterministic resolver).
+#
+# Each case is a request and what the deterministic resolver must decide. Only the keys given are checked:
+#   route      local | unknown | pro
+#   intent     the plan's intent (open, search, play, launch, focus, workflow …)
+#   target     the plan's target id
+#   risk       safe | controlled | high
+#   executor   browser | desktop | filesystem | shell | git | project | mixed
+#   actions    the catalog actions of the steps, in order
+#   primitives the primitives of the steps, in order
+#   params     {step index: {param: value}} — a subset of the step's parameters
+#   verify     the plan's final verification strategy
+#   clauses    how the request was split
+#   reason     a substring of the unknown/pro reason
+#
+# The project used by the evals has: hello.py, README.md, src/, tests/.
+cases:
+  # ---------------------------------------------------------------- web
+  - {request: open Gmail, route: local, intent: open, target: gmail, risk: safe, executor: browser, actions: [browser.open], verify: page_open, params: {1: {url: "https://mail.google.com/"}}}
+  - {request: open YouTube, route: local, target: youtube, actions: [browser.open]}
+  - {request: open GitHub, route: local, target: github, actions: [browser.open], params: {1: {url: "https://github.com"}}}
+  - {request: open github.com, route: local, target: github, actions: [browser.open]}
+  - {request: go to example.com, route: local, target: "https://example.com", actions: [browser.open]}
+  - {request: open localhost 3000, route: local, actions: [browser.open], params: {1: {url: "http://localhost:3000"}}}
+  - {request: open google drive, route: local, target: google-drive, actions: [browser.open]}
+  - {request: open my calendar, route: local, target: google-calendar, actions: [browser.open]}
+  - {request: open my inbox, route: local, target: gmail, actions: [browser.open]}
+  - {request: search YouTube for lofi, route: local, intent: search, target: youtube, actions: [browser.search], params: {1: {query: lofi, site: YouTube}}, verify: search_results}
+  - {request: search for rock and roll, route: local, actions: [browser.search], params: {1: {query: rock and roll}}, clauses: [search for rock and roll]}
+  - {request: google python decorators, route: local, actions: [browser.search], params: {1: {query: python decorators, site: Google}}}
+  - {request: search python jobs for beginners, route: local, actions: [browser.search], params: {1: {query: python jobs for beginners}}}
+  - {request: play lofi on YouTube, route: local, intent: workflow, target: youtube, actions: [browser.search, browser.play], verify: media_playing}
+  - {request: play adhento gani song, route: local, actions: [browser.search, browser.play], params: {2: {query: adhento gani, site: YouTube}}}
+  - {request: open YouTube and play Adhento Gani, route: local, intent: workflow, primitives: [open, search, play], clauses: [open YouTube, play Adhento Gani]}
+  - {request: open Gmail and search internship, route: local, intent: workflow, target: gmail, risk: safe, primitives: [open, search], params: {2: {query: internship, site: Gmail}}, verify: search_results}
+  - {request: open Google and search for Python jobs, route: local, actions: [browser.open, browser.search], params: {2: {query: Python jobs, site: Google}}}
+  - {request: open Chrome and search Google for Python jobs, route: local, actions: [browser.search], params: {1: {query: Python jobs, site: Google}}}
+  - {request: open chrome and search for weather, route: local, actions: [browser.search]}
+  - {request: open safari and search for python documentation, route: local, actions: [computer.launch, browser.search], params: {2: {app: Safari}}, executor: desktop}
+  - {request: open youtube in safari, route: local, actions: [browser.open], params: {1: {app: Safari}}, executor: desktop}
+  - {request: open github then search for highhx, route: local, actions: [browser.open, browser.search], params: {2: {site: GitHub}}}
+  - {request: "please open YouTube, then play lofi and after that press space", route: local, primitives: [open, search, play, press]}
+  # ------------------------------------------------------------- desktop
+  - {request: open Chrome, route: local, intent: launch, target: chrome, executor: desktop, actions: [computer.launch], verify: app_running}
+  - {request: open Safari, route: local, target: safari, actions: [computer.launch]}
+  - {request: open Terminal, route: local, target: terminal, actions: [computer.launch]}
+  - {request: open VS Code, route: local, target: vscode, actions: [computer.launch]}
+  - {request: open Slack, route: local, target: slack, actions: [computer.launch]}
+  - {request: open Finder, route: local, target: finder, actions: [computer.launch]}
+  - {request: switch to Slack, route: local, intent: focus, target: slack, actions: [computer.focus], verify: app_frontmost}
+  - {request: switch to main, route: local, actions: [git.checkout]}
+  - {request: press cmd+t, route: local, intent: hotkey, risk: controlled, actions: [computer.hotkey], params: {1: {keys: cmd+t}}, verify: keys_sent}
+  - {request: press command shift t, route: local, actions: [computer.hotkey], params: {1: {keys: command+shift+t}}}
+  - {request: scroll down, route: local, actions: [computer.scroll], params: {1: {direction: down}}}
+  - {request: open slack and type hello team, route: local, actions: [computer.launch, computer.type], risk: controlled}
+  # ------------------------------------------------------ project & files
+  - {request: open my project, route: local, target: project, actions: [filesystem.open], params: {1: {path: "."}}}
+  - {request: open the project folder, route: local, target: project, actions: [filesystem.open]}
+  - {request: open the readme, route: local, target: readme, actions: [filesystem.open], params: {1: {path: README.md}}}
+  - {request: open hello.py, route: local, target: hello.py, actions: [filesystem.open], verify: opened_by_os}
+  - {request: show my files, route: local, intent: list, actions: [filesystem.list], params: {1: {path: "."}}}
+  - {request: list files in src, route: local, actions: [filesystem.list], params: {1: {path: src}}}
+  - {request: list files in the source folder, route: local, target: source, actions: [filesystem.list]}
+  - {request: create a folder called test, route: local, intent: create, risk: controlled, actions: [filesystem.create], params: {1: {path: test, kind: folder}}, verify: file_exists}
+  - {request: create a file called notes.md, route: local, actions: [filesystem.create], params: {1: {path: notes.md, kind: file}}}
+  - {request: run python hello.py, route: local, intent: run, risk: controlled, executor: shell, actions: [shell.run], params: {1: {command: python3 hello.py}}, verify: process_exit}
+  - {request: open my project and run the tests, route: local, intent: workflow, primitives: [open, test], executor: mixed}
+  # ------------------------------------------------------------ developer
+  - {request: show git status, route: local, intent: status, executor: git, actions: [git.status], verify: command_captured}
+  - {request: check git changes, route: local, actions: [git.diff]}
+  - {request: run the tests, route: local, intent: test, actions: [project.test], verify: process_exit}
+  - {request: run the tests and then show git status, route: local, actions: [project.test, git.status]}
+  # ------------------------------------------------------- guardrails
+  - {request: create a file called hello.py, route: unknown, reason: never overwrites}
+  - {request: create a file called ../escape.py, route: unknown, reason: inside the project}
+  - {request: run ls -la, route: unknown, reason: "!command"}
+  - {request: run python missing.py, route: unknown, reason: no file}
+  - {request: "run python hello.py; rm -rf ~", route: pro}
+  - {request: open main.py, route: unknown, reason: no file or folder}
+  - {request: open spotifyy, route: unknown, reason: "'spotifyy'"}
+  - {request: open safari and play lofi, route: unknown, reason: HighhX browser}
+  - {request: type hello world, route: unknown, reason: which field}
+  - {request: press hyper+x, route: unknown, reason: key}
+  # --------------------------------------------------- Free → Pro routing
+  - {request: find the most important email from last week and draft a response, route: pro}
+  - {request: debug this authentication system and fix all failing tests, route: pro, reason: debugging}
+  - {request: refactor this project and improve the architecture, route: pro, reason: code changes}
+  - {request: fix the failing tests, route: pro}
+  - {request: search my emails for the invoice from last week, route: pro}
+  - {request: open the admin page in the browser and click export, route: pro}
+  - {request: make this project production ready, route: pro}
+  - {request: explain this repository, route: pro}

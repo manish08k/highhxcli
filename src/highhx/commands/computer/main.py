@@ -94,13 +94,51 @@ def computer_status(app: App) -> int:
     session = computer_session(app, headless=_headless())
     caps = session.capabilities()
     out = app.output
+    engine = _engine_status(app)
+    from highhx.computer.providers import Capability
+    from highhx.language.targets import default_registry, user_targets_file
+
+    registry = default_registry(user_file=user_targets_file())
+    caps.append(
+        Capability(
+            f"engine ({engine.get('engine') or 'none'})", bool(engine.get("ok")), str(engine.get("detail") or "")
+        )
+    )
+    known = registry.known()
+    targets = f"{len(known['sites'])} sites, {len(known['apps'])} apps, {len(known['places'])} project places"
+    caps.append(
+        Capability(
+            "targets",
+            not registry.problems,
+            targets + ("; " + "; ".join(registry.problems) if registry.problems else ""),
+        )
+    )
     out.emit(
-        {"capabilities": [c.__dict__ for c in caps], "browser_running": session.browser.running},
+        {
+            "capabilities": [c.__dict__ for c in caps],
+            "browser_running": session.browser.running,
+            "engine": engine,
+            "targets": known,
+        },
         lambda: out.table(
             ["capability", "available", "detail"], [(c.name, "yes" if c.available else "no", c.detail) for c in caps]
         ),
     )
     return 0
+
+
+def _engine_status(app: App) -> dict[str, Any]:
+    """The automation engine in use (C#/.NET when installed, else Python) and what it reports."""
+    from highhx.automation.engine.bridge import engine_status
+    from highhx.execution.command import CommandSpec
+
+    def runner(argv: list[str], what: str) -> tuple[int, str, str]:
+        result = app.engine.run(
+            CommandSpec(argv, name=argv[0], timeout=30), action=what, approved=True, echo=False, record=False
+        )
+        return (0 if result.ok else (result.exit_code or 1)), result.stdout or "", result.stderr or result.error or ""
+
+    return engine_status(runner)
 
 
 @computer.command("open", short_help="Open a URL in the HighhX browser, or launch an application.")

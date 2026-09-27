@@ -285,7 +285,7 @@ def test_free_slash_commands(agent_project: Path, make_app, capsys) -> None:
     )
     repl.run()
     out = buffer.getvalue()
-    assert "Known requests run locally without AI" in out
+    assert "understands known actions without AI" in out
     assert "AI browser and desktop automation" in out and "available" in out and "HighhX Pro" in out
     assert "Free • Local" in out and "not signed in" in out
     assert "Files indexed" in out and "No project memory yet" in out

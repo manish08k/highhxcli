@@ -36,6 +36,7 @@ def all_commands() -> list[click.Command]:
     from highhx.commands.diagnostics.debug import debug
     from highhx.commands.diagnostics.diagnose import diagnose
     from highhx.commands.diagnostics.repair import repair
+    from highhx.commands.diagnostics.runs import runs
     from highhx.commands.diagnostics.trace import trace
     from highhx.commands.docker.main import docker
     from highhx.commands.environment.main import env
@@ -124,6 +125,7 @@ def all_commands() -> list[click.Command]:
         profile,
         debug,
         trace,
+        runs,
         diagnose,
         repair,
         agent,

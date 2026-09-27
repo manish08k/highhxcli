@@ -28,7 +28,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Security", ("security",)),
     ("Containers, services & data", ("docker", "services", "ports", "db")),
     ("Workflows & automation", ("workflow", "actions", "schedule", "hook", "trigger", "watchers")),
-    ("Observability", ("logs", "history", "events", "audit", "report", "trace")),
+    ("Observability", ("logs", "history", "events", "audit", "report", "trace", "runs")),
     ("Extensibility & team", ("plugin", "config", "policy", "workspace", "profile")),
     ("Diagnostics", ("doctor", "diagnose", "repair", "debug")),
 )
@@ -109,6 +109,14 @@ def install_global_options(command: click.Command) -> None:
             install_global_options(sub)
 
 
+def is_request(args: list[str]) -> bool:
+    """Arguments that read as a sentence: several words (quoted or not), not an option."""
+    first = args[0]
+    if first.startswith("-") or not first.strip():
+        return False
+    return len(args) > 1 or len(first.split()) > 1
+
+
 class HighhXGroup(click.Group):
     """Root group: sectioned help and plugin-provided commands."""
 
@@ -141,6 +149,18 @@ class HighhXGroup(click.Group):
         if plugin_command is not None:
             install_global_options(plugin_command)
         return plugin_command
+
+    def resolve_command(
+        self, ctx: click.Context, args: list[str]
+    ) -> tuple[str | None, click.Command | None, list[str]]:
+        """``highhx "show git status"`` / ``highhx open gmail``: a plain-language request, not a
+        command name — handled exactly like ``highhx agent "…"``. A single unknown word
+        (``highhx stauts``) stays a usage error, and every real command wins."""
+        if args and is_request(args) and self.get_command(ctx, args[0]) is None:
+            agent = super().get_command(ctx, "agent")
+            if agent is not None:
+                return "agent", agent, ["run", *args]
+        return super().resolve_command(ctx, args)
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         placed: set[str] = set()
@@ -181,9 +201,10 @@ CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 
 def cli(ctx: click.Context) -> int | None:
     """HighhX — your developer command center.
 
-    Run `highhx` in a terminal for the interactive session: describe what you
-    want in plain language. HighhX Free handles it locally (known requests, every
-    command below, shell commands with approvals) with no account; HighhX Pro adds
+    Run `highhx` in a terminal for the interactive session, or pass a request
+    directly: highhx "open Gmail and search internship", highhx "show git status".
+    HighhX Free understands known requests without AI (deterministic resolver → JSON action plan →
+    deterministic automation → verification) with no account; HighhX Pro adds
     the AI developer agent backed by the HighhX platform. Every risky action is
     classified (safe / normal / dangerous / critical) and needs approval; use
     --dry-run to preview anything.

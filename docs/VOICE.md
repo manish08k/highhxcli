@@ -45,10 +45,12 @@ Setup example (macOS): `brew install sox whisper-cpp`, download a model such as
 ## Free and Pro
 
 * **Free:** transcripts go to the deterministic resolver — "run the tests", "deploy staging",
-  "show git status". Open-ended requests get the same Pro panel as typed ones, spoken as one
+  "show git status", "open GitHub", "play lofi on YouTube", "switch to Safari" — and run
+  through the same plan, executor, automation bridge and verification as typed requests. No
+  model and no JEv are involved. Open-ended requests get the same Pro panel as typed ones, spoken as one
   sentence ("AI debugging requires HighhX Pro."). Speech recognition is local and
   deterministic in the sense that matters for Free: no model call, no account, no network.
-* **Pro:** transcripts go to the AI agent — conversational, multi-step, with the agent's
+* **Pro:** transcripts go to the AI agent (the Pro-only JEv / advanced-reasoning path) — conversational, multi-step, with the agent's
   approvals and plans.
 
 ## What is spoken

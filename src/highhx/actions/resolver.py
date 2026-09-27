@@ -17,12 +17,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
-from urllib.parse import quote_plus
 
-from highhx.computer.intents import BROWSERS, DEFAULT_SEARCH_URL, looks_like_file
+from highhx.computer.intents import looks_like_file
+from highhx.language.grammar import Unknown
+from highhx.language.parser import normalise
 
 if TYPE_CHECKING:
     from highhx.commands import App
+    from highhx.language.targets import TargetRegistry
 
 COMMON_ENVIRONMENTS = ("dev", "development", "test", "staging", "stage", "qa", "preview", "production", "prod")
 SERVICE_WORDS = ("server", "backend", "frontend", "api", "web", "app", "worker", "db", "database", "services")
@@ -33,6 +35,9 @@ class Step:
     action: str
     inputs: dict[str, Any] = field(default_factory=dict)
     description: str = ""
+    target: str = ""
+    """The registry id or project path the step acts on ("gmail", "slack", "hello.py"); empty
+    for project-wide developer actions."""
 
 
 @dataclass(frozen=True)
@@ -64,6 +69,7 @@ class ResolverContext:
     deploy_targets: tuple[str, ...] = ()
     environments: tuple[str, ...] = ()
     workflows: tuple[str, ...] = ()
+    _targets: TargetRegistry | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_app(cls, app: App) -> ResolverContext:
@@ -125,6 +131,14 @@ class ResolverContext:
             return []
         return None
 
+    def targets(self) -> TargetRegistry:
+        """Known applications and websites (built-in + the user's targets.yaml)."""
+        if self._targets is None:
+            from highhx.language.targets import default_registry, user_targets_file
+
+            self._targets = default_registry(user_file=user_targets_file())
+        return self._targets
+
     def workflow(self, word: str) -> str | None:
         word = word.strip().lower()
         return next((w for w in self.workflows if w.lower() == word), None)
@@ -184,80 +198,6 @@ def _url(target: str) -> str | None:
     if re.fullmatch(r"[\w-]+(?:\.[\w-]+)+(?:/\S*)?", target) and not looks_like_file(target):
         return f"https://{target}"
     return None
-
-
-KNOWN_APPS = (
-    "slack",
-    "terminal",
-    "iterm",
-    "iterm2",
-    "vs code",
-    "vscode",
-    "visual studio code",
-    "code",
-    "xcode",
-    "finder",
-    "calculator",
-    "notes",
-    "spotify",
-    "docker",
-    "docker desktop",
-    "postman",
-    "figma",
-    "zoom",
-    "teams",
-    "microsoft teams",
-    "discord",
-    "mail",
-    "calendar",
-    "music",
-    "preview",
-    "textedit",
-    "system settings",
-    "activity monitor",
-    "intellij idea",
-    "pycharm",
-    "webstorm",
-    "android studio",
-    "sublime text",
-    "notion",
-)
-ARTICLES = ("the", "a", "an", "my", "our", "this", "that", "some")
-
-
-def _known_app(name: str) -> bool:
-    """A known application: the fixed list, or an installed macOS app bundle with that exact name."""
-    if name.lower() in KNOWN_APPS:
-        return True
-    import sys
-
-    return sys.platform == "darwin" and any(
-        (Path(base) / f"{name}.app").exists() for base in ("/Applications", "/System/Applications")
-    )
-
-
-def _open(m: MatchLike, ctx: ResolverContext) -> Step | None:
-    target = m.group("target").strip()
-    url = _url(target)
-    if url is not None:
-        return Step("browser.open", {"url": url}, f"open {url}")
-    word = target.lower()
-    if word in BROWSERS:
-        return Step("browser.open", {"url": "about:blank"}, "open the browser")
-    words = word.split()
-    if looks_like_file(target) or "/" in target or not words or len(words) > 3 or words[0] in ARTICLES:
-        return None
-    if "and" in words or word in ("tests", "dev server", "services", "project"):
-        return None
-    explicit = m.group(0).lower().startswith("launch")
-    if not explicit and not _known_app(target):
-        return None  # "open <something>" is only deterministic for a known application
-    return Step("computer.launch", {"name": target}, f"launch {target}")
-
-
-def _search_web(m: MatchLike, _ctx: ResolverContext) -> Step | None:
-    query = m.group("q").strip().strip("\"'")
-    return Step("browser.open", {"url": DEFAULT_SEARCH_URL.format(query=quote_plus(query))}, f"search for {query!r}")
 
 
 def _service_step(action: str, verb: str) -> Builder:
@@ -335,18 +275,15 @@ def _branch(m: MatchLike, _ctx: ResolverContext) -> Step:
     return Step("git.branch", {"name": m.group("name")}, f"create branch {m.group('name')}")
 
 
-def _checkout(m: MatchLike, _ctx: ResolverContext) -> Step:
+def _checkout(m: MatchLike, ctx: ResolverContext) -> Step | None:
+    said_branch = "branch" in m.group(0).lower() or m.group(0).lower().startswith(("checkout", "check out"))
+    if not said_branch and ctx.targets().app(m.group("ref")) is not None:
+        return None  # "switch to slack": the application (say "switch to branch slack" for git)
     return Step("git.checkout", {"ref": m.group("ref")}, f"switch to {m.group('ref')}")
 
 
 def _tag(m: MatchLike, _ctx: ResolverContext) -> Step:
     return Step("git.tag", {"name": m.group("name")}, f"tag {m.group('name')}")
-
-
-def _click(m: MatchLike, _ctx: ResolverContext) -> Step:
-    role = (m.groupdict().get("role") or "button").lower()
-    name = m.group("name").strip().strip("\"'")
-    return Step("browser.click", {"target": f"{role}:{name}"}, f"click {role} {name!r}")
 
 
 def _db_restore(m: MatchLike, _ctx: ResolverContext) -> Step:
@@ -569,16 +506,15 @@ RULES: tuple[Rule, ...] = (
     # files
     _rule(
         "read-file",
-        r"(?:read|show|open|cat|view|print)\s+(?:me\s+)?(?:the\s+)?(?:file\s+)?(?P<path>[\w./-]+\.[\w]+|[\w./-]*/[\w./-]+)",
+        r"(?:read|show|cat|view|print)\s+(?:me\s+)?(?:the\s+)?(?:file\s+)?(?P<path>[\w./-]+\.[\w]+|[\w./-]*/[\w./-]+)",
         _read_file,
     ),
     _rule(
         "search-code",
-        r"(?:search|grep|find)\s+(?:the\s+)?(?:code(?:base)?\s+|files?\s+|project\s+)?(?:for\s+)?(?P<pat>[\"'`].+[\"'`])|(?:search|grep)\s+(?:for\s+)?(?P<pat2>\w+)(?:\s+in\s+(?:the\s+)?(?:code(?:base)?|files|project))?",
-        lambda m, c: _search_code(_Alt(m, "pat", "pat2"), c),
+        r"(?:search|grep|find)\s+(?:the\s+)?(?:code(?:base)?\s+|files?\s+|project\s+)?(?:for\s+)?(?P<pat>[\"'`].+[\"'`])|grep\s+(?:for\s+)?(?P<pat2>\w+)|(?:search|find)\s+(?:for\s+)?(?P<pat3>\w+)\s+in\s+(?:the\s+)?(?:code(?:base)?|files|project)",
+        lambda m, c: _search_code(_Alt(m, "pat", "pat2" if m.group("pat2") else "pat3"), c),
     ),
     # browser & desktop
-    _rule("search-web", r"(?:search(?:\s+the\s+web)?|google|look\s+up)(?:\s+for)?\s+(?P<q>.+)", _search_web),
     _rule(
         "screenshot",
         r"(?:take\s+(?:a\s+)?)?screenshot(?:\s+(?:of\s+)?(?:the\s+)?(?:page|browser))?",
@@ -588,16 +524,6 @@ RULES: tuple[Rule, ...] = (
         "read-page",
         r"(?:read|extract|get)\s+(?:the\s+)?(?:page|web\s*page)(?:\s+(?:text|content|data))?",
         _fixed("browser.extract", "read the page"),
-    ),
-    _rule(
-        "click",
-        r"click\s+(?:on\s+)?(?:the\s+)?[\"']?(?P<name>[\w .'-]+?)[\"']?(?:\s+(?P<role>button|link|tab|checkbox|menuitem))?",
-        _click,
-    ),
-    _rule(
-        "open",
-        r"(?:open|go\s+to|navigate\s+to|visit|browse\s+to|launch)\s+(?P<target>.+?)(?:\s+in\s+(?:the\s+)?(?:browser|chrome))?",
-        _open,
     ),
 )
 
@@ -618,17 +544,6 @@ class _Alt:
 
 
 # ---------------------------------------------------------------- resolution
-POLITE = re.compile(
-    r"^(?:please\s+|pls\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|hey\s+|ok\s+|highhx,?\s+|i\s+want\s+to\s+|let'?s\s+|go\s+ahead\s+and\s+)+",
-    re.I,
-)
-SPLIT = re.compile(r"\s*(?:,\s*then\s+|;\s*|\s+and\s+then\s+|\s+then\s+|\s+and\s+|,\s*and\s+|&&)\s*", re.I)
-
-
-def normalise(text: str) -> str:
-    text = " ".join(text.strip().split())
-    text = POLITE.sub("", text)
-    return text.rstrip(".!?").strip()
 
 
 def _resolve_one(text: str, ctx: ResolverContext) -> tuple[Step, str] | None:
@@ -642,24 +557,114 @@ def _resolve_one(text: str, ctx: ResolverContext) -> tuple[Step, str] | None:
     return None
 
 
-def resolve(text: str, context: ResolverContext | None = None) -> Resolution | None:
-    """Resolve ``text`` to actions, or None when it is not a known, fully specified request."""
-    ctx = context or ResolverContext()
+# Words that start a developer request (the rules above) — a conjunction before one of these
+# starts a new clause, just like before an automation verb.
+RULE_WORDS = frozenset(
+    [
+        "run",
+        "show",
+        "check",
+        "build",
+        "compile",
+        "install",
+        "update",
+        "upgrade",
+        "audit",
+        "deploy",
+        "ship",
+        "stop",
+        "start",
+        "restart",
+        "commit",
+        "push",
+        "pull",
+        "tag",
+        "switch",
+        "checkout",
+        "migrate",
+        "back",
+        "restore",
+        "format",
+        "fix",
+        "scan",
+        "test",
+        "lint",
+        "read",
+        "cat",
+        "view",
+        "print",
+        "take",
+        "screenshot",
+        "git",
+        "docker",
+        "rollback",
+        "resume",
+        "cancel",
+        "grep",
+        "what",
+        "dev",
+        "diagnose",
+        "doctor",
+    ]
+)
+MAX_CLAUSES = 8
+
+
+def _plan(text: str, ctx: ResolverContext) -> tuple[Resolution | None, Unknown | None]:
+    from highhx.language.grammar import VERB_WORDS, PlanState, parse_clause
+    from highhx.language.parser import split_clauses
+
     clean = normalise(text)
     if not clean:
-        return None
+        return None, None
     whole = _resolve_one(clean, ctx)
     if whole is not None:
-        return Resolution((whole[0],), clean, whole[1])
-    parts = [p for p in SPLIT.split(clean) if p]
-    if len(parts) < 2 or len(parts) > 6:
-        return None
+        return Resolution((whole[0],), clean, whole[1]), None
+    clauses = split_clauses(clean, VERB_WORDS | RULE_WORDS)
+    if len(clauses) > MAX_CLAUSES:
+        return None, None
+    state = PlanState()
     steps: list[Step] = []
     rules: list[str] = []
-    for part in parts:
-        found = _resolve_one(normalise(part), ctx)
-        if found is None:
-            return None  # all or nothing: never run half of a request
-        steps.append(found[0])
-        rules.append(found[1])
-    return Resolution(tuple(steps), clean, "+".join(rules))
+    for clause in clauses:
+        part = normalise(clause)
+        found = _resolve_one(part, ctx)
+        if found is not None:
+            steps.append(found[0])
+            rules.append(found[1])
+            continue
+        parsed = parse_clause(part, ctx, state)
+        if parsed is None:
+            return None, None  # all or nothing: an open-ended clause makes the whole request open-ended
+        if isinstance(parsed, Unknown):
+            return None, parsed
+        steps.extend(parsed)
+        rules.append("grammar")
+    return Resolution(tuple(_drop_redundant_launches(steps)), clean, "+".join(rules)), None
+
+
+def _drop_redundant_launches(steps: list[Step]) -> list[Step]:
+    """ "open chrome and search for x": the HighhX browser (a Chrome of its own) does the search, so
+    launching the person's everyday Chrome as well would only open a second, unused window."""
+    from highhx.language.targets import default_registry
+
+    registry = default_registry()
+    kept: list[Step] = []
+    for index, step in enumerate(steps):
+        nxt = steps[index + 1] if index + 1 < len(steps) else None
+        app = registry.app(str(step.inputs.get("name", ""))) if step.action == "computer.launch" else None
+        redundant = app is not None and app.automatable and nxt is not None
+        if redundant and nxt is not None and nxt.action.startswith("browser.") and "app" not in nxt.inputs:
+            continue
+        kept.append(step)
+    return kept
+
+
+def resolve(text: str, context: ResolverContext | None = None) -> Resolution | None:
+    """Resolve ``text`` to actions, or None when it is not a known, fully specified request."""
+    return _plan(text, context or ResolverContext())[0]
+
+
+def explain(text: str, context: ResolverContext | None = None) -> Unknown | None:
+    """Why ``text`` did not resolve, when HighhX recognised the verb but not an entity."""
+    return _plan(text, context or ResolverContext())[1]

@@ -30,3 +30,8 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# .NET build output (engine/dotnet)
+engine/dotnet/**/bin/
+engine/dotnet/**/obj/
+engine/dotnet/**/out/

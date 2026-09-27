@@ -140,20 +140,25 @@ highhx voice [OPTIONS]
 
 ### `highhx do`
 
-Understands fixed, unambiguous requests without AI and runs the matching
-HighhX command or automation step:
+HighhX Free's deterministic resolver turns the request into
+a JSON action plan; each step then runs through the action executor
+(risk classification, approval, verification) and the run is traced.
 
   highhx do run the tests
-  highhx do "open chrome and search for Adele"
-  highhx do open localhost:3000
-  highhx do start the dev server
+  highhx do "open Gmail and search internship"
+  highhx do "play lofi on YouTube"
+  highhx do --plan --json "open my project and run the tests"
 
-Requests that need understanding or several adaptive steps ("fix whatever is
-failing") are for the AI agent: `highhx agent "…"` (HighhX Pro).
+`highhx "…"` (without `do`) does the same. Requests that need understanding
+("fix whatever is failing") are for the AI agent: HighhX Pro.
 
 ```
 highhx do [OPTIONS] REQUEST...
 ```
+
+| Option | Description |
+|---|---|
+| `--plan` | Show the deterministic decision and the action plan; run nothing. |
 
 ### `highhx computer`
 
@@ -1595,6 +1600,47 @@ Show where time went in EXECUTION_ID (default: latest).
 ```
 highhx trace [OPTIONS] [EXECUTION_ID]
 ```
+
+### `highhx runs`
+
+Every plain-language request HighhX handled locally: the deterministic decision, the
+JSON plan, each step's result and verification (`highhx runs show`), and
+totals (`highhx runs stats`).
+
+Running `highhx runs` without a subcommand runs `highhx runs list`.
+
+#### `highhx runs list`
+
+The most recent runs: request, route (local, unknown, pro), status and verification.
+
+```
+highhx runs list [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--limit, -n` |  (default: `20`) |
+
+#### `highhx runs show`
+
+Show RUN_ID (default: the latest run).
+
+```
+highhx runs show [OPTIONS] [RUN_ID]
+```
+
+#### `highhx runs stats`
+
+Totals over recent runs: successes and failures, average time, action and verification
+failures, Pro escalations, and the most-used actions and targets.
+
+```
+highhx runs stats [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--limit` | Runs to include. (default: `1000`) |
 
 ## Extensibility & team
 

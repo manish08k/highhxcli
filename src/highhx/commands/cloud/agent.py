@@ -118,9 +118,20 @@ def agent_run(
                 "No request given.",
                 hint='Run `highhx agent` in a terminal, or pass a request: highhx agent "fix my failing tests".',
             )
+    cloud = app.cloud
+    if one_shot and not (resume_id or cont):
+        # HighhX Free: requests the deterministic resolver understands run locally (no AI, no account); open-ended
+        # ones fall through to the Pro path below, which explains what the agent needs.
+        from highhx.cloud import capabilities
+        from highhx.decision.advanced import advanced_reasoning_available
+        from highhx.plans.request import run_request
+
+        if not advanced_reasoning_available(capabilities.resolve(cloud)):
+            code = run_request(app, text, source="agent")
+            if code is not None:
+                return code
     console = out.err_console if app.options.json or app.options.quiet else out.console
     ui = TerminalUI(console, out.symbols, interactive=interactive and not app.options.json)
-    cloud = app.cloud
     try:
         session, account, resumed = create_session(app, cloud, ui, overrides=overrides, resume=Resume(resume_id, cont))
     except AccountError:

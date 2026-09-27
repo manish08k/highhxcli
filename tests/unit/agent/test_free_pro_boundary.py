@@ -124,8 +124,10 @@ def test_free_session_never_touches_the_ai_stack(agent_project: Path, make_app, 
     out = buffer.getvalue()
     assert tripwires == []  # no runtime, provider, gateway or key lookup
     assert repl.session is None
-    # every open-ended request, plus /model (twice) and /mode, which need the agent
-    assert out.count("HighhX Pro capability") >= len(SPEC_REQUESTS) + 3
+    # every open-ended request, plus /model (twice) and /mode, which need the agent — except
+    # "open main.py", which names a file that does not exist: it is told so, and nothing runs
+    assert "There is no file or folder 'main.py'" in out
+    assert out.count("HighhX Pro capability") >= len(SPEC_REQUESTS) - 1 + 3
     assert out.count("already in the HighhX session") == 4
     assert "Unexpected error" not in out
 

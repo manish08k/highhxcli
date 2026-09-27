@@ -11,10 +11,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from highhx.actions.resolver import Resolution, ResolverContext, resolve
+from highhx.actions.resolver import Resolution, ResolverContext
 from highhx.cloud.capabilities import Capability
+from highhx.language.grammar import Unknown
+
+if TYPE_CHECKING:
+    from highhx.decision.deterministic import Decision
 
 PRO_LEAD = "HighhX Pro can understand and execute this open-ended task."
 
@@ -40,6 +44,10 @@ class Route:
     """Set when the request needs a capability the session does not have."""
     reason: str = ""
     alternatives: tuple[LocalAction, ...] = field(default_factory=tuple)
+    unknown: Unknown | None = None
+    """Set when HighhX recognised the action but not an entity ("open spotifyy")."""
+    decision: Decision | None = field(default=None, compare=False)
+    """The deterministic decision (plan, entities, risk) for tracing and previews."""
 
 
 # (pattern, capability, what needs Pro). First match wins; most specific first.
@@ -130,10 +138,19 @@ def local_alternatives(text: str) -> tuple[LocalAction, ...]:
     return tuple(found[:MAX_ALTERNATIVES])
 
 
-def route(text: str, context: ResolverContext | None = None) -> Route:
-    """How a session without the AI agent handles ``text``: deterministic actions, or the capability it needs."""
-    resolution = resolve(text, context)
-    if resolution is not None:
-        return Route(resolution=resolution)
+def route(text: str, context: ResolverContext | None = None, *, decision: Decision | None = None) -> Route:
+    """How a session without the AI agent handles ``text``: the deterministic plan, or the capability it needs."""
+    from highhx.decision.deterministic import DeterministicDecider
+
+    decision = decision or DeterministicDecider(context).decide(text)
+    if decision.resolution is not None:
+        return Route(resolution=decision.resolution, decision=decision)
+    if decision.unknown is not None:
+        return Route(
+            capability=Capability.AI_AGENT,
+            reason=f"{decision.unknown.reason} Open-ended requests are for HighhX Pro.",
+            unknown=decision.unknown,
+            decision=decision,
+        )
     capability, reason = required_capability(text)
-    return Route(capability=capability, reason=reason, alternatives=local_alternatives(text))
+    return Route(capability=capability, reason=reason, alternatives=local_alternatives(text), decision=decision)

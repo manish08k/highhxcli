@@ -36,6 +36,7 @@ from highhx.safety.actions import ActionDescriptor, ActionKind, Actor
 from highhx.safety.gate import ActionGate, ApprovalMode, GatePrompter
 
 if TYPE_CHECKING:
+    from highhx.automation.engine.bridge import AutomationBridge
     from highhx.commands import App
     from highhx.computer.session import ComputerSession
 
@@ -160,6 +161,14 @@ class ActionExecutor:
             self._computer = ComputerSession(self.gate, actor=self.actor, tool="actions")
         return self._computer
 
+    def automation(self, cancel: CancellationToken | None = None) -> AutomationBridge:
+        """The automation bridge (desktop UI actions) — the computer session's, so HighhX Free's
+        actions and HighhX Pro's agent tools share one engine: C#/.NET when installed, else Python."""
+        session = self.computer()
+        if cancel is not None:
+            session.cancel = cancel
+        return session.automation()
+
     def close(self) -> None:
         if self._computer is not None:
             self._computer.close()
@@ -188,7 +197,8 @@ class ActionExecutor:
             actor=self.actor,
         )
         verdict = self.gate.classify(descriptor)
-        decision = decide(spec.risk, verdict, command=descriptor.command)
+        floor = max(spec.risk, spec.risk_for(data)) if spec.risk_for is not None else spec.risk
+        decision = decide(floor, verdict, command=descriptor.command)
         changes: list[str] = []
         if spec.preview is not None:
             try:

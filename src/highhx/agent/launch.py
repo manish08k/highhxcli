@@ -13,8 +13,9 @@ from typing import TYPE_CHECKING, Any
 from highhx.actions import events as ev
 from highhx.actions.events import EventLog
 from highhx.cloud import capabilities
-from highhx.cloud.capabilities import LOCAL, Capability, Connection
+from highhx.cloud.capabilities import LOCAL, Connection
 from highhx.core.errors import CloudError, HighhXError, UsageError
+from highhx.decision.advanced import advanced_reasoning_available
 
 if TYPE_CHECKING:
     from highhx.agent.bootstrap import Resume
@@ -58,7 +59,7 @@ def start_interactive(
     session: AgentSession | None = None
     account: Account | None = entitlements.account
     resumed = False
-    if entitlements.has(Capability.AI_AGENT):
+    if advanced_reasoning_available(entitlements):  # the Pro-only gate (JEv / the agent)
         try:
             session, account, resumed = create_session(app, cloud, ui, overrides=overrides or {}, resume=resume)
         except HighhXError as exc:

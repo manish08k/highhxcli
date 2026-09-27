@@ -6,6 +6,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from highhx.computer.browser import ChromeBrowser
 from highhx.computer.desktop import MacAccessibility, TesseractOCR, app_installed, launch_command, resolve_app
@@ -18,6 +19,9 @@ from highhx.execution.command import CommandSpec, join_command
 from highhx.safety.actions import ActionDescriptor, ActionKind, Actor, attrs
 from highhx.safety.gate import ActionGate
 from highhx.utils.paths import user_data_dir
+
+if TYPE_CHECKING:
+    from highhx.automation.engine.bridge import AutomationBridge
 
 SOURCES = ("browser", "desktop")
 """Sources that can be observed *and* acted on."""
@@ -45,6 +49,34 @@ class ComputerSession:
         self._browser: ChromeBrowser | None = None
         self._runtimes: dict[str, ComputerRuntime] = {}
         self._desktop_app: str | None = None
+        self._automation: AutomationBridge | None = None
+
+    def automation(self) -> AutomationBridge:
+        """The automation bridge for desktop operations — one per session, shared by HighhX
+        Free's actions and HighhX Pro's agent tools: the C#/.NET engine when installed, else
+        the Python engine (see :mod:`highhx.automation.engine`)."""
+        if self._automation is None:
+            from highhx.automation.engine.bridge import open_bridge
+
+            engine = self.gate.engine
+
+            def runner(argv: list[str], what: str) -> tuple[int, str, str]:
+                result = engine.run(
+                    CommandSpec(argv, name=argv[0], timeout=60),
+                    action=what,
+                    approved=True,  # the action that needs it was classified and approved
+                    echo=False,
+                    record=False,
+                    policy_action="computer:automation",
+                    cancel=self.cancel,
+                )
+                if result.dry_run:
+                    return 0, "{}", ""
+                code = 0 if result.ok else (result.exit_code or 1)
+                return code, result.stdout or "", result.stderr or result.error or ""
+
+            self._automation = open_bridge(runner)
+        return self._automation
 
     # ------------------------------------------------------------- providers
     @property
@@ -62,7 +94,9 @@ class ComputerSession:
                     "Native desktop automation is only implemented on macOS.",
                     hint="Use browser automation (`--source browser`) on this platform.",
                 )
-            return MacAccessibility(self._desktop_app)
+            from highhx.automation.engine.provider import BridgeDesktopProvider
+
+            return BridgeDesktopProvider(self.automation(), self._desktop_app)
         raise UsageError(f"Unknown source {source!r} (expected: {', '.join(SOURCES)})")
 
     def runtime(self, source: str = "browser") -> ComputerRuntime:
@@ -138,5 +172,8 @@ class ComputerSession:
                 return False
 
     def close(self) -> None:
+        if self._automation is not None:
+            self._automation.close()
+            self._automation = None
         if self._browser is not None:
             self._browser.close()

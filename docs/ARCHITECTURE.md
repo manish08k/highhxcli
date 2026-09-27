@@ -4,10 +4,18 @@ HighhX is layered so that every side effect passes through one place where safet
 rules are enforced. Product-level behaviour is specified in [PRODUCT_SPEC.md](PRODUCT_SPEC.md).
 
 ```text
-interfaces           highhx (session) · highhx <command> · workflows · voice · the Pro agent
+interfaces           highhx (session) · highhx "request" · highhx <command> · workflows · voice · the Pro agent
     ↓
-actions/             resolver (text → actions) · catalog (61 actions) · policy (risk, approval)
+language/            parser (normalise, clauses) · grammar (verb registry) · entities · targets (YAML registry)
+decision/            deterministic: request → Decision (route, intent, target, entities, plan) · risk classes
+                     advanced: the Pro-only gate for JEv / advanced reasoning
+plans/               JSON action plan (schema v1, validation) · planner · runner (verify, stop on failure)
+    ↓
+actions/             resolver (developer rules) · catalog (73 actions) · policy (risk, approval)
                      · executor (validate → classify → approve → run → verify → record) · graphs
+    ↓                ├─ automation/engine/  bridge protocol → C#/.NET engine (engine/dotnet) or Python engine
+                     ├─ computer/           HighhX browser (DevTools) · computer runtime (element safety)
+                     └─ verification/       strategies: page_open, media_playing, file_exists …
     ↓
 safety/              classifier · action gate · confirmation tickets · audit log
     ↓
@@ -35,7 +43,8 @@ Cross-cutting packages: `approvals/` (risk levels, rules, approval manager),
 Every entry point ends in the same executor:
 
 ```text
-typed text ──▶ router ──▶ resolver ──▶ Resolution(steps) ─┐
+typed text ──▶ deterministic resolver ──▶ JSON plan ──▶ plan runner ─┐   (Free; traced)
+highhx "…" / highhx do ─▶ deterministic resolver ──▶ plan runner ───┤
 /run, highhx actions run ────────────────────────────────┤
 workflow `action:` step ─────────────────────────────────┼─▶ ActionExecutor.plan ─▶ execute
 agent run_actions graph ─▶ validate_graph ───────────────┤      (actor = user | agent)
@@ -57,7 +66,15 @@ execute: ActionGate.authorize (classifier + catalog floor + policy + approval, t
 | `actions/handlers/` | Command-backed actions (`delegate`), files, git, browser, project detection |
 | `actions/context.py` | Structured project context (names only, never secret values) |
 | `actions/events.py` | Event names, the JSON Lines event log |
-| `agent/router.py` | Free routing: resolve, or explain the Pro capability with local alternatives |
+| `language/` | Parser, verb grammar, entity extraction, target registry (`data/targets.yaml` + the user's `targets.yaml`) |
+| `decision/deterministic.py`, `decision/risk.py` | Free: the deterministic decision (route local · unknown · pro), risk classes |
+| `decision/advanced.py` | The Pro-only gate for JEv / advanced decision-model reasoning (today fulfilled by the Pro agent) |
+| `plans/schema.py`, `plans/planner.py`, `plans/runner.py`, `plans/request.py` | JSON action plans: schema and validation, building, verified execution, one-shot requests |
+| `verification/strategies.py` | Named post-conditions for plan steps |
+| `automation/engine/` | The automation bridge: protocol v1, engine selection, Python engine, .NET engine client, a desktop provider for the computer runtime |
+| `engine/dotnet/` | The C#/.NET automation engine (`highhx-automation`) |
+| `observability/runs.py` | Automation run traces and metrics (`highhx runs`) |
+| `agent/router.py` | Free routing: the deterministic plan, or the Pro capability with local alternatives |
 | `agent/repl.py`, `agent/ui.py`, `agent/input.py` | The interactive session (one UI for Free and Pro) |
 | `agent/launch.py` | Session start: capabilities, agent attachment, event log |
 | `agent/tools/actions.py` | `run_actions`: the agent's structured action graphs |

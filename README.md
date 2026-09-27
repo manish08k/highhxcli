@@ -8,7 +8,7 @@ cancellation, verifies the result, records it and can undo it where that is poss
 
 | | |
 |---|---|
-| **HighhX Free — deterministic developer automation** | The interactive session and the full developer CLI: plain language for known, fully specified requests, 61 actions (files, git, packages, docker, databases, services, browser, deployments, security, workflows, shell), workflows with rollback, resume and cancel, `/plan` + `/approve`, `/undo`, voice with local speech-to-text. No AI, no account. |
+| **HighhX Free — deterministic developer and computer automation** | Plain language → a **deterministic resolver** (no AI) → a JSON action plan → verified automation of websites, applications, the keyboard, files, git and your project (*open Gmail and search internship*, *play lofi on YouTube*, *switch to Slack*, *open my project and run the tests*). The interactive session and the full developer CLI: 73 actions (files, git, packages, docker, databases, services, browser, deployments, security, workflows, shell), workflows with rollback, resume and cancel, `/plan` + `/approve`, `/undo`, voice with local speech-to-text. No AI, no account. |
 | **HighhX Pro — deterministic automation + AI developer agent** | The same session with the AI agent attached: open-ended requests, planning, repository-wide changes, debugging, refactoring, AI computer use — proposed as action graphs that the same executor validates, rates, approves and runs. Autonomous tasks: *"fix the login bug and make sure all tests pass"* runs until HighhX itself has verified the tests. |
 
 Run `highhx` in a terminal and describe what you want. Free and Pro share one interface and
@@ -21,6 +21,7 @@ and enforces them. The AI only chooses actions; it never gets its own way to run
 [Product specification](docs/PRODUCT_SPEC.md) (start here) ·
 [Architecture](docs/ARCHITECTURE.md) · [Action engine](docs/ACTION_ENGINE.md) ·
 [Safety model](docs/SAFETY_MODEL.md) · [Security](docs/SECURITY.md) ·
+[Free automation](docs/FREE_AUTOMATION.md) ·
 [Free and Pro](docs/FREE_PRO.md) · [Agent runtime](docs/AGENT_RUNTIME.md) ·
 [Automation](docs/AUTOMATION.md) · [Voice](docs/VOICE.md) ·
 [Observability](docs/OBSERVABILITY.md) · [Plugin system](docs/PLUGIN_SYSTEM.md) ·
@@ -52,6 +53,7 @@ Suggested actions
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [The interactive session](#the-interactive-session)
+- [HighhX Free: plain-language automation](#highhx-free-plain-language-automation)
 - [HighhX Pro: the AI developer agent](#highhx-pro-the-ai-developer-agent)
 - [Commands](#commands)
 - [Workflows](#workflows)
@@ -117,6 +119,11 @@ highhx run ci          # run a workflow; parallel where dependencies allow
 highhx run ci --dry-run
 highhx history         # what ran, when, how long, exit codes
 highhx logs            # output of the last execution (secrets redacted)
+
+highhx "show git status"                       # plain language works as a command, too
+highhx "open Gmail and search internship"      # deterministic, verified, no AI
+highhx do --plan --json "play lofi on YouTube" # the JSON action plan, nothing runs
+highhx runs                                    # traces of plain-language runs
 ```
 
 `highhx init` creates:
@@ -201,6 +208,47 @@ $ highhx
   `/plan` + `/approve`, and `/login` for Pro.
 - **Voice.** `highhx voice` or `/voice on`: push-to-talk with a local speech-to-text engine;
   transcripts are confirmed before they run ([docs/VOICE.md](docs/VOICE.md)).
+
+## HighhX Free: plain-language automation
+
+Free understands short requests about your computer and your project — without an LLM, an AI
+API or an account — and carries them out as verified, traced automation:
+
+```text
+❯ open YouTube and play Adhento Gani
+
+◉ open YouTube  browser.open · low
+✓ open YouTube — open https://www.youtube.com (1.5s)
+  ↳ verified — YouTube is open
+◉ search YouTube for 'Adhento Gani'  browser.search · low
+✓ search YouTube for 'Adhento Gani' (1.1s)
+  ↳ verified — results for 'Adhento Gani' are showing
+◉ play the first YouTube result  browser.play · low
+✓ play the first YouTube result — playing 'Adhento Gaani Vunnapaatuga …' (3.8s)
+  ↳ verified — playing Adhento Gaani Vunnapaatuga …
+3/3 steps · verified · 6.4s · highhx runs show run_20260928T101500_3f2a
+```
+
+- **The deterministic resolver** splits the request into clauses, recognises
+  verbs (*open, search, play, switch to, press, scroll, click, type, create, list, run* and
+  the developer requests), resolves names against a **target registry** (websites,
+  applications, project places — data in YAML, extensible in `targets.yaml`) and produces a
+  versioned **JSON action plan**: each step's action, target, parameters, risk
+  (safe / controlled / high), executor and verification.
+- **Execution** goes step by step through the action executor — the same risk
+  classification, approvals and guardrails as everything else — and each step is
+  **verified** (page open, results showing, media playing, app in front, file exists, exit
+  code). A step that claims success but fails verification is a failure; the run stops
+  there and says why.
+- **Web** steps run in the HighhX browser (its own Chrome profile, via DevTools). **Desktop**
+  steps go through the **automation bridge** to the C#/.NET engine (`engine/dotnet`) when
+  installed, else the built-in Python engine; keys are never sent to a terminal.
+- **Unknown** names are explained (*I don't know an app or website called 'spotifyy' yet*);
+  **open-ended** requests (*find the most important email from last week and draft a
+  response*) show what HighhX Pro would do. Nothing is guessed.
+- **Every run is traced**: `highhx runs`, `highhx runs show`, `highhx runs stats`.
+
+Details: [docs/FREE_AUTOMATION.md](docs/FREE_AUTOMATION.md).
 
 ## HighhX Pro: the AI developer agent
 

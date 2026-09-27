@@ -1,0 +1,170 @@
+# Built-in targets HighhX Free knows by name. Users add their own in <config dir>/targets.yaml
+# (same format). Names match after normalisation ("the", "my", ".com", "app", "website" dropped)
+# and only exactly — never by similarity.
+#
+# sites:  id, name, aliases, url, capabilities (open / search / play), and optionally
+#         search   URL template with {query}
+#         results  substring of the URL once search results show (verification)
+#         signin   hosts that mean "you are not signed in" (reported, never worked around)
+#         play     how media is played: results URL, the result-link href marker, the watch-URL marker
+# apps:   id, name, aliases, kind (app / browser / terminal / editor / files), automatable
+#         (a browser HighhX drives itself through DevTools)
+# project: id, aliases, and either path (relative to the project root) or find (first existing)
+version: 1
+
+sites:
+  - id: youtube
+    name: YouTube
+    aliases: [youtube, yt, youtube.com]
+    url: https://www.youtube.com
+    capabilities: [open, search, play]
+    search: https://www.youtube.com/results?search_query={query}
+    results: /results?search_query=
+    play:
+      results: https://www.youtube.com/results?search_query={query}
+      result_href: /watch?v=
+      watch_url: /watch
+  - id: google
+    name: Google
+    aliases: [google, google.com, google search]
+    url: https://www.google.com
+    capabilities: [open, search]
+    search: https://www.google.com/search?q={query}
+    results: /search?q=
+  - id: gmail
+    name: Gmail
+    aliases: [gmail, mail, google mail, email, my email, my inbox, inbox]
+    url: https://mail.google.com/
+    capabilities: [open, search]
+    search: https://mail.google.com/mail/u/0/#search/{query}
+    results: "#search/"
+    signin: [accounts.google.com, workspace.google.com]
+  - id: github
+    name: GitHub
+    aliases: [github, github.com]
+    url: https://github.com
+    capabilities: [open, search]
+    search: https://github.com/search?q={query}
+    results: /search?q=
+    signin: [github.com/login]
+  - id: google-drive
+    name: Google Drive
+    aliases: [google drive, drive, my drive, gdrive]
+    url: https://drive.google.com/
+    capabilities: [open, search]
+    search: https://drive.google.com/drive/search?q={query}
+    results: /search?q=
+    signin: [accounts.google.com, workspace.google.com]
+  - id: google-calendar
+    name: Google Calendar
+    aliases: [google calendar, calendar, my calendar, gcal]
+    url: https://calendar.google.com/
+    capabilities: [open, search]
+    search: https://calendar.google.com/calendar/r/search?q={query}
+    results: /search?q=
+    signin: [accounts.google.com, workspace.google.com]
+  - id: stackoverflow
+    name: Stack Overflow
+    aliases: [stack overflow, stackoverflow, so]
+    url: https://stackoverflow.com
+    capabilities: [open, search]
+    search: https://stackoverflow.com/search?q={query}
+    results: /search?q=
+  - id: wikipedia
+    name: Wikipedia
+    aliases: [wikipedia, wiki]
+    url: https://en.wikipedia.org
+    capabilities: [open, search]
+    search: https://en.wikipedia.org/w/index.php?search={query}
+  - id: python-docs
+    name: Python documentation
+    aliases: [python documentation, python docs, docs.python.org]
+    url: https://docs.python.org/3/
+    capabilities: [open, search]
+    search: https://docs.python.org/3/search.html?q={query}
+    results: search.html?q=
+  - id: pypi
+    name: PyPI
+    aliases: [pypi, pypi.org]
+    url: https://pypi.org
+    capabilities: [open, search]
+    search: https://pypi.org/search/?q={query}
+    results: /search/?q=
+  - id: npm
+    name: npm
+    aliases: [npm, npmjs, npmjs.com]
+    url: https://www.npmjs.com
+    capabilities: [open, search]
+    search: https://www.npmjs.com/search?q={query}
+    results: /search?q=
+  - id: mdn
+    name: MDN
+    aliases: [mdn, mdn web docs]
+    url: https://developer.mozilla.org
+    capabilities: [open, search]
+    search: https://developer.mozilla.org/en-US/search?q={query}
+    results: /search?q=
+  - id: reddit
+    name: Reddit
+    aliases: [reddit, reddit.com]
+    url: https://www.reddit.com
+    capabilities: [open, search]
+    search: https://www.reddit.com/search/?q={query}
+    results: /search/?q=
+  - id: google-maps
+    name: Google Maps
+    aliases: [google maps, maps]
+    url: https://www.google.com/maps
+    capabilities: [open, search]
+    search: https://www.google.com/maps/search/{query}
+    results: /maps/search/
+  - id: spotify-web
+    name: Spotify Web
+    aliases: [spotify web, open.spotify.com]
+    url: https://open.spotify.com
+    capabilities: [open, search]
+    search: https://open.spotify.com/search/{query}
+    results: /search/
+
+apps:
+  - {id: chrome, name: Google Chrome, aliases: [chrome, google chrome], kind: browser, automatable: true}
+  - {id: edge, name: Microsoft Edge, aliases: [edge, microsoft edge], kind: browser, automatable: true}
+  - {id: brave, name: Brave Browser, aliases: [brave, brave browser], kind: browser, automatable: true}
+  - {id: safari, name: Safari, aliases: [safari], kind: browser}
+  - {id: firefox, name: Firefox, aliases: [firefox], kind: browser}
+  - {id: terminal, name: Terminal, aliases: [terminal, the terminal, terminal app], kind: terminal}
+  - {id: iterm, name: iTerm, aliases: [iterm, iterm2], kind: terminal}
+  - {id: vscode, name: Visual Studio Code, aliases: [vscode, vs code, visual studio code, code editor], kind: editor}
+  - {id: finder, name: Finder, aliases: [finder, file browser, files app], kind: files}
+  - {id: slack, name: Slack, aliases: [slack]}
+  - {id: spotify, name: Spotify, aliases: [spotify]}
+  - {id: notes, name: Notes, aliases: [notes, apple notes]}
+  - {id: calculator, name: Calculator, aliases: [calculator]}
+  - {id: xcode, name: Xcode, aliases: [xcode], kind: editor}
+  - {id: settings, name: System Settings, aliases: [system settings, settings, preferences, system preferences]}
+  - {id: activity-monitor, name: Activity Monitor, aliases: [activity monitor]}
+  - {id: zoom, name: zoom.us, aliases: [zoom]}
+  - {id: discord, name: Discord, aliases: [discord]}
+  - {id: postman, name: Postman, aliases: [postman]}
+  - {id: figma, name: Figma, aliases: [figma]}
+  - {id: notion, name: Notion, aliases: [notion]}
+  - {id: mail, name: Mail, aliases: [apple mail, mail app]}
+  - {id: messages, name: Messages, aliases: [messages, imessage]}
+
+project:
+  - id: project
+    aliases: [project, my project, the project, this project, current project, repo, repository, my repo,
+              project folder, project directory, project root, current folder, current directory, this folder]
+    path: .
+  - id: readme
+    aliases: [readme, the readme, readme file, project readme]
+    find: [README.md, README.rst, README.txt, README, readme.md]
+  - id: source
+    aliases: [source, source code, source folder, source directory, the source, src folder]
+    find: [src, lib, app, source]
+  - id: tests
+    aliases: [tests folder, test folder, tests directory, the tests folder]
+    find: [tests, test, __tests__, spec]
+  - id: docs
+    aliases: [docs, docs folder, documentation folder, the docs]
+    find: [docs, doc, documentation]

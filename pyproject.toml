@@ -62,7 +62,7 @@ packages = ["src/highhx"]
 "schemas" = "highhx/_schemas"
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "templates", "schemas", "docs", "tests", "examples", "scripts", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", ".gitignore"]
+include = ["src", "engine", "templates", "schemas", "docs", "tests", "examples", "scripts", "README.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", ".gitignore"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -224,6 +224,30 @@ class TerminalUI:
             why = "timed out" if status == "timeout" else (result.error or result.summary or "failed")
             self.console.print(f"[fail]{self.symbols.fail}[/fail] {escape(label)} [fail]— {escape(why)}[/fail]{timing}")
 
+    def step_verified(self, label: str, status: str, detail: str) -> None:
+        """A plan step's verification, under the action's own line (the action reported success).
+        When verification fails, the step is shown as the failure it is."""
+        self._pause()
+        if status == "verified":
+            self.console.print(f"  [dim]↳ verified{f' — {escape(detail)}' if detail else ''}[/dim]")
+        elif status == "unverified":
+            self.console.print(f"  [dim]↳ not verified{f' — {escape(detail)}' if detail else ''}[/dim]")
+        else:
+            self.console.print(
+                f"[fail]{self.symbols.fail}[/fail] {escape(label)} [fail]— verification failed: {escape(detail)}[/fail]"
+            )
+
+    def run_summary(self, run_id: str, done: int, total: int, verification: str, seconds: float, reason: str) -> None:
+        """One line after a multi-step plan: what finished, what was verified, where the trace is."""
+        self._pause()
+        if reason:
+            self.console.print(f"[fail]Stopped at {escape(reason)}[/fail]")
+        style = "ok" if done == total and verification != "failed" else "dim"
+        self.console.print(
+            f"[{style}]{done}/{total} steps · {escape(verification)}[/{style}] [dim]· {seconds:.1f}s · "
+            f"highhx runs show {escape(run_id)}[/dim]"
+        )
+
     # ------------------------------------------------------------------ tasks
     def task_started(self, goal: str, checks: Sequence[str], attempts: int, missing: Sequence[str]) -> None:
         self._pause()
@@ -301,6 +325,25 @@ class TerminalUI:
                 title=f"[{style}]{title}[/{style}]",
                 title_align="left",
                 border_style=border,
+                box=ROUNDED,
+                padding=(0, 2),
+            )
+        )
+
+    def unknown_action(self, reason: str, suggestions: Sequence[str]) -> None:
+        """A request HighhX recognised only partly: say exactly what it did not know. Nothing ran."""
+        self._pause()
+        body = f"[bold]{escape(reason)}[/bold]"
+        if suggestions:
+            body += "\n" + "\n".join(f"[dim]→ {escape(s)}[/dim]" for s in suggestions)
+        body += "\n[dim]Nothing ran. /tools lists what HighhX can do; /pro covers open-ended requests.[/dim]"
+        self.console.print()
+        self.console.print(
+            Panel(
+                body,
+                title="[warn]I don't know this action yet[/warn]",
+                title_align="left",
+                border_style="yellow",
                 box=ROUNDED,
                 padding=(0, 2),
             )

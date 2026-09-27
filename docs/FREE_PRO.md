@@ -7,14 +7,16 @@ the HighhX platform grants and enforces them.
 
 | | HighhX Free | HighhX Pro |
 |---|---|---|
-| Positioning | Deterministic developer automation | Deterministic automation + AI developer agent |
+| Positioning | Deterministic developer and computer automation | Deterministic automation + AI developer agent |
 | Account | Not needed | Needed (`highhx login`) |
-| Plain language | Known, fully specified requests (deterministic grammar) | Anything — the agent handles open-ended requests |
+| Plain language | Deterministic resolver (no AI, no JEv): natural language → deterministic decision → JSON action plan → verified automation ([FREE_AUTOMATION.md](FREE_AUTOMATION.md)); multi-step workflows included | Anything — natural language → LLM agent → context/memory/planning → tools and computer use → verification |
+| JEv / advanced reasoning | — (never: no model, no JEv, no AI service) | Yes — behind one gate (`highhx.decision.advanced`) granted only by the platform; today provided by the Pro agent. No separate JEv service exists yet |
+| Automation bridge / C# engine | Yes — every desktop action | Yes — the same bridge: the agent's desktop computer-use tools and actions |
 | Actions, workflows, shell, files, git, deploy | Yes — same catalog, same executor | Yes — same, plus the agent may propose them |
 | Planning | Resolver steps; `/plan` previews | Agent plans with approval; `run_actions` graphs |
 | Autonomous tasks | — | "…make sure all tests pass": works until HighhX verifies it (`/task`, `--verify`) |
 | Code changes | Formatters/linters (`project.fix`), explicit file actions | AI code generation, refactoring, debugging |
-| Browser/desktop | Known targets (`highhx computer`, flows, URLs) | AI computer use |
+| Browser/desktop | Known websites, apps and project places (target registry): open, search, play, switch to, keys, scroll, click by name — through the HighhX browser and the automation bridge (C#/.NET or Python engine) | AI computer use: dynamic, adaptive, with recovery and replanning |
 | Voice | Push-to-talk into the deterministic resolver | Push-to-talk into the agent |
 | Sessions | Local event log | Persistent, resumable, synced transcripts |
 | Models | none | Anthropic, OpenAI, Gemini via the HighhX gateway |
@@ -30,9 +32,10 @@ the HighhX platform grants and enforces them.
 3. **Free never constructs the agent runtime.** `create_session` is the only constructor, it
    requires a live platform confirmation of the `agent` feature, and a cached account (an
    editable local file) grants nothing.
-4. **Requests that need reasoning go to the Pro panel.** The resolver never guesses; the
-   router explains the capability ("AI debugging requires HighhX Pro") and offers local
-   actions.
+4. **Requests that need reasoning go to the Pro panel.** The deterministic resolver never guesses: a request it
+   plans completely runs on Free (several deterministic steps included); an unknown name is
+   explained; anything open-ended gets the capability it needs ("AI debugging requires
+   HighhX Pro") and local actions that can do part of it.
 5. **The platform decides.** Capabilities come from `/v1/me`; the AI gateway rejects a Free
    token with `402 plan_required` on every request, including computer-use tools.
 6. **Pro adds no execution path.** The agent's actions go through the same executor, with

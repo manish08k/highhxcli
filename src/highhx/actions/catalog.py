@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterator
 from functools import cache
 from typing import TYPE_CHECKING, Any
 
-from highhx.actions.handlers import files, native
+from highhx.actions.handlers import computer, files, native
 from highhx.actions.handlers.delegate import delegate, flag, listed, opt
 from highhx.actions.policy import Risk
 from highhx.actions.spec import (
@@ -310,6 +310,51 @@ def _specs() -> list[ActionSpec]:
             target=lambda i: str(i.get("path", "")),
             command=lambda i: f"rm -rf {shlex.quote(str(i.get('path', '')))}" if i.get("recursive") else None,
             preview=files.preview_delete,
+        ),
+        ActionSpec(
+            "filesystem.list",
+            "List a project folder (default: the project root).",
+            computer.filesystem_list,
+            Obj({"path": Prop(Str(min_length=1))}),
+            {"path": "folder", "entries": "[{name, size}]"},
+            permissions=(READ_PROJECT,),
+            idempotent=True,
+            retry=READ_RETRY,
+            timeout=60,
+        ),
+        ActionSpec(
+            "filesystem.open",
+            "Open a project file or folder in an application (code in a text editor; executables are never opened).",
+            computer.filesystem_open,
+            Obj({"path": Prop(Str(min_length=1), required=True), "app": Prop(Str(min_length=1))}),
+            {"path": "what was opened", "with": "which application"},
+            Risk.LOW,
+            ActionKind.APP_LAUNCH,
+            (READ_PROJECT, DESKTOP),
+            timeout=30,
+            agent=False,
+            target=lambda i: str(i.get("path", "")),
+        ),
+        ActionSpec(
+            "filesystem.create",
+            "Create a new, empty file or a folder in the project (never overwrites; /undo removes it).",
+            computer.filesystem_create,
+            Obj(
+                {
+                    "path": Prop(Str(min_length=1), required=True),
+                    "kind": Prop(Str(choices=("file", "folder"))),
+                    "content": Prop(Str()),
+                }
+            ),
+            {"path": "created path", "kind": "file or folder"},
+            Risk.LOW,
+            ActionKind.WRITE_FILE,
+            (WRITE_PROJECT,),
+            timeout=30,
+            verify=computer.verify_exists,
+            compensate=computer.undo_create,
+            feature=AGENT_CODE_CHANGES,
+            target=lambda i: str(i.get("path", "")),
         ),
         ActionSpec(
             "filesystem.search",
@@ -676,9 +721,14 @@ def _specs() -> list[ActionSpec]:
         # --------------------------------------------------------------- browser
         ActionSpec(
             "browser.open",
-            "Open a URL in the HighhX browser (its own profile) and observe the page.",
-            native.browser_open,
-            Obj({"url": Prop(Str(min_length=1), required=True)}),
+            "Open a URL in the HighhX browser (its own profile) — or, with app, in that browser.",
+            computer.browser_open,
+            Obj(
+                {
+                    "url": Prop(Str(min_length=1), required=True),
+                    "app": Prop(Str(min_length=1), description="A browser, e.g. Safari (opens there; not automated)."),
+                }
+            ),
             {"url": "page URL", "title": "page title", "step": "outcome"},
             Risk.LOW,
             ActionKind.NAVIGATE,
@@ -688,6 +738,53 @@ def _specs() -> list[ActionSpec]:
             agent=False,
             target=lambda i: str(i.get("url", "")),
             aliases=("browser.navigate",),
+        ),
+        ActionSpec(
+            "browser.search",
+            "Search a site (YouTube, GitHub, Wikipedia …) or the web for a query.",
+            computer.browser_search,
+            Obj(
+                {
+                    "query": Prop(Str(min_length=1), required=True),
+                    "site": Prop(Str(min_length=1), description="A known site (default: the web)."),
+                    "app": Prop(Str(min_length=1), description="Open the results in this browser."),
+                }
+            ),
+            {"url": "results page", "query": "what was searched"},
+            Risk.LOW,
+            ActionKind.NAVIGATE,
+            (BROWSER, NETWORK),
+            timeout=120,
+            agent=False,
+            target=lambda i: f"{i.get('site') or 'web'}: {i.get('query', '')}",
+        ),
+        ActionSpec(
+            "browser.play",
+            "Play the first result for a query on a media site (YouTube): results → first result → start it.",
+            computer.browser_play,
+            Obj(
+                {
+                    "query": Prop(Str(min_length=1), required=True),
+                    "site": Prop(Str(min_length=1), description="A site that can play media (default: YouTube)."),
+                }
+            ),
+            {"url": "what is playing", "title": "its title", "playing": "the media started"},
+            Risk.LOW,
+            ActionKind.NAVIGATE,
+            (BROWSER, NETWORK),
+            timeout=180,
+            agent=False,
+            target=lambda i: f"{i.get('site') or 'YouTube'}: {i.get('query', '')}",
+        ),
+        ActionSpec(
+            "browser.find",
+            "Find controls on the current page whose name contains a text (targets for browser.click).",
+            computer.browser_find,
+            Obj({"text": Prop(Str(min_length=1), required=True)}),
+            {"matches": "[{role, name, target}]"},
+            permissions=(BROWSER,),
+            timeout=60,
+            agent=False,
         ),
         ActionSpec(
             "browser.click",
@@ -783,6 +880,86 @@ def _specs() -> list[ActionSpec]:
             {"path": "saved PNG", "bytes": "size"},
             permissions=(BROWSER, WRITE_PROJECT),
             timeout=60,
+            agent=False,
+        ),
+        ActionSpec(
+            "computer.focus",
+            "Bring an application to the front.",
+            computer.computer_focus,
+            Obj({"app": Prop(Str(min_length=1), required=True)}),
+            {"app": "focused application"},
+            Risk.LOW,
+            ActionKind.APP_LAUNCH,
+            (DESKTOP,),
+            timeout=30,
+            agent=False,
+            target=lambda i: str(i.get("app", "")),
+        ),
+        ActionSpec(
+            "computer.type",
+            "Type text into the frontmost application (never into a terminal — use !command).",
+            computer.computer_type,
+            Obj({"text": Prop(Str(min_length=1), required=True)}),
+            {"app": "where it was typed", "characters": "how many"},
+            Risk.MEDIUM,
+            ActionKind.UI_TYPE,
+            (DESKTOP,),
+            timeout=60,
+            agent=False,
+            target=lambda i: f"{len(str(i.get('text', '')))} character(s)",
+        ),
+        ActionSpec(
+            "computer.press",
+            "Press a key in the frontmost application (Enter and Delete ask first; never in a terminal).",
+            computer.computer_press,
+            Obj({"key": Prop(Str(min_length=1), required=True)}),
+            {"app": "where", "key": "which key"},
+            Risk.LOW,
+            ActionKind.UI_KEY,
+            (DESKTOP,),
+            timeout=30,
+            agent=False,
+            target=lambda i: str(i.get("key", "")),
+            risk_for=lambda i: (
+                Risk.MEDIUM if str(i.get("key", "")).lower() in ("enter", "return", "delete", "backspace") else Risk.LOW
+            ),
+        ),
+        ActionSpec(
+            "computer.hotkey",
+            "Press a key combination in the frontmost application, e.g. cmd+t (never in a terminal).",
+            computer.computer_hotkey,
+            Obj({"keys": Prop(Str(min_length=1), required=True)}),
+            {"app": "where", "keys": "the combination"},
+            Risk.MEDIUM,
+            ActionKind.UI_KEY,
+            (DESKTOP,),
+            timeout=30,
+            agent=False,
+            target=lambda i: str(i.get("keys", "")),
+        ),
+        ActionSpec(
+            "computer.click",
+            'Click a control in the frontmost application by role and name, e.g. "button:Save".',
+            computer.computer_click,
+            Obj({"target": Prop(Str(min_length=1), required=True), "timeout": Prop(Num(minimum=0))}),
+            {"step": "outcome"},
+            Risk.LOW,
+            ActionKind.UI_CLICK,
+            (DESKTOP,),
+            timeout=120,
+            agent=False,
+            target=lambda i: str(i.get("target", "")),
+        ),
+        ActionSpec(
+            "computer.scroll",
+            "Scroll the HighhX browser page (default) or the frontmost application.",
+            computer.computer_scroll,
+            Obj({"direction": Prop(Str(choices=("up", "down"))), "source": Prop(Str(choices=("browser", "desktop")))}),
+            {"step": "outcome"},
+            Risk.SAFE,
+            ActionKind.UI_SCROLL,
+            (BROWSER, DESKTOP),
+            timeout=30,
             agent=False,
         ),
         ActionSpec(

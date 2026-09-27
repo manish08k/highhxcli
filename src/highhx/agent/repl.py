@@ -60,12 +60,15 @@ from highhx.core.errors import (
     PlanRequiredError,
     QuotaExceededError,
 )
+from highhx.decision.advanced import advanced_reasoning_available
 from highhx.execution.cancellation import CancellationToken
 
 if TYPE_CHECKING:
     from highhx.agent.context import ProjectContext
     from highhx.cloud.account import Account, CloudAccount
     from highhx.commands import App
+    from highhx.decision.deterministic import Decision
+    from highhx.observability.runs import RunTrace
     from highhx.voice.mode import VoiceMode
 
 log = logging.getLogger(__name__)
@@ -372,7 +375,11 @@ class AgentREPL:
             self.ui.print("What would you like me to do? [dim](/help for commands)[/dim]")
         else:
             self.ui.print(
-                "What would you like to do? [dim]Try “run the tests”, “show git status”, `!ls` or /help.[/dim]"
+                "What would you like to do? HighhX automates your computer and your project — no AI needed:\n"
+                "  [italic]run the tests[/italic] · [italic]show git status[/italic] · [italic]open Safari[/italic]"
+                " · [italic]open YouTube and play …[/italic]\n"
+                "  [italic]open Chrome and search for …[/italic] · [italic]create a folder called …[/italic]"
+                " · [dim]`!ls` · /help[/dim]"
             )
 
     def welcome(self) -> None:
@@ -381,7 +388,8 @@ class AgentREPL:
         if not self.context.initialized:
             steps.append("[bold]/init[/bold] sets up HighhX in this project (config, policies, workflows)")
         steps.append(
-            "[bold]run the tests[/bold], [bold]show git status[/bold], [bold]deploy staging[/bold] — ask in plain words"
+            "ask in plain words: [bold]run the tests[/bold], [bold]open YouTube and search for …[/bold], "
+            "[bold]create a file called hello.py[/bold]"
         )
         steps.append("[bold]/plan <request>[/bold] previews what would run and its risk; [bold]/approve[/bold] runs it")
         if self.session is None:
@@ -638,16 +646,22 @@ class AgentREPL:
 
     # ------------------------------------------------------------- local route
     def local_request(self, text: str) -> None:
-        """Without the AI agent: deterministic actions, or the capability the request needs."""
-        planned = route(text, self.resolver_context())
+        """Without the AI agent: the deterministic plan, or the capability the request needs."""
+        decision = self.decide(text)
+        planned = route(text, self.resolver_context(), decision=decision)
         if planned.resolution is None and self.reconnect() and self.session is not None:
             self.turn(text)  # the platform is back and grants the agent
             return
         if planned.resolution is not None:
-            self.run_resolution(planned.resolution)
+            self.run_resolution(planned.resolution, decision)
             return
         assert planned.capability is not None
+        self.trace(decision).finish()
         self.events.emit(ev.INTENT_UNRESOLVED, text=text, capability=str(planned.capability))
+        if planned.unknown is not None:
+            self.ui.unknown_action(planned.unknown.reason, planned.unknown.suggestions)
+            self.last_summary = planned.unknown.reason
+            return
         ent = self.entitlements
         if ent.connection == Connection.CACHED and ent.tier == "Pro":
             # A Pro plan (as last known) that cannot reach the platform: the gap is the connection.
@@ -658,6 +672,24 @@ class AgentREPL:
             )
             return
         self.offer(planned.reason, planned.alternatives, lead=PRO_LEAD)
+
+    def decide(self, text: str) -> Decision:
+        """The deterministic decision, with each step's risk from the executor's own classifier."""
+        from highhx.decision.deterministic import DeterministicDecider
+
+        return DeterministicDecider(
+            self.resolver_context(), catalog=self.actions.catalog, risk_of=self._risk_of()
+        ).decide(text)
+
+    def trace(self, decision: Decision) -> RunTrace:
+        from highhx.observability.runs import RunTrace
+
+        return RunTrace(
+            decision, db=self.app.db if self.app is not None else None, redactor=self._redactor(), source="session"
+        )
+
+    def _redactor(self) -> Any:
+        return self.app.redactor if self.app is not None else None
 
     def offer(
         self,
@@ -691,22 +723,78 @@ class AgentREPL:
             self._resolver_context = ResolverContext.from_app(self.app)
         return self._resolver_context
 
-    def run_resolution(self, resolution: Resolution) -> bool:
-        """Run the resolved steps in order; stop at the first that does not succeed."""
+    def run_resolution(self, resolution: Resolution, decision: Decision | None = None) -> bool:
+        """Run a plan step by step — each through the action executor (risk, approval), then its
+        verification; stop at the first step that does not succeed."""
+        from highhx.decision.deterministic import LOCAL
+        from highhx.decision.deterministic import Decision as LocalDecision
+        from highhx.plans.planner import build_plan
+        from highhx.plans.runner import PlanRunner, StepOutcome
+        from highhx.plans.schema import PlanStep
+
         self.events.emit(
             ev.INTENT_RESOLVED,
             text=resolution.text,
             rule=resolution.rule,
             actions=[s.action for s in resolution.steps],
         )
+        if decision is None or decision.plan is None:
+            plan = build_plan(resolution.text, list(resolution.steps), self.actions.catalog, self._risk_of())
+            decision = LocalDecision(
+                resolution.text,
+                resolution.text,
+                LOCAL,
+                intent=plan.intent,
+                target=plan.target,
+                plan=plan,
+                resolution=resolution,
+                rule=resolution.rule,
+            )
+        assert decision.plan is not None
+        trace = self.trace(decision)
+
+        def execute(step: PlanStep) -> ActionResult | None:
+            return self.run_action(step.catalog_action, dict(step.params), label=step.description)
+
+        def verified(done: StepOutcome) -> None:
+            if done.check is not None and done.action_ok:
+                self.ui.step_verified(done.step.description, done.check.status, done.check.detail)
+
+        root = self.app.root if self.app is not None else None
+        outcome = PlanRunner(execute, root=root, on_verified=verified, trace=trace).run(decision.plan)
         steps = list(resolution.steps)
-        for index, step in enumerate(steps):
-            result = self.run_action(step.action, dict(step.inputs), label=step.description or step.action)
-            if result is None or not result.ok:
-                self.retryable = ("steps", steps[index:])
-                return False
+        failed = outcome.failed_step
+        if len(outcome.steps) > 1 or (failed is not None and failed.check is not None and failed.status == "failed"):
+            done = sum(1 for s in outcome.steps if s.ok)
+            self.ui.run_summary(
+                trace.run_id,
+                done,
+                len(outcome.steps),
+                outcome.verification,
+                outcome.seconds,
+                outcome.reason if len(outcome.steps) > 1 else "",
+            )
+        if failed is not None:
+            index = next(i for i, s in enumerate(outcome.steps) if s is failed)
+            self.retryable = ("steps", steps[index:])
+            self.last_summary = f"{failed.step.description}: {failed.error or failed.status}."
+            return False
         self.retryable = None
         return True
+
+    def _risk_of(self) -> Any:
+        from highhx.plans.planner import catalog_risk
+
+        executor = self.actions
+        fallback = catalog_risk(executor.catalog)
+
+        def risk_of(action: str, params: dict[str, Any]) -> Any:
+            try:
+                return executor.plan(action, params).decision.risk
+            except HighhXError:
+                return fallback(action, params)
+
+        return risk_of
 
     def run_action(
         self, name: str, inputs: dict[str, Any], *, label: str | None = None, planned: Planned | None = None
@@ -833,7 +921,8 @@ class AgentREPL:
         before = self.entitlements
         self._last_check = time.monotonic()
         self.entitlements = capabilities.resolve(self.cloud)
-        if self.entitlements.has(Capability.AI_AGENT) and self.session is None and self.session_factory is not None:
+        pro = advanced_reasoning_available(self.entitlements)  # the Pro-only gate (JEv / the agent)
+        if pro and self.session is None and self.session_factory is not None:
             try:
                 self.session, self.account, _ = self.session_factory()
             except HighhXError as exc:
@@ -841,7 +930,7 @@ class AgentREPL:
                 self.entitlements = dataclasses.replace(self.entitlements, capabilities=LOCAL, problem=exc.message)
                 return
             self.ui.notice("info", f"{self.entitlements.status} — the AI agent now handles your requests.")
-        elif not self.entitlements.has(Capability.AI_AGENT) and self.session is not None:
+        elif not pro and self.session is not None:
             self.session.close()
             self.session = None
             self.ui.notice("info", f"{self.entitlements.status} — continuing with local capabilities.")
@@ -896,9 +985,15 @@ class AgentREPL:
             )
         else:
             self.ui.print(
-                "\n[bold]Describe what you want.[/bold] Known requests run locally without AI — "
-                "[italic]run the tests[/italic], [italic]show git status[/italic], [italic]deploy staging[/italic], "
-                "[italic]stop the backend[/italic]. Open-ended tasks are for the AI agent (/pro).\n"
+                "\n[bold]Describe what you want.[/bold] HighhX Free understands known actions without AI and "
+                "chains them with “and” / “then”:\n"
+                "  developer   [italic]run the tests[/italic] · [italic]check git changes[/italic] · "
+                "[italic]deploy staging[/italic] · [italic]run python hello.py[/italic]\n"
+                "  computer    [italic]open Safari[/italic] · [italic]open YouTube and play …[/italic] · "
+                "[italic]open Chrome and search for …[/italic] · [italic]press cmd+t[/italic]\n"
+                "  files       [italic]create a folder called …[/italic] · [italic]open hello.py[/italic] · "
+                "[italic]list files in src[/italic] · [italic]open the project folder[/italic]\n"
+                "Anything it doesn't know yet, it says so — open-ended tasks are for the AI agent (/pro).\n"
             )
         table = Table.grid(padding=(0, 2))
         table.add_column(style="bold magenta", no_wrap=True)
