@@ -191,7 +191,7 @@ highhx computer observe [OPTIONS]
 
 | Option | Description |
 |---|---|
-| `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+| `--source` | browser (DevTools DOM), desktop (native accessibility, macOS) or screen (local OCR, read-only). (default: `browser`) |
 | `--app` | Desktop source: application to inspect (default: frontmost). |
 | `--actions` | Also list the valid action ids. |
 

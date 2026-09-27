@@ -11,6 +11,28 @@ project uses [Semantic Versioning](https://semver.org/).
 Two plans, one platform: **Free** is deterministic HighhX; **Pro** adds the AI agent and AI
 computer use on top of the same tools, safety, confirmation, verification and audit.
 
+### Terminal identity
+
+- **The HighhX knight**: terminal-native brand art (Unicode quadrant blocks, ASCII fallback;
+  full 26x31 and compact 13x15) shown by `highhx` on a terminal and at the start of
+  `highhx agent`, sized to the terminal (`HIGHHX_BANNER=full|compact|off`, `HIGHHX_ASCII`).
+
+### Reliability and security hardening
+
+- Platform: AI stream state and rate limits live in the database (migration 0003), so any
+  instance can resume, replay or cancel a stream; dead instances' streams end with a retryable
+  error; tested with two instances sharing only the database (SQLite and PostgreSQL).
+- Providers: cancellation aborts the upstream socket immediately; inactivity timeouts; SDK
+  retries only before streaming; truncated streams are errors, not answers; raw transport errors
+  are normalised — tested through the real Anthropic, OpenAI and Gemini SDKs over HTTP.
+- Browser: a lost DevTools answer is an *unknown* outcome that is never repeated (also after a
+  reconnect); per-call timeouts now fire when the browser is silent; waits for navigations
+  started by an action; page-text changes count for verification; sockets closed on crashes.
+- OCR is available as a read-only `screen` source; OCR and accessibility subprocesses (and
+  their children) are killed on cancellation.
+- Migration names are validated before use in SQL (MySQL backslash escaping); project XML
+  manifests with DTDs/entities are refused; health checks only speak http(s).
+
 ### Features
 
 - **Shared safety layer** (`highhx/safety`) for Free automation and the agent: semantic

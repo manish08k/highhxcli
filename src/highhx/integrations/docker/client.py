@@ -50,7 +50,7 @@ def parse_compose_ps(text: str) -> list[ComposeService]:
     for item in items:
         publishers = item.get("Publishers") or []
         ports = ", ".join(
-            f"{p.get('URL') or '0.0.0.0'}:{p.get('PublishedPort')}->{p.get('TargetPort')}/{p.get('Protocol', 'tcp')}"
+            f"{p.get('URL') or '0.0.0.0'}:{p.get('PublishedPort')}->{p.get('TargetPort')}/{p.get('Protocol', 'tcp')}"  # nosec B104 - display string for docker's own port output, not a bind
             for p in publishers
             if p.get("PublishedPort")
         ) or str(item.get("Ports") or "")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
@@ -25,9 +26,12 @@ class HealthResult:
 
 
 def http_probe(url: str, *, timeout: float, expected: int) -> tuple[bool, str]:
+    if urllib.parse.urlsplit(url).scheme.lower() not in ("http", "https"):
+        # urlopen also speaks file:// and ftp://; a health check must only ever be an HTTP request.
+        return False, f"{url}: only http:// and https:// health checks are supported"
     request = urllib.request.Request(url, headers={"User-Agent": "highhx-health-check"}, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 - scheme checked above
             status = response.status
     except urllib.error.HTTPError as exc:
         status = exc.code

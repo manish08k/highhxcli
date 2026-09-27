@@ -116,12 +116,33 @@ def _strip_ns(tag: str) -> str:
     return tag.split("}", 1)[-1]
 
 
+MAX_XML_BYTES = 5 * 1024 * 1024
+_XML_DTD = re.compile(rb"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
+
+
+def parse_xml(path: Path) -> ET.ElementTree[ET.Element]:
+    """Parse a project XML manifest from a possibly untrusted repository.
+
+    Manifests never need a DTD, so documents that declare one (or entities) are refused
+    outright — no entity expansion ("billion laughs") or external entity can occur,
+    independent of the XML library's own limits — and so are oversized files.
+    """
+    data = path.read_bytes()
+    if len(data) > MAX_XML_BYTES:
+        raise ET.ParseError(f"{path.name} is larger than {MAX_XML_BYTES // (1024 * 1024)} MB")
+    if _XML_DTD.search(data):
+        raise ET.ParseError(f"{path.name} declares a DTD or entities, which are not allowed")
+    parser = ET.XMLParser()  # nosec B314 - DTD/entity declarations and oversized input are refused above
+    parser.feed(data)
+    return ET.ElementTree(parser.close())
+
+
 def read_pom(path: Path) -> dict[str, Any] | None:
     """Minimal pom.xml reader: groupId, artifactId, version, dependency artifactIds."""
     if not path.is_file():
         return None
     try:
-        tree = ET.parse(path)
+        tree = parse_xml(path)
     except (ET.ParseError, OSError):
         return None
     root = tree.getroot()
@@ -298,7 +319,7 @@ def manifest_problems(root: Path) -> list[str]:
     pom = root / "pom.xml"
     if pom.is_file():
         try:
-            ET.parse(pom)
-        except ET.ParseError as exc:
+            parse_xml(pom)
+        except (ET.ParseError, OSError) as exc:
             problems.append(f"pom.xml: cannot be parsed ({exc})")
     return problems

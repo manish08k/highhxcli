@@ -6,7 +6,13 @@ from pathlib import Path
 
 from highhx.core.errors import IntegrationError, ToolNotFoundError
 from highhx.execution.command import CommandSpec
-from highhx.integrations.databases.base import MIGRATIONS_TABLE, DatabaseAdapter, PingResult, create_table_sql
+from highhx.integrations.databases.base import (
+    MIGRATIONS_TABLE,
+    DatabaseAdapter,
+    PingResult,
+    create_table_sql,
+    sql_literal,
+)
 from highhx.utils.time import iso_now
 
 
@@ -69,7 +75,7 @@ class PostgresAdapter(DatabaseAdapter):
     def applied_migrations(self) -> dict[str, str]:
         self.execute_script(create_table_sql(), name="create-migrations-table")
         result = self.engine.capture(
-            self._psql("-At", "-F", "\t", "-c", f"SELECT name, checksum FROM {MIGRATIONS_TABLE}")
+            self._psql("-At", "-F", "\t", "-c", f"SELECT name, checksum FROM {MIGRATIONS_TABLE}")  # nosec B608 - constant table name, no values
         )
         if not result.ok:
             raise IntegrationError("Could not read applied migrations", details=result.stderr.strip().splitlines()[-3:])
@@ -77,18 +83,16 @@ class PostgresAdapter(DatabaseAdapter):
         return dict(rows)
 
     def record_migration(self, name: str, checksum: str) -> None:
-        escaped = name.replace("'", "''")
         self.execute_script(
-            f"INSERT INTO {MIGRATIONS_TABLE} (name, checksum, applied_at) VALUES ('{escaped}', '{checksum}', '{iso_now()}') "
+            f"INSERT INTO {MIGRATIONS_TABLE} (name, checksum, applied_at) VALUES ({sql_literal(name)}, {sql_literal(checksum, 'checksum')}, '{iso_now()}') "  # nosec B608 - constant table name; values validated by sql_literal
             f"ON CONFLICT (name) DO UPDATE SET checksum = EXCLUDED.checksum;",
             name="record-migration",
         )
 
     def apply_migration(self, name: str, sql: str, checksum: str) -> None:
-        escaped = name.replace("'", "''")
         script = (
-            f"{sql}\n;\nINSERT INTO {MIGRATIONS_TABLE} (name, checksum, applied_at) "
-            f"VALUES ('{escaped}', '{checksum}', '{iso_now()}');"
+            f"{sql}\n;\nINSERT INTO {MIGRATIONS_TABLE} (name, checksum, applied_at) "  # nosec B608 - constant table name; values validated by sql_literal
+            f"VALUES ({sql_literal(name)}, {sql_literal(checksum, 'checksum')}, '{iso_now()}');"
         )
         self.execute_script(script, name=name)
 

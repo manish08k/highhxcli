@@ -6,7 +6,13 @@ from pathlib import Path
 
 from highhx.core.errors import IntegrationError, ToolNotFoundError
 from highhx.execution.command import CommandSpec
-from highhx.integrations.databases.base import MIGRATIONS_TABLE, DatabaseAdapter, PingResult, create_table_sql
+from highhx.integrations.databases.base import (
+    MIGRATIONS_TABLE,
+    DatabaseAdapter,
+    PingResult,
+    create_table_sql,
+    sql_literal,
+)
 from highhx.utils.time import iso_now
 
 
@@ -57,16 +63,15 @@ class MySQLAdapter(DatabaseAdapter):
 
     def applied_migrations(self) -> dict[str, str]:
         self.execute_script(create_table_sql().replace('"', "`"), name="create-migrations-table")
-        result = self.engine.capture(self._mysql("-N", "-B", "-e", f"SELECT name, checksum FROM {MIGRATIONS_TABLE}"))
+        result = self.engine.capture(self._mysql("-N", "-B", "-e", f"SELECT name, checksum FROM {MIGRATIONS_TABLE}"))  # nosec B608 - constant table name; values validated by sql_literal
         if not result.ok:
             raise IntegrationError("Could not read applied migrations", details=result.stderr.strip().splitlines()[-3:])
         rows = [line.split("\t", 1) for line in result.stdout.splitlines() if "\t" in line]
         return dict(rows)
 
     def record_migration(self, name: str, checksum: str) -> None:
-        escaped = name.replace("'", "''")
         self.execute_script(
-            f"REPLACE INTO {MIGRATIONS_TABLE} (name, checksum, applied_at) VALUES ('{escaped}', '{checksum}', '{iso_now()}');",
+            f"REPLACE INTO {MIGRATIONS_TABLE} (name, checksum, applied_at) VALUES ({sql_literal(name)}, {sql_literal(checksum, 'checksum')}, '{iso_now()}');",
             name="record-migration",
         )
 

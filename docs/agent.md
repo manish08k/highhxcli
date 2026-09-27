@@ -116,6 +116,10 @@ and whether it was verified.
   platform answers with an error), the CLI
   reconnects with the same idempotency key and `Last-Event-ID`; the platform replays only the
   missed events — the model is not called again and usage is not charged twice.
+- **Upstream providers** (on the platform, or self-hosted): each call has an inactivity
+  timeout (300 s); SDK-level retries happen only before a response starts streaming, so no
+  output is ever duplicated; a stream that ends without its final stop signal is treated as a
+  failed (retryable) call, never as a complete answer; transport errors are normalised.
 - **Cancellation** (Ctrl+C, `highhx agent stop`, SIGTERM) propagates to the model stream
   (closed locally and cancelled on the platform), the retry loop, running tools and their
   child processes, and the browser connection. A cancelled turn is saved as `cancelled`.

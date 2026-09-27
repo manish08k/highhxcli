@@ -20,7 +20,6 @@ from rich.panel import Panel
 from rich.status import Status
 from rich.syntax import Syntax
 from rich.table import Table
-from rich.text import Text
 
 from highhx.agent.messages import ToolCall
 from highhx.agent.planner import Plan
@@ -329,9 +328,19 @@ class TerminalUI:
 
     # ------------------------------------------------------------ chrome
     def banner(self, context: ProjectContext, rows: list[tuple[str, str]]) -> None:
-        title = Text.assemble(("HIGHHX PRO", "bold magenta"), "\n", ("AI DEVELOPER AGENT", "dim"))
-        title.justify = "center"
-        self.console.print(Panel(title, box=ROUNDED, border_style="magenta", padding=(0, 2)))
+        from highhx import __version__
+        from highhx.ui.branding import banner, home_relative
+
+        self.console.print(
+            banner(
+                self.console,
+                f"HighhX v{__version__}",
+                "AI Developer Agent · Pro",
+                home_relative(str(context.root)),
+                accent="bold magenta",
+            )
+        )
+        self.console.print()
         table = Table.grid(padding=(0, 3))
         table.add_column(style="dim", no_wrap=True)
         table.add_column(overflow="fold")

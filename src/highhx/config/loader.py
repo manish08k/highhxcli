@@ -41,7 +41,7 @@ _StrictLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _c
 
 def parse_yaml(text: str) -> Any:
     """Safe YAML parsing that also rejects duplicate keys."""
-    return yaml.load(text, Loader=_StrictLoader)
+    return yaml.load(text, Loader=_StrictLoader)  # nosec B506 - _StrictLoader subclasses yaml.SafeLoader (no object construction)
 
 
 def load_yaml(path: Path) -> Any:

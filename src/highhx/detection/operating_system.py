@@ -43,7 +43,7 @@ def detect_os() -> OSInfo:
         machine=platform.machine(),
         python_version=platform.python_version(),
         python_executable=sys.executable,
-        shell=os.environ.get("SHELL") or os.environ.get("COMSPEC"),
+        shell=os.environ.get("SHELL") or os.environ.get("COMSPEC"),  # nosec B604 - `shell` is a data field ($SHELL), not a subprocess argument
         wsl=is_wsl(),
         ci=is_ci(),
         cpu_count=os.cpu_count() or 1,

@@ -64,10 +64,14 @@ Run behind TLS; set `FORWARDED_ALLOW_IPS` to your proxy's address.
 - The schema is managed with Alembic migrations (`highhx_platform/migrations`), applied at
   start-up or with `highhx-platform migrate`. A database created by platform 0.1.0 is detected
   and upgraded in place. `/readyz` fails until the schema is at the latest revision.
-- AI stream resume state is held per process; run one worker per instance behind sticky
-  routing (or a single instance) so reconnecting clients reach the same process.
-- Rate limits (sign-in, sign-up, device codes) are per process. With several replicas,
-  also rate-limit at the load balancer or move the limiter to shared storage.
+- Instances are stateless: run as many replicas as you like behind any load balancer (no
+  sticky sessions). AI stream state (events, cancellation requests, client presence, the
+  owning instance's heartbeat) and rate-limit counters live in the database, so a client
+  that loses its connection can resume on any instance, a cancel sent to any instance stops
+  the upstream call, and limits apply across replicas. Keep the instances' clocks in sync
+  (NTP); stream timeouts are measured in seconds.
+- If an instance dies mid-stream, readers on other instances end that stream with a
+  retryable error after `owner_timeout` (15 s) and its usage record is closed.
 - Tokens are stored as SHA-256 hashes and passwords with scrypt. Pages send strict
   security headers (CSP, frame denial, no referrer); HSTS is added behind https.
 

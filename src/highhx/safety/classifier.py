@@ -508,19 +508,53 @@ def classify_shell(command: str, verdict: SafetyVerdict, *, depth: int = 0) -> N
                 verdict.add(PERMISSION, f"changes file permissions broadly ({program})", RiskLevel.DANGEROUS)
         if program in ("scp", "rsync", "sftp") and any(_REMOTE_HOSTS.match(a) for a in args):
             verdict.add(DATA_EGRESS, "copies data to or from a remote host", RiskLevel.DANGEROUS)
-        if program in ("curl", "wget", "http", "https") and any(
-            a in ("-T", "--upload-file", "-F", "--form")
-            or a.startswith(("-d@", "--data-binary=@"))
-            or (a.startswith("@") and len(a) > 1)
-            for a in args
-        ):
-            verdict.add(DATA_EGRESS, "uploads local data over the network", RiskLevel.DANGEROUS)
+        if program in ("curl", "wget", "http", "https") and _sends_body(program, args) and not _local_only(args):
+            verdict.add(DATA_EGRESS, "sends local data to a remote host", RiskLevel.DANGEROUS)
+        if _SECRET_READ.search(" ".join(args)):
+            verdict.add(CREDENTIAL, "reads private keys or credential files", RiskLevel.DANGEROUS)
         if program in ("shutdown", "reboot", "halt", "poweroff"):
             verdict.add(DESTRUCTIVE, f"stops the machine ({program})", RiskLevel.CRITICAL)
         if program in ("killall", "pkill") or (
             program == "kill" and any(a in ("-9", "-KILL", "-SIGKILL") for a in args)
         ):
             verdict.add(DESTRUCTIVE, f"forcibly stops processes ({program})", RiskLevel.DANGEROUS)
+
+
+_BODY_FLAGS = (
+    "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "--data-ascii", "--json",
+    "-F", "--form", "--form-string", "-T", "--upload-file",
+    "--post-data", "--post-file", "--body-data", "--body-file",
+)  # fmt: skip
+_LOCAL_URL = re.compile(r"^(?:https?://)?(?:localhost|127\.\d+\.\d+\.\d+|\[::1\]|0\.0\.0\.0)(?:[:/]|$)", re.I)
+_URL_ARG = re.compile(
+    r"^(?:https?://|[\w-]+(?:\.[\w-]+)+(?::\d+)?(?:/|$)|localhost\b|\[::1\]|\d+\.\d+\.\d+\.\d+)", re.I
+)
+_SECRET_READ = re.compile(
+    r"(?:~|\$HOME|/home/[^/\s]+|/Users/[^/\s]+|/root)?/?\.ssh/(?:id_[\w.-]+|[\w.-]*key[\w.-]*)"
+    r"|\.aws/credentials|\.netrc\b|\.docker/config\.json|\.kube/config|\.git-credentials"
+    r"|(?:^|[\s\"'=@(/])\.env(?!\.(?:example|sample|template|dist|defaults?)\b)(?:\.[\w-]+)?\b",
+    re.I,
+)
+
+
+def _sends_body(program: str, args: list[str]) -> bool:
+    """curl / wget / HTTPie arguments that put local data in the request."""
+    for arg in args:
+        flag = arg.split("=", 1)[0]
+        if flag in _BODY_FLAGS or (arg.startswith("-d") and len(arg) > 2 and not arg.startswith("--")):
+            return True
+        if arg.startswith("@") and len(arg) > 1:
+            return True
+    if program in ("http", "https"):  # HTTPie: `http POST host field=value`, `field:=json`, `field@file`
+        positional = [a for a in args if not a.startswith("-")]
+        return any(re.match(r"^[\w.-]+(?:=|:=|@)", a) and not _URL_ARG.match(a) for a in positional[1:])
+    return False
+
+
+def _local_only(args: list[str]) -> bool:
+    """True when every URL/host argument is this machine (local development calls)."""
+    targets = [a for a in args if not a.startswith("-") and _URL_ARG.match(a)]
+    return bool(targets) and all(_LOCAL_URL.match(t) for t in targets)
 
 
 def _sql_unbounded(command: str) -> bool:

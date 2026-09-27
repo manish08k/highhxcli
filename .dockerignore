@@ -1,0 +1,23 @@
+# Build context for server/Dockerfile: never send secrets, local state or caches.
+**/.env
+**/.env.*
+!**/.env.example
+**/*.db
+**/*.db-*
+**/__pycache__
+**/*.py[cod]
+**/.mypy_cache
+**/.ruff_cache
+**/.pytest_cache
+.git
+.github
+.venv
+venv
+dist
+build
+**/.highhx/state
+**/.highhx/logs
+server/tests
+tests
+docs
+examples

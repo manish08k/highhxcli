@@ -187,10 +187,23 @@ def cli(ctx: click.Context) -> None:
     / critical) and needs approval; use --dry-run to preview anything.
     """
     if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
         app = ctx.find_object(App)
+        if app is not None and not app.options.json and app.output.console.is_terminal:
+            _banner(app)
+        click.echo(ctx.get_help())
         if app is not None and not app.options.json:
             _guide(app)
+
+
+def _banner(app: App) -> None:
+    """The HighhX knight with version and location (interactive terminals only)."""
+    from highhx.ui.branding import banner, home_relative
+
+    console = app.output.console
+    console.print(
+        banner(console, f"HighhX v{__version__}", "Developer command center", home_relative(str(app.start_dir)))
+    )
+    console.print()
 
 
 def _guide(app: App) -> None:

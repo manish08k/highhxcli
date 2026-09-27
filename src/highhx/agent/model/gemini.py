@@ -7,9 +7,17 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from highhx.agent.messages import Message, StopReason, TextBlock, ToolCall, ToolResultBlock, Usage
-from highhx.agent.model.base import DEFAULT_SDK_RETRIES, DEFAULT_TIMEOUT, ModelRequest, cancellable, truncated
+from highhx.agent.model.base import (
+    DEFAULT_SDK_RETRIES,
+    DEFAULT_TIMEOUT,
+    Aborter,
+    ModelRequest,
+    pump,
+    transport_error,
+    truncated,
+)
 from highhx.agent.streaming import Completed, ModelEvent, TextDelta, ToolCallStarted
-from highhx.core.errors import ModelProviderError, OperationCancelledError
+from highhx.core.errors import ModelProviderError
 from highhx.execution.cancellation import CancellationToken
 
 DEFAULT_MODEL = "gemini-2.5-pro"
@@ -87,7 +95,7 @@ class GeminiProvider:
         self._timeout = timeout
         self._max_retries = max_retries
 
-    def _sdk_client(self) -> tuple[Any, Callable[[], None] | None]:
+    def _sdk_client(self, aborter: Aborter | None = None) -> tuple[Any, Callable[[], None] | None]:
         """The SDK client and a function that aborts its in-flight request.
 
         Each call gets its own HTTP connection pool so that cancelling one response (by closing
@@ -97,7 +105,10 @@ class GeminiProvider:
         genai, types, _errors = _import_sdk()
         import httpx
 
-        http = httpx.Client(timeout=httpx.Timeout(self._timeout, connect=min(self._timeout, 30.0)))
+        http = httpx.Client(
+            timeout=httpx.Timeout(self._timeout, connect=min(self._timeout, 30.0)),
+            event_hooks={"response": [aborter.response]} if aborter is not None else None,
+        )
         options = types.HttpOptions(
             base_url=self._base_url,
             timeout=int(self._timeout * 1000),
@@ -122,7 +133,6 @@ class GeminiProvider:
         _genai, types, errors = _import_sdk()
         import httpx
 
-        client, close = self._sdk_client()
         model = request.model or self.default_model
         config = types.GenerateContentConfig(
             system_instruction=request.system,
@@ -146,38 +156,37 @@ class GeminiProvider:
         text: list[str] = []
         finish: str | None = None
         usage = Usage()
-        try:
+        contents = to_gemini_contents(request.messages, types)
+
+        def produce(aborter: Aborter) -> Iterator[Any]:
+            client, close = self._sdk_client(aborter)
             try:
-                with cancellable(cancel, close):
-                    for chunk in client.models.generate_content_stream(
-                        model=model, contents=to_gemini_contents(request.messages, types), config=config
-                    ):
-                        if cancel is not None and cancel.cancelled:
-                            raise OperationCancelledError("Model response cancelled.")
-                        meta = chunk.usage_metadata
-                        if meta is not None:
-                            usage = Usage(
-                                int(meta.prompt_token_count or 0),
-                                int(
-                                    (meta.candidates_token_count or 0) + (getattr(meta, "thoughts_token_count", 0) or 0)
-                                ),
-                                int(getattr(meta, "cached_content_token_count", 0) or 0),
-                            )
-                        for candidate in chunk.candidates or []:
-                            if candidate.finish_reason is not None:
-                                finish = str(getattr(candidate.finish_reason, "value", candidate.finish_reason))
-                            for part in (candidate.content.parts if candidate.content else None) or []:
-                                parts.append(part)
-                                if part.text and not part.thought:
-                                    text.append(part.text)
-                                    yield TextDelta(part.text)
-                                if part.function_call is not None:
-                                    if not part.function_call.id:
-                                        part.function_call.id = f"call_{uuid.uuid4().hex[:12]}"
-                                    yield ToolCallStarted(part.function_call.id, part.function_call.name or "")
+                yield from client.models.generate_content_stream(model=model, contents=contents, config=config)
             finally:
                 if close is not None:
                     close()
+
+        try:
+            for chunk in pump(produce, cancel):
+                meta = chunk.usage_metadata
+                if meta is not None:
+                    usage = Usage(
+                        int(meta.prompt_token_count or 0),
+                        int((meta.candidates_token_count or 0) + (getattr(meta, "thoughts_token_count", 0) or 0)),
+                        int(getattr(meta, "cached_content_token_count", 0) or 0),
+                    )
+                for candidate in chunk.candidates or []:
+                    if candidate.finish_reason is not None:
+                        finish = str(getattr(candidate.finish_reason, "value", candidate.finish_reason))
+                    for part in (candidate.content.parts if candidate.content else None) or []:
+                        parts.append(part)
+                        if part.text and not part.thought:
+                            text.append(part.text)
+                            yield TextDelta(part.text)
+                        if part.function_call is not None:
+                            if not part.function_call.id:
+                                part.function_call.id = f"call_{uuid.uuid4().hex[:12]}"
+                            yield ToolCallStarted(part.function_call.id, part.function_call.name or "")
             if finish is None:  # no finishReason: the stream was cut off
                 raise truncated("Gemini")
         except errors.ClientError as exc:
@@ -198,6 +207,11 @@ class GeminiProvider:
             raise ModelProviderError("The Gemini API timed out.", retryable=True) from None
         except httpx.TransportError:
             raise ModelProviderError("Cannot reach the Gemini API.", retryable=True) from None
+        except Exception as exc:
+            mapped = transport_error(exc, "Gemini")
+            if mapped is None:
+                raise
+            raise mapped from None
         blocks: list[TextBlock | ToolCall | ToolResultBlock] = []
         if text:
             blocks.append(TextBlock("".join(text)))

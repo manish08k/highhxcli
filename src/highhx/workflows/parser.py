@@ -83,7 +83,7 @@ def _step(data: dict[str, Any]) -> StepSpec:
         retry=RetryPolicy.from_value(data.get("retry")),
         approval=_approval(data.get("approval")),
         continue_on_error=bool(data.get("continue_on_error", False)),
-        shell=data.get("shell"),
+        shell=data.get("shell"),  # nosec B604 - parses the user's workflow `shell` setting; no execution here
     )
 
 

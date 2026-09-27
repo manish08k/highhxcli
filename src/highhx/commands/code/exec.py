@@ -55,7 +55,7 @@ def exec_command(
         cwd=app.start_dir,
         timeout=seconds,
         retry=RetryPolicy(attempts=retries, delay=delay),
-        shell=True if use_shell else None,
+        shell=True if use_shell else None,  # nosec B604 - shell only with the user's explicit --shell flag; the command is risk-classified and approval-gated
         interactive=interactive,
         name=command[0].split()[0] if command else "exec",
     )

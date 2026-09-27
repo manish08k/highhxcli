@@ -107,9 +107,10 @@ model at most once per (account, key) and meters it exactly once — the key is 
 database with a unique constraint, so concurrent duplicates attach to the same stream. Events
 carry sequential `id:`s; a client that reconnects with the same key and `Last-Event-ID` receives
 only the events it missed. A stream with no connected client is cancelled after 30 s
-(`stream_resume_grace`); finished streams are replayable for 10 minutes. The stream registry is
-per process: with several platform processes, route a client's requests to the same one
-(sticky sessions) for resume to work.
+(`stream_resume_grace`); finished streams are replayable for 10 minutes. Stream state lives in
+the database, so any platform instance can serve a resume or a cancel: the instance that runs
+the upstream call writes the events and heartbeats; readers on any instance replay them, and a
+stream whose instance stopped heartbeating is ended with a retryable error.
 
 **Limits.** The monthly token allowance is checked before each request; at most 3 requests per
 account run concurrently (`HIGHHX_MAX_CONCURRENT_STREAMS`); output is capped per request.

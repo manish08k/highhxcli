@@ -6,9 +6,17 @@ from collections.abc import Iterator
 from typing import Any
 
 from highhx.agent.messages import Message, StopReason, TextBlock, ToolCall, ToolResultBlock, Usage
-from highhx.agent.model.base import DEFAULT_SDK_RETRIES, DEFAULT_TIMEOUT, ModelRequest, cancellable, truncated
+from highhx.agent.model.base import (
+    DEFAULT_SDK_RETRIES,
+    DEFAULT_TIMEOUT,
+    Aborter,
+    ModelRequest,
+    pump,
+    transport_error,
+    truncated,
+)
 from highhx.agent.streaming import Completed, ModelEvent, TextDelta, ToolCallStarted
-from highhx.core.errors import ModelProviderError, OperationCancelledError
+from highhx.core.errors import ModelProviderError
 from highhx.execution.cancellation import CancellationToken
 
 DEFAULT_MODEL = "claude-opus-5"
@@ -139,19 +147,26 @@ class AnthropicProvider:
         model = request.model or self.default_model
         params = build_params(request, model)
         api = client.beta.messages if "betas" in params else client.messages
-        try:
-            with api.stream(**params) as stream, cancellable(
-                cancel, getattr(stream, "close", lambda: None)
-            ):
+
+        def produce(aborter: Aborter) -> Iterator[Any]:
+            with api.stream(**params) as stream:
+                if getattr(stream, "response", None) is not None:
+                    aborter.response(stream.response)
                 for event in stream:
-                    if cancel is not None and cancel.cancelled:
-                        raise OperationCancelledError("Model response cancelled.")
                     if event.type == "text":
                         yield TextDelta(event.text)
                     elif event.type == "content_block_start" and event.content_block.type == "tool_use":
                         yield ToolCallStarted(event.content_block.id, event.content_block.name)
-                final = stream.get_final_message()
-            if final.stop_reason is None:  # the stream ended without message_delta/message_stop
+                yield stream.get_final_message()
+
+        final: Any = None
+        try:
+            for item in pump(produce, cancel):
+                if isinstance(item, (TextDelta, ToolCallStarted)):
+                    yield item
+                else:
+                    final = item
+            if final is None or final.stop_reason is None:  # no message_delta/message_stop: cut off
                 raise truncated("Anthropic")
         except ValueError as exc:
             # Tool input JSON the SDK could not parse at all: re-issue the turn.
@@ -182,6 +197,11 @@ class AnthropicProvider:
             raise ModelProviderError("Cannot reach the Anthropic API.", retryable=True) from None
         except anthropic.APIError as exc:  # e.g. an `error` event in the middle of the stream
             raise ModelProviderError(f"Anthropic API error: {exc}", retryable=True) from None
+        except Exception as exc:
+            mapped = transport_error(exc, "Anthropic")
+            if mapped is None:
+                raise
+            raise mapped from None
         yield completed_from_final(final, model)
 
 

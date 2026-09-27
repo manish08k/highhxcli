@@ -8,7 +8,13 @@ import sqlite3
 from pathlib import Path
 
 from highhx.core.errors import IntegrationError
-from highhx.integrations.databases.base import MIGRATIONS_TABLE, DatabaseAdapter, PingResult, create_table_sql
+from highhx.integrations.databases.base import (
+    MIGRATIONS_TABLE,
+    DatabaseAdapter,
+    PingResult,
+    create_table_sql,
+    sql_literal,
+)
 from highhx.utils.time import iso_now
 
 
@@ -58,7 +64,7 @@ class SQLiteAdapter(DatabaseAdapter):
         with contextlib.closing(self._connect()) as conn:
             conn.execute(create_table_sql())
             conn.commit()
-            return {row[0]: row[1] for row in conn.execute(f"SELECT name, checksum FROM {MIGRATIONS_TABLE}")}
+            return {row[0]: row[1] for row in conn.execute(f"SELECT name, checksum FROM {MIGRATIONS_TABLE}")}  # nosec B608 - constant table name; values bound as parameters
 
     def record_migration(self, name: str, checksum: str) -> None:
         with contextlib.closing(self._connect()) as conn:
@@ -76,11 +82,10 @@ class SQLiteAdapter(DatabaseAdapter):
         try:
             conn.execute(create_table_sql())
             conn.commit()
-            escaped_name = name.replace("'", "''")
             conn.executescript(
-                "BEGIN;\n"
+                "BEGIN;\n"  # nosec B608 - constant table name; values validated by sql_literal
                 f"{sql}\n;\n"
-                f"INSERT INTO {MIGRATIONS_TABLE} (name, checksum, applied_at) VALUES ('{escaped_name}', '{checksum}', '{iso_now()}');\n"
+                f"INSERT INTO {MIGRATIONS_TABLE} (name, checksum, applied_at) VALUES ({sql_literal(name)}, {sql_literal(checksum, 'checksum')}, '{iso_now()}');\n"
                 "COMMIT;"
             )
         except sqlite3.Error as exc:

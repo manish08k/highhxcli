@@ -427,7 +427,7 @@ class WorkflowEngine:
                     env=env,
                     timeout=step.timeout,
                     retry=step.retry,
-                    shell=step.shell,
+                    shell=step.shell,  # nosec B604 - the user's own workflow `shell` setting; steps are risk-classified and gated
                     name=step.id,
                 )
                 result = self.engine.run(

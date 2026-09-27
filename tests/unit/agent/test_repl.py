@@ -67,7 +67,7 @@ def test_banner_turn_and_footer(agent_project: Path, make_session) -> None:
         "/quit",
     )
     assert code == 0
-    assert "HIGHHX PRO" in out and "AI DEVELOPER AGENT" in out
+    assert "HighhX v" in out and "AI Developer Agent · Pro" in out
     assert "Project" in out and "pyapp" in out and "Python" in out and "Connected" in out
     assert "What would you like me to do?" in out
     assert "✓ List *.py — 3 file(s)" in out

@@ -213,7 +213,7 @@ class HistoryStore:
                 params.append(value)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
-        rows = self.db.query(f"SELECT * FROM executions {where} ORDER BY started_at DESC, rowid DESC LIMIT ?", params)
+        rows = self.db.query(f"SELECT * FROM executions {where} ORDER BY started_at DESC, rowid DESC LIMIT ?", params)  # nosec B608 - column names from a fixed tuple; values bound as parameters
         return [self._to_record(row) for row in rows]
 
     def latest(self, *, kind: str | None = None) -> ExecutionRecord | None:
@@ -222,21 +222,20 @@ class HistoryStore:
 
     def stats(self, *, since: str | None = None) -> builtins.list[dict[str, Any]]:
         """Aggregate counts and durations per (kind, name)."""
-        where = "WHERE started_at >= ?" if since else ""
-        params: tuple[Any, ...] = (since,) if since else ()
         return self.db.query(
-            f"""
+            """
             SELECT kind, name,
                    COUNT(*) AS runs,
                    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS succeeded,
                    SUM(CASE WHEN status IN ('failed', 'timeout') THEN 1 ELSE 0 END) AS failed,
                    AVG(duration) AS avg_duration,
                    MAX(started_at) AS last_run
-            FROM executions {where}
+            FROM executions
+            WHERE (? IS NULL OR started_at >= ?)
             GROUP BY kind, name
             ORDER BY runs DESC, name
             """,
-            params,
+            (since, since),
         )
 
     def mark_stale_running(self) -> int:

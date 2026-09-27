@@ -194,7 +194,8 @@ See [security.md](security.md#policies).
 | `HIGHHX_PROFILE` | Config profile to apply |
 | `HIGHHX_NON_INTERACTIVE` | Never prompt (deny instead) |
 | `HIGHHX_DATA_DIR`, `HIGHHX_CONFIG_DIR`, `HIGHHX_CACHE_DIR` | Override user directories |
-| `HIGHHX_ASCII` | ASCII status symbols |
+| `HIGHHX_ASCII` | ASCII status symbols and ASCII knight banner |
+| `HIGHHX_BANNER` | Startup knight: `full`, `compact` or `off` (default: chosen from the terminal size) |
 | `HIGHHX_TOKEN` | HighhX platform token (overrides `highhx login`) |
 | `HIGHHX_API_URL` | HighhX platform URL (self-hosted / development) |
 | `HIGHHX_BROWSER` | Browser binary for `highhx computer` (default: Chrome/Chromium/Edge/Brave) |

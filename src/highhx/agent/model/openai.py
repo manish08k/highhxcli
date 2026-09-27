@@ -10,13 +10,15 @@ from highhx.agent.messages import Message, StopReason, TextBlock, ToolCall, Tool
 from highhx.agent.model.base import (
     DEFAULT_SDK_RETRIES,
     DEFAULT_TIMEOUT,
+    Aborter,
     ModelRequest,
-    cancellable,
     parse_tool_arguments,
+    pump,
+    transport_error,
     truncated,
 )
 from highhx.agent.streaming import Completed, ModelEvent, TextDelta, ToolCallStarted
-from highhx.core.errors import ModelProviderError, OperationCancelledError
+from highhx.core.errors import ModelProviderError
 from highhx.execution.cancellation import CancellationToken
 
 DEFAULT_MODEL = "gpt-5"
@@ -135,41 +137,45 @@ class OpenAIProvider:
         calls: dict[int, dict[str, str]] = {}
         finish: str | None = None
         usage = Usage()
-        try:
-            stream = client.chat.completions.create(**build_params(request, model))
-            close = getattr(stream, "close", None)
+        params = build_params(request, model)
+
+        def produce(aborter: Aborter) -> Iterator[Any]:
+            stream = client.chat.completions.create(**params)
+            if getattr(stream, "response", None) is not None:
+                aborter.response(stream.response)
             try:
-                with cancellable(cancel, close):
-                    for chunk in stream:
-                        if cancel is not None and cancel.cancelled:
-                            raise OperationCancelledError("Model response cancelled.")
-                        if chunk.usage is not None:
-                            details = getattr(chunk.usage, "prompt_tokens_details", None)
-                            usage = Usage(
-                                int(chunk.usage.prompt_tokens or 0),
-                                int(chunk.usage.completion_tokens or 0),
-                                int(getattr(details, "cached_tokens", 0) or 0) if details else 0,
-                            )
-                        for choice in chunk.choices or []:
-                            delta = choice.delta
-                            if delta is not None and delta.content:
-                                text.append(delta.content)
-                                yield TextDelta(delta.content)
-                            for tc in (delta.tool_calls if delta is not None else None) or []:
-                                slot = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
-                                if tc.id:
-                                    slot["id"] = tc.id
-                                if tc.function is not None:
-                                    if tc.function.name:
-                                        slot["name"] = tc.function.name
-                                        yield ToolCallStarted(slot["id"], slot["name"])
-                                    if tc.function.arguments:
-                                        slot["arguments"] += tc.function.arguments
-                            if choice.finish_reason:
-                                finish = choice.finish_reason
+                yield from stream
             finally:
+                close = getattr(stream, "close", None)
                 if close is not None:
                     close()
+
+        try:
+            for chunk in pump(produce, cancel):
+                if chunk.usage is not None:
+                    details = getattr(chunk.usage, "prompt_tokens_details", None)
+                    usage = Usage(
+                        int(chunk.usage.prompt_tokens or 0),
+                        int(chunk.usage.completion_tokens or 0),
+                        int(getattr(details, "cached_tokens", 0) or 0) if details else 0,
+                    )
+                for choice in chunk.choices or []:
+                    delta = choice.delta
+                    if delta is not None and delta.content:
+                        text.append(delta.content)
+                        yield TextDelta(delta.content)
+                    for tc in (delta.tool_calls if delta is not None else None) or []:
+                        slot = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                        if tc.id:
+                            slot["id"] = tc.id
+                        if tc.function is not None:
+                            if tc.function.name:
+                                slot["name"] = tc.function.name
+                                yield ToolCallStarted(slot["id"], slot["name"])
+                            if tc.function.arguments:
+                                slot["arguments"] += tc.function.arguments
+                    if choice.finish_reason:
+                        finish = choice.finish_reason
             if finish is None:  # no finish_reason: the stream was cut off
                 raise truncated("OpenAI")
         except openai.AuthenticationError:
@@ -194,6 +200,11 @@ class OpenAIProvider:
             raise ModelProviderError("Cannot reach the OpenAI API.", retryable=True) from None
         except openai.APIError as exc:  # e.g. an error object in the middle of the stream
             raise ModelProviderError(f"OpenAI API error: {exc}", retryable=True) from None
+        except Exception as exc:
+            mapped = transport_error(exc, "OpenAI")
+            if mapped is None:
+                raise
+            raise mapped from None
         blocks: list[TextBlock | ToolCall | ToolResultBlock] = []
         if text:
             blocks.append(TextBlock("".join(text)))

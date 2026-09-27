@@ -121,10 +121,22 @@ highhx logs            # output of the last execution (secrets redacted)
 ```text
 $ highhx agent
 
-╭──────────────────────────────────────────╮
-│                HIGHHX PRO                │
-│            AI DEVELOPER AGENT            │
-╰──────────────────────────────────────────╯
+     ▗█▖
+     ▐▀▌
+    ▗ ▄ ▖
+   ▗▚▐█▌▞▖
+  ▗▚█▐█▌█▞▖      HighhX v0.3.0
+   ▟█▐█▌█▙       AI Developer Agent · Pro
+  ▐▐█▌█▐█▌▌      ~/code/shop
+  █▗▜▌█▐▛▖█
+  █▐▙▘█▝▟▌█
+  ▐▐▜▌▄▐▛▌▌
+ ▗▝▐▐▌█▐▌▌▘▖
+ █▙▝█▌█▐█▘▟█
+▜▙▜█▖▘█▝▗█▛▟▛
+ ▀█▟▀ █ ▀▙█▀
+   ▀▌ █ ▐▀
+
 Project   shop
 Stack     Python, FastAPI
 Branch    main
