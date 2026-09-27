@@ -1,8 +1,10 @@
-"""The HighhX Pro terminal experience (Rich).
+"""The HighhX interactive terminal experience (Rich), shared by Free and Pro.
 
 Streams the agent's answer as Markdown, shows a live activity line while tools
-run (with the latest line of command output), prints ✓ / ✗ outcomes, renders
-plans and diffs, and asks for approvals without fighting the live display.
+and local commands run (with the latest line of command output), prints outcomes
+(✓ done, ✗ failed, ⊘ blocked or declined, ○ cancelled), renders plans and diffs,
+asks for approvals without fighting the live display, and explains capabilities
+that need HighhX Pro.
 """
 
 from __future__ import annotations
@@ -29,11 +31,17 @@ from highhx.ui.terminal import Symbols
 
 if TYPE_CHECKING:
     from highhx.agent.context import ProjectContext
+    from highhx.agent.router import LocalAction
 
 QUIET_TOOLS = frozenset({"update_plan", "propose_plan"})
 """Tools whose progress is shown by plan rendering instead of an activity line."""
 MAX_DIFF_LINES = 80
 ACCENT = "bold magenta"
+VIEW_PRO = "pro"
+"""Answer from :meth:`TerminalUI.capability_panel` when the user wants to see HighhX Pro."""
+BLOCKED_CODES = frozenset({"policy", "denied"})
+BORDERS = {"warn": "yellow", "fail": "red"}
+"""Concrete border colours for theme styles (a border style must resolve on any console)."""
 
 
 def format_tokens(count: int) -> str:
@@ -159,12 +167,90 @@ class TerminalUI:
         if result.ok:
             summary = f" [dim]— {escape(result.summary)}[/dim]" if result.summary else ""
             self.console.print(f"[ok]{self.symbols.ok}[/ok] {escape(description)}{summary}{timing}")
+            return
+        first = result.content.strip().splitlines()[0][:120] if result.content.strip() else "failed"
+        summary = escape(result.summary or first)
+        if result.error_code in BLOCKED_CODES:
+            self.console.print(f"[warn]{self.blocked_mark}[/warn] {escape(description)} [warn]— {summary}[/warn]")
+        elif result.error_code == "cancelled":
+            self.console.print(f"[dim]{self.symbols.skip} {escape(description)} — cancelled[/dim]")
         else:
-            first = result.content.strip().splitlines()[0][:120] if result.content.strip() else "failed"
-            summary = escape(result.summary or first)
             self.console.print(
                 f"[fail]{self.symbols.fail}[/fail] {escape(description)} [fail]— {summary}[/fail]{timing}"
             )
+
+    @property
+    def blocked_mark(self) -> str:
+        return "⊘" if self.symbols.ok == "✓" else "-"
+
+    # -------------------------------------------------------- local activity
+    def activity_started(self, label: str, *, detail: str = "") -> None:
+        """A local (non-AI) action starts: a heading line that stays above the command's own output."""
+        self._pause()
+        suffix = f"  [dim]{escape(detail)}[/dim]" if detail else ""
+        self.console.print()
+        self.console.print(f"[{ACCENT}]◉[/{ACCENT}] [bold]{escape(label)}[/bold]{suffix}")
+
+    def activity_finished(self, label: str, code: int, seconds: float) -> None:
+        self._pause()
+        timing = f" [dim]({seconds:.1f}s)[/dim]" if seconds >= 0.1 else ""
+        if code == 0:
+            self.console.print(f"[ok]{self.symbols.ok}[/ok] {escape(label)}{timing}")
+        elif code == 130:
+            self.console.print(f"[dim]{self.symbols.skip} {escape(label)} — cancelled[/dim]")
+        else:
+            self.console.print(
+                f"[fail]{self.symbols.fail}[/fail] {escape(label)} [fail]— exit code {code}[/fail]{timing}"
+            )
+
+    # ------------------------------------------------------------ capability
+    def capability_panel(
+        self, reason: str, alternatives: Sequence[LocalAction], *, title: str = "HighhX Pro capability"
+    ) -> LocalAction | str | None:
+        """Explain a capability this session does not have and offer the local alternatives.
+
+        Returns the chosen :class:`LocalAction`, :data:`VIEW_PRO`, or ``None`` (continue without it).
+        """
+        self._pause()
+        table = Table.grid(padding=(0, 2))
+        table.add_column(no_wrap=True, style=ACCENT)
+        table.add_column(overflow="fold")
+        table.add_column(overflow="fold", style="dim")
+        body: list[Any] = [f"[bold]{escape(reason)}[/bold]", ""]
+        if alternatives:
+            body.append("Available locally, without AI:")
+            for number, action in enumerate(alternatives, start=1):
+                table.add_row(str(number), escape(action.label), escape(action.command))
+            body.append(table)
+            body.append("")
+        else:
+            body += ["Nothing local maps to this request. Try /help for what runs locally.", ""]
+        numbers = "1" if len(alternatives) == 1 else f"1-{len(alternatives)}"
+        choices = ([f"\\[{numbers}] Continue locally"] if alternatives else []) + ["\\[p] View Pro"]
+        body.append("[dim]" + "    ".join(choices) + "[/dim]")
+        from rich.console import Group
+
+        self.console.print()
+        self.console.print(
+            Panel(
+                Group(*body),
+                title=f"[{ACCENT}]{escape(title)}[/{ACCENT}]",
+                title_align="left",
+                border_style="magenta",
+                box=ROUNDED,
+                padding=(1, 2),
+            )
+        )
+        if not self.interactive:
+            return None
+        numbers = "1" if len(alternatives) == 1 else f"1-{len(alternatives)}"
+        hint = f"{numbers} / p / Enter to skip" if alternatives else "p / Enter to skip"
+        answer = self._ask(f"[bold]Choose[/bold] [dim]\\[{hint}][/dim] ").strip().lower()
+        if answer in ("p", "pro", "view pro"):
+            return VIEW_PRO
+        if answer.isdigit() and 1 <= int(answer) <= len(alternatives):
+            return alternatives[int(answer) - 1]
+        return None
 
     # ------------------------------------------------------------------ plan
     def plan_table(self, plan: Plan) -> Table:
@@ -251,8 +337,7 @@ class TerminalUI:
     def ask_permission(self, action: str, details: Sequence[str], *, allow_always: bool = True) -> str:
         self._pause()
         self.console.print()
-        self.console.print(f"[warn]{self.symbols.warn} Action requires approval[/warn]")
-        self.console.print(f"  [bold]{escape(action)}[/bold]")
+        self._approval_panel("Action requires approval", f"[bold]{escape(action)}[/bold]", "warn")
         self._render_details(details)
         choices = "\\[y/N/a=always this session]" if allow_always else "\\[y/N]"
         answer = self._ask(f"[bold]Proceed?[/bold] [dim]{choices}[/dim] ").strip().lower()
@@ -261,6 +346,27 @@ class TerminalUI:
         if allow_always and answer in ("a", "always"):
             return "always"
         return "no"
+
+    def ask(self, question: str, *, default: bool = False) -> bool:
+        """A plain yes/no question (a choice, not a risk approval)."""
+        self._pause()
+        if not self.interactive:
+            return default
+        suffix = "\\[Y/n]" if default else "\\[y/N]"
+        answer = self._ask(f"[bold]{escape(question)}[/bold] [dim]{suffix}[/dim] ").strip().lower()
+        return default if not answer else answer in ("y", "yes")
+
+    def _approval_panel(self, title: str, body: str, style: str) -> None:
+        self.console.print(
+            Panel(
+                body,
+                title=f"[{style}]{self.symbols.warn} {title}[/{style}]",
+                title_align="left",
+                border_style=BORDERS.get(style, style),
+                box=ROUNDED,
+                padding=(0, 2),
+            )
+        )
 
     def confirm_action(self, request: ConfirmationRequest) -> bool:
         """The sensitive-action confirmation. Only an explicit approval returns True."""
@@ -282,9 +388,9 @@ class TerminalUI:
         self.console.print(
             Panel(
                 table,
-                title=f"[{risk_style}]Confirm Action[/{risk_style}]",
+                title=f"[{risk_style}]{self.symbols.warn} Approval required[/{risk_style}]",
                 title_align="left",
-                border_style=risk_style,
+                border_style=BORDERS.get(risk_style, risk_style),
                 box=ROUNDED,
             )
         )
@@ -303,9 +409,9 @@ class TerminalUI:
     def confirm(self, message: str, *, default: bool = False) -> bool:
         self._pause()
         self.console.print()
-        self.console.print(f"[warn]{self.symbols.warn} Action requires approval[/warn]")
+        self._approval_panel("Action requires approval", f"[bold]{escape(message)}[/bold]", "warn")
         suffix = "\\[Y/n]" if default else "\\[y/N]"
-        answer = self._ask(f"  {escape(message)} [dim]{suffix}[/dim] ").strip().lower()
+        answer = self._ask(f"[bold]Approve?[/bold] [dim]{suffix}[/dim] ").strip().lower()
         if not answer:
             return default
         return answer in ("y", "yes")
@@ -313,8 +419,7 @@ class TerminalUI:
     def confirm_typed(self, message: str, expected: str) -> bool:
         self._pause()
         self.console.print()
-        self.console.print(f"[fail]{self.symbols.warn} High-risk action requires approval[/fail]")
-        self.console.print(f"  [bold]{escape(message)}[/bold]")
+        self._approval_panel("High-risk action requires approval", f"[bold]{escape(message)}[/bold]", "fail")
         answer = self._ask(f"  Type [bold]{escape(expected)}[/bold] to confirm: ").strip()
         return answer == expected
 
@@ -327,7 +432,10 @@ class TerminalUI:
             printer.print(f"[{style}]{symbol} {escape(message)}[/{style}]")
 
     # ------------------------------------------------------------ chrome
-    def banner(self, context: ProjectContext, rows: list[tuple[str, str]]) -> None:
+    def banner(
+        self, context: ProjectContext, rows: list[tuple[str, str]], *, status: Sequence[tuple[str, str]] = ()
+    ) -> None:
+        """The Knight with version, location and ``status`` lines (git state, plan), then ``rows``."""
         from highhx import __version__
         from highhx.ui.branding import banner, home_relative
 
@@ -335,12 +443,15 @@ class TerminalUI:
             banner(
                 self.console,
                 f"HighhX v{__version__}",
-                "AI Developer Agent · Pro",
+                "Developer command center",
                 home_relative(str(context.root)),
                 accent="bold magenta",
+                status=status,
             )
         )
         self.console.print()
+        if not rows:
+            return
         table = Table.grid(padding=(0, 3))
         table.add_column(style="dim", no_wrap=True)
         table.add_column(overflow="fold")

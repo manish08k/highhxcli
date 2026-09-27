@@ -4,18 +4,37 @@ HighhX has exactly two plans:
 
 | | |
 |---|---|
-| **Free** | Deterministic HighhX: every CLI command, workflows, diagnostics, build/test, git, deploy, deterministic browser/desktop automation (`highhx computer`, `highhx do`). No AI, no account needed. |
-| **Pro** | Everything in Free **plus** `highhx agent`: natural-language tasks, AI planning, adaptive multi-step execution, recovery and replanning, and AI computer use. |
+| **Free** | The interactive `highhx` session with local capabilities: known plain-language requests run deterministically (no AI), every CLI command, `!shell` commands with approvals, workflows, diagnostics, build/test, git, deploy, deterministic browser/desktop automation (`highhx computer`, `highhx do`). No AI, no account needed. |
+| **Pro** | The same session **plus** the AI agent: natural-language tasks, AI planning, adaptive multi-step execution, recovery and replanning, and AI computer use. |
 
-Free and Pro share one execution platform: the same tools, safety policy, human
-confirmation, verification, audit trail, sessions and engine. Pro adds an intelligence
-layer that *chooses* actions; it never gets its own way to execute them.
+Free and Pro share one interface and one execution platform: the same session, tools,
+safety policy, human confirmation, verification, audit trail and engine. Pro adds an
+intelligence layer that *chooses* actions; it never gets its own way to execute them.
+
+## Capabilities
+
+`highhx.cloud.capabilities` decides what a session can do. Local capabilities
+(`local.commands`, `local.shell`, `local.intents`, `local.automation`) are always
+there. Platform capabilities are the plan features (`agent`, `agent.code_changes`,
+`agent.commands`, `agent.git`, `agent.deploy`, `agent.computer_use`, `cloud.sessions`)
+and exist only when the HighhX platform reports them for your account. The result
+shapes the CLI only: the platform checks the plan on every AI request, so nothing
+local can unlock a Pro capability. When the platform is unreachable the session keeps
+its local capabilities (a Pro account with a recent cached copy shows
+`Pro • Offline (cached)`; AI requests then fail and the session offers the local route).
+
+Requests that need a capability the session lacks show a **HighhX Pro capability**
+panel naming it (AI code changes, AI git operations, AI-driven deployment, AI browser
+and desktop automation, or the agent itself) with the HighhX commands that can do part
+of the job locally — `[1-3] Continue locally` runs one of them, `[p] View Pro` shows the
+plans. Nothing is blocked that Free can do: known requests run directly.
 
 ## Starting
 
 ```bash
 highhx login                                   # once (Pro)
-highhx agent                                   # interactive session in this project
+highhx                                         # interactive session in this project
+highhx agent                                   # the same session
 highhx agent "fix my failing tests"            # interactive, starting with this request
 highhx agent --continue                        # continue the last session in this project
 highhx agent --resume s-20260927T101500-3f9a1c
@@ -31,7 +50,8 @@ highhx agent --json --mode read-only "find security issues" | jq -r .text
 ```
 
 Exit codes: `0` completed, `1` stopped early (step limit, output limit, refusal,
-cancellation, provider failure), `10` no HighhX Pro account.
+cancellation, provider failure), `10` no HighhX Pro account. (One-shot requests are AI
+requests, so they need Pro; the interactive session works on every plan.)
 
 ## How a request runs
 

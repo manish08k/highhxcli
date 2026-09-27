@@ -6,6 +6,42 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-27
+
+One interactive HighhX for both plans: run `highhx` and describe what you want.
+
+### Added
+
+- **Interactive session.** `highhx` with no arguments in a terminal opens the HighhX session
+  (`highhx agent` opens the same one). Free and Pro share the interface; the plan decides
+  which capabilities are attached. Status line: `Free • Local`, `Free • Connected`,
+  `Pro • Connected`, `Pro • Offline (cached)`, `… • Platform unavailable`.
+- **Capabilities** (`highhx.cloud.capabilities`): local capabilities (commands, shell,
+  deterministic intents, deterministic automation) plus the platform-reported plan
+  features. The platform stays authoritative and enforces every AI request.
+- **Free in the session:** known plain-language requests run the matching HighhX command
+  deterministically (the `highhx do` rules, no AI); `!command` runs shell commands through
+  the engine (risk, policy, approval, history); `highhx <command>` runs any command in place.
+  Requests that need AI show a **HighhX Pro capability** panel naming the capability, with
+  local alternatives (`[1-3] Continue locally`, `[p] View Pro`).
+- **Platform resilience:** without the platform, local capabilities keep working; when the
+  AI gateway fails during a request, the session says so and offers the local route.
+- **Plan changes apply in place:** `highhx login` / `/account` in the session re-checks the
+  account and attaches or detaches the AI agent.
+- Slash commands `/tools`, `/config`, `/account`, `/pro`; agent-only commands explain
+  that they need Pro on Free.
+- Input: `"""` blocks for multi-line input, readline-safe coloured prompt (clean redraw of
+  long lines and history), Ctrl+C at the prompt no longer cancels the application token.
+- Tool outcomes distinguish blocked / declined (⊘) and cancelled (○) from failures (✗);
+  approvals render as panels.
+
+### Changed
+
+- The startup banner is the same for Free and Pro ("Developer command center" with git
+  state and plan status).
+- `highhx` outside a terminal, and with `--json` or `--quiet`, still prints the help (CI and
+  scripts are unaffected). One-shot `highhx agent "…"` requests still require Pro (exit 10).
+
 ## [0.3.0] - 2026-09-27
 
 Two plans, one platform: **Free** is deterministic HighhX; **Pro** adds the AI agent and AI

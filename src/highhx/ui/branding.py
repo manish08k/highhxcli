@@ -219,12 +219,16 @@ def fit(text: str, width: int, *, keep_end: bool = False) -> str:
     return "…" + text[-(width - 1) :] if keep_end else text[: width - 1] + "…"
 
 
-def _rows(layout: Layout, entries: Sequence[tuple[str, str]], width: int) -> list[list[tuple[str, str]]]:
+def _rows(
+    layout: Layout, entries: Sequence[tuple[str, str]], width: int, *, location: int | None = None
+) -> list[list[tuple[str, str]]]:
     """Styled segments per output row (shared by the plain and the Rich renderers).
-    The last of several entries is a location: it keeps its end when shortened."""
+    Entry ``location`` (default: the last of several) is a path: it keeps its end when shortened."""
+    if location is None and len(entries) > 2:
+        location = len(entries) - 1
 
     def cut(index: int, line: str, room: int) -> str:
-        return fit(line, room, keep_end=len(entries) > 2 and index == len(entries) - 1)
+        return fit(line, room, keep_end=index == location)
 
     art, accent = layout.art, entries[0][1] if entries else ""
     if art is None:
@@ -256,14 +260,18 @@ def banner(
     detail: str = "",
     *,
     accent: str = "bold",
+    status: Sequence[tuple[str, str]] = (),
 ) -> Text:
-    """The startup banner for ``console``: the knight (when it fits) with title, subtitle and detail."""
+    """The startup banner for ``console``: the knight (when it fits) with title, subtitle, detail
+    (a location) and optional ``status`` lines ``(text, style)`` below them."""
     layout = choose(
         console.width, console.height, unicode=supports_unicode(console), preference=os.environ.get("HIGHHX_BANNER")
     )
     entries = [(line, style) for line, style in ((title, accent), (subtitle, ""), (detail, "dim")) if line]
+    location = len(entries) - 1 if detail and len(entries) > 2 else None
+    entries += [(line, style) for line, style in status if line]
     out = Text()
-    for index, row in enumerate(_rows(layout, entries, console.width)):
+    for index, row in enumerate(_rows(layout, entries, console.width, location=location)):
         if index:
             out.append("\n")
         for part, style in row:

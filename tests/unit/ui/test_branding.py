@@ -155,7 +155,7 @@ def test_agent_banner_shows_the_knight(tmp_path: Path, monkeypatch: pytest.Monke
     ui.banner(ProjectContext(name="demo", root=tmp_path, initialized=True), [("Project", "demo")])
     text = out.getvalue()
     assert knight(compact=True).lines[0] in text
-    assert f"HighhX v{__version__}" in text and "AI Developer Agent" in text and "Project" in text
+    assert f"HighhX v{__version__}" in text and "Developer command center" in text and "Project" in text
 
 
 def test_bare_highhx_prints_no_banner_when_piped() -> None:

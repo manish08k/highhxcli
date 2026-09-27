@@ -64,6 +64,7 @@ PLANS: dict[str, Plan] = {
         tagline="The powerful developer CLI",
         features=frozenset({CLI}),
         highlights=(
+            "The interactive `highhx` session: known requests in plain language run locally, no AI",
             "Deterministic automation — no AI, no account needed",
             "Project detection, init, status, check, test, build, dev, start/stop",
             "Workflows with parallel steps, retries and approvals",
@@ -90,7 +91,7 @@ PLANS: dict[str, Plan] = {
         ),
         highlights=(
             "Everything in Free",
-            "`highhx agent`: natural-language tasks, planning, adaptive multi-step execution",
+            "The AI agent in the same `highhx` session: natural-language tasks, planning, multi-step execution",
             "Recovery and replanning when steps fail",
             "Code changes, debugging, testing, refactoring, git and deployment assistance",
             "AI computer use: operates browsers and desktop apps via accessibility / DOM",

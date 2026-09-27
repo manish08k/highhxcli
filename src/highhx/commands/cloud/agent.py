@@ -60,8 +60,9 @@ def agent_run(
     max_steps: int | None,
     effort: str | None,
 ) -> int:
-    """Without PROMPT (in a terminal) start an interactive session; with PROMPT,
-    or when input/output is not a terminal, handle that one request and exit.
+    """In a terminal, start the interactive HighhX session (the same one as bare
+    `highhx`; PROMPT becomes the first request). When input/output is not a
+    terminal, or with --json, handle PROMPT as one AI agent request and exit.
 
     \b
       highhx agent
@@ -71,7 +72,8 @@ def agent_run(
       echo "run all the tests and fix whatever fails" | highhx agent --yes --mode auto-edit
 
     Exit code: 0 when the request completed, 1 when it stopped early (step limit,
-    output limit, refusal, interruption), 10 without a HighhX Pro account.
+    output limit, refusal, interruption), 10 without a HighhX Pro account
+    (one-shot requests only; the interactive session works on every plan).
     """
     # Imported here so Free commands do not pay for loading the agent at start-up.
     from highhx.agent.bootstrap import Resume, create_session
@@ -82,6 +84,18 @@ def agent_run(
     out = app.output
     interactive = app.options.is_interactive()
     text = " ".join(prompt).strip()
+    overrides: dict[str, Any] = {
+        "provider": provider,
+        "model": model,
+        "approval": mode,
+        "max_steps": max_steps,
+        "effort": effort,
+    }
+    from highhx.agent.launch import interactive_terminal, start_interactive
+
+    if interactive_terminal(app):
+        # The same interactive session as bare `highhx`; the account decides whether the AI agent attaches.
+        return start_interactive(app, first=text or None, overrides=overrides, resume=Resume(resume_id, cont))
     # In a terminal the agent is interactive (PROMPT becomes the first message);
     # otherwise — pipes, CI, --json — it handles one request and exits.
     one_shot = app.options.json or not interactive
@@ -94,13 +108,6 @@ def agent_run(
             )
     console = out.err_console if app.options.json or app.options.quiet else out.console
     ui = TerminalUI(console, out.symbols, interactive=interactive and not app.options.json)
-    overrides: dict[str, Any] = {
-        "provider": provider,
-        "model": model,
-        "approval": mode,
-        "max_steps": max_steps,
-        "effort": effort,
-    }
     cloud = app.cloud
     try:
         session, account, resumed = create_session(app, cloud, ui, overrides=overrides, resume=Resume(resume_id, cont))

@@ -7,11 +7,13 @@ history of everything it did. Every risky action is classified and needs approva
 
 | | |
 |---|---|
-| **HighhX Free** | Deterministic HighhX: the full developer CLI plus browser/desktop automation with known targets (`highhx computer`, `highhx do`). Local, no account, no AI. |
-| **HighhX Pro** | Everything in Free plus `highhx agent` — an AI developer agent that plans, changes code, runs your tools, operates browsers and apps (AI computer use), recovers from failures and verifies the result. |
+| **HighhX Free** | The interactive `highhx` session and the full developer CLI: known requests in plain language run locally without AI, plus every command, shell commands with risk checks and approvals, and browser/desktop automation with known targets (`highhx computer`, `highhx do`). Local, no account, no AI. |
+| **HighhX Pro** | The same session with the AI developer agent attached — it plans, changes code, runs your tools, operates browsers and apps (AI computer use), recovers from failures and verifies the result. |
 
-Free and Pro share one execution platform: the same tools, safety policy, confirmations,
-verification and audit trail. The AI only chooses actions; it never gets its own way to run them.
+Run `highhx` in a terminal and describe what you want. Free and Pro share one interface and
+one execution platform: the same tools, safety policy, confirmations, verification and audit
+trail. Your plan only decides which capabilities the session has — the HighhX platform grants
+and enforces them. The AI only chooses actions; it never gets its own way to run them.
 
 ```text
 $ highhx doctor
@@ -36,6 +38,7 @@ Suggested actions
 - [Why HighhX](#why-highhx)
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [The interactive session](#the-interactive-session)
 - [HighhX Pro: the AI developer agent](#highhx-pro-the-ai-developer-agent)
 - [Commands](#commands)
 - [Workflows](#workflows)
@@ -116,20 +119,75 @@ highhx logs            # output of the last execution (secrets redacted)
 └── logs/                # execution logs (git-ignored)
 ```
 
+## The interactive session
+
+`highhx` with no arguments, in a terminal, opens the HighhX session (`highhx agent` opens the
+same one). Outside a terminal, and with `--json` or `--quiet`, it prints the help as before,
+so scripts and CI are unaffected.
+
+```text
+$ highhx
+
+  (the Knight)   HighhX v0.4.0
+                 Developer command center
+                 ~/code/shop
+                 main • clean
+                 Free • Local
+
+❯ show git status
+
+◉ highhx git status
+✓ Working tree clean
+✓ highhx git status (0.1s)
+
+❯ Fix the failing tests
+
+╭─ HighhX Pro capability ─────────────────────────────╮
+│  AI code changes require HighhX Pro.                │
+│                                                     │
+│  Available locally, without AI:                     │
+│  1  Run the tests         highhx test               │
+│  2  Diagnose the project  highhx diagnose           │
+│  3  Show recent logs      highhx logs               │
+│                                                     │
+│  [1-3] Continue locally    [p] View Pro             │
+╰─────────────────────────────────────────────────────╯
+```
+
+- **Plain language first.** On Free, requests that map to a known action (*run the tests*,
+  *run the checks*, *build*, *show git status*, *security scan*, *open localhost:3000* …)
+  run the matching HighhX command — deterministically, no AI. Requests that need
+  understanding name the Pro capability they need and offer the local commands that can
+  do part of the job. On Pro the AI agent handles every request.
+- **`!command`** runs a shell command through the HighhX engine (risk classification,
+  policy, approval, history); **`highhx <command>`** runs any HighhX command in the session.
+- **Input.** ↑/↓ history (kept across sessions), line editing, `\` at the end of a line or
+  a `"""` block for multi-line input, Ctrl+C interrupts the running request, Ctrl+D exits.
+- **Status line.** `Free • Local`, `Free • Connected`, `Pro • Connected`,
+  `Pro • Offline (cached)` or `… • Platform unavailable`. When the platform cannot be
+  reached, local capabilities keep working; if it fails during a Pro request, the session
+  says so and offers the local route for that request.
+- **Plan changes apply in place.** Run `highhx login` (or `/account` after upgrading) inside
+  the session and it re-checks your account: the AI agent attaches when the platform grants
+  it, and detaches when it no longer does.
+- **Slash commands.** `/help` `/status` `/tools` `/context` `/config` `/account` `/usage`
+  `/history` `/memory` `/pro` `/clear` `/quit`, plus the agent's `/plan` `/model` `/mode`
+  `/changes` `/undo` (Pro).
+
 ## HighhX Pro: the AI developer agent
 
 ```text
-$ highhx agent
+$ highhx
 
      ▗█▖
      ▐▀▌
     ▗ ▄ ▖
    ▗▚▐█▌▞▖
-  ▗▚█▐█▌█▞▖      HighhX v0.3.0
-   ▟█▐█▌█▙       AI Developer Agent · Pro
+  ▗▚█▐█▌█▞▖      HighhX v0.4.0
+   ▟█▐█▌█▙       Developer command center
   ▐▐█▌█▐█▌▌      ~/code/shop
-  █▗▜▌█▐▛▖█
-  █▐▙▘█▝▟▌█
+  █▗▜▌█▐▛▖█      main • clean
+  █▐▙▘█▝▟▌█      Pro • Connected
   ▐▐▜▌▄▐▛▌▌
  ▗▝▐▐▌█▐▌▌▘▖
  █▙▝█▌█▐█▘▟█
@@ -137,10 +195,7 @@ $ highhx agent
  ▀█▟▀ █ ▀▙█▀
    ▀▌ █ ▐▀
 
-Project   shop
-Stack     Python, FastAPI
-Branch    main
-Status    clean
+Project   shop Python, FastAPI
 AI        Connected HighhX (managed)
 
 What would you like me to do? (/help for commands)
@@ -157,8 +212,10 @@ Proceed? [Y/n]
 
 ✓ Run tests — 3 tests failing (4.1s)
 ✓ Read src/shop/cart.py — 88 lines
-⚠ Action requires approval
-  Edit src/shop/cart.py (+2 -1)
+
+╭─ ⚠ Action requires approval ─────────────────────╮
+│  Edit src/shop/cart.py (+2 -1)                   │
+╰──────────────────────────────────────────────────╯
   …diff…
 Proceed? [y/N/a=always this session] y
 ✓ Edit src/shop/cart.py — +2 -1
@@ -184,8 +241,8 @@ summarises it.
   choose `--mode auto-edit`); pushes, deploys and rollbacks always ask; production
   deploys need typed confirmation. The agent cannot leave the project, read secret files
   or touch `.git/`. `--mode read-only` investigates without changing anything.
-- **Slash commands.** `/help` `/status` `/plan` `/context` `/model` `/mode` `/history`
-  `/changes` `/undo` `/memory` `/usage` `/clear` `/quit`.
+- **Slash commands.** Everything from the [interactive session](#the-interactive-session), plus
+  `/plan` `/model` `/mode` `/changes` `/undo`.
 - **Sessions.** Saved per project: `highhx agent --continue`, `--resume ID`, `highhx agent sessions`.
 - **Scriptable.** `highhx agent "…"` outside a terminal (or with `--json`) handles one request
   and exits — `--yes --mode auto-edit` for unattended runs in CI.
@@ -200,7 +257,7 @@ summarises it.
 ```bash
 highhx login                 # browser sign-in (creates your account)
 highhx account upgrade       # HighhX Pro checkout
-highhx agent                 # interactive
+highhx                       # interactive session (also: highhx agent)
 highhx agent "why is the application crashing?"
 ```
 

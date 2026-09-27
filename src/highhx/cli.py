@@ -15,7 +15,7 @@ from highhx.core.errors import ExitCode, HighhXError
 from highhx.core.lifecycle import Lifecycle
 
 SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("HighhX Pro — AI developer agent", ("agent",)),
+    ("Interactive session & AI agent (HighhX Pro)", ("agent",)),
     ("Automation (no AI)", ("do", "computer")),
     ("Account", ("login", "logout", "account")),
     ("Project", ("init", "status", "info", "dev", "start", "stop", "restart", "check")),
@@ -178,21 +178,30 @@ CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"], "max_content_width": 
 )
 @click.version_option(__version__, "--version", "-V", prog_name="highhx", message="%(prog)s %(version)s")
 @click.pass_context
-def cli(ctx: click.Context) -> None:
+def cli(ctx: click.Context) -> int | None:
     """HighhX — your developer command center.
 
-    HighhX Free: every command below except `agent` works locally, with no
-    account. HighhX Pro adds `highhx agent`, an AI developer agent backed by the
-    HighhX platform. Every risky action is classified (safe / normal / dangerous
-    / critical) and needs approval; use --dry-run to preview anything.
+    Run `highhx` in a terminal for the interactive session: describe what you
+    want in plain language. HighhX Free handles it locally (known requests, every
+    command below, shell commands with approvals) with no account; HighhX Pro adds
+    the AI developer agent backed by the HighhX platform. Every risky action is
+    classified (safe / normal / dangerous / critical) and needs approval; use
+    --dry-run to preview anything.
     """
-    if ctx.invoked_subcommand is None:
-        app = ctx.find_object(App)
-        if app is not None and not app.options.json and app.output.console.is_terminal:
-            _banner(app)
-        click.echo(ctx.get_help())
-        if app is not None and not app.options.json:
-            _guide(app)
+    if ctx.invoked_subcommand is not None:
+        return None
+    app = ctx.find_object(App)
+    if app is not None:
+        from highhx.agent.launch import interactive_terminal, start_interactive
+
+        if interactive_terminal(app):
+            return start_interactive(app)
+    if app is not None and not app.options.json and app.output.console.is_terminal:
+        _banner(app)
+    click.echo(ctx.get_help())
+    if app is not None and not app.options.json:
+        _guide(app)
+    return None
 
 
 def _banner(app: App) -> None:
@@ -218,8 +227,9 @@ def _guide(app: App) -> None:
         signed_in = app.cloud.signed_in
     except HighhXError:
         signed_in = False
+    out.note("Run `highhx` in a terminal for the interactive session.")
     if not signed_in:
-        out.note("HighhX Pro: `highhx login`, then `highhx agent` — describe what you want in plain language.")
+        out.note("HighhX Pro: `highhx login` adds the AI developer agent to that session.")
 
 
 for option in global_options(hidden=False):

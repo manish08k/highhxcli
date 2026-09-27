@@ -89,7 +89,7 @@ class PlatformProvider:
                     ) from None
                 if resumes >= MAX_RESUMES or (cancel is not None and cancel.cancelled):
                     raise ModelProviderError(
-                        f"Streaming from the HighhX platform failed: {exc.message}", retryable=True
+                        f"Streaming from the HighhX platform failed: {exc.message}", retryable=True, connection=True
                     ) from None
             except _Gap as exc:
                 reason = str(exc)

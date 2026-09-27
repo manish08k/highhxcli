@@ -300,7 +300,7 @@ def test_agent_sessions_empty(cli, tmp_path: Path) -> None:
 def test_bare_highhx_guides_new_users(cli, tmp_path: Path) -> None:
     result = cli(cwd=tmp_path)
     assert result.code == 0
-    assert "HighhX Pro — AI developer agent" in result.stdout
+    assert "Interactive session & AI agent (HighhX Pro)" in result.stdout
     assert "highhx init" in result.stdout and "highhx login" in result.stdout
 
 

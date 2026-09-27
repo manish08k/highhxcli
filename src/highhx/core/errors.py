@@ -229,10 +229,13 @@ class ModelProviderError(HighhXError):
         hint: str | None = None,
         details: Sequence[str] | None = None,
         status: int | None = None,
+        connection: bool = False,
     ) -> None:
         super().__init__(message, hint=hint, details=details)
         self.retryable = retryable
         self.status = status
+        self.connection = connection
+        """True when the provider (or the HighhX platform) could not be reached at all."""
 
 
 class OutcomeUnknownError(IntegrationError):
