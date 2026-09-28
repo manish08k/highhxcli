@@ -47,6 +47,19 @@ sites:
     search: https://github.com/search?q={query}
     results: /search?q=
     signin: [github.com/login]
+  - id: gitlab
+    name: GitLab
+    aliases: [gitlab, gitlab.com]
+    url: https://gitlab.com
+    capabilities: [open, search]
+    search: https://gitlab.com/search?search={query}
+    results: /search?search=
+    signin: [gitlab.com/users/sign_in]
+  - id: bitbucket
+    name: Bitbucket
+    aliases: [bitbucket, bitbucket.org]
+    url: https://bitbucket.org
+    signin: [id.atlassian.com, bitbucket.org/account/signin]
   - id: google-drive
     name: Google Drive
     aliases: [google drive, drive, my drive, gdrive]

@@ -323,6 +323,8 @@ class NavigationResult:
     settled: bool = True
     attempts: int = 1
     reused_tab: bool = False
+    new_tab: bool = False
+    """Opened in a new tab because the working tab showed another site (kept open)."""
     download: dict[str, Any] | None = None
     """The URL was a file: it was downloaded instead of opened."""
 
@@ -339,6 +341,7 @@ class NavigationResult:
             "settled": self.settled,
             "attempts": self.attempts,
             "reused_tab": self.reused_tab,
+            "new_tab": self.new_tab,
             "download": self.download,
         }
 
@@ -1016,13 +1019,9 @@ class ChromeBrowser:
         recovering and looking at where the page is: if it already got there it is not
         requested again. The result is what the browser shows afterwards, never an assumption."""
         if reuse_tab:
-            self._browser(cancel)
-            existing = self.tabs.find(url)
-            if existing is not None and existing.id != self._target_id:
-                self._activate(existing.id, cancel)
-                self._note(None, "tab_reused", f"{url} was already open; switched to that tab", tab=existing.id)
-                self.wait_ready(cancel=cancel)
-                return NavigationResult(url, self.current_url(cancel=cancel), existing.id, reused_tab=True)
+            reused = self._open_where(url, cancel)
+            if reused is not None:
+                return reused
         problems: list[str] = []
         before = set(self.downloads)
         for attempt in range(1, NAVIGATE_ATTEMPTS + 1):
@@ -1094,6 +1093,36 @@ class ChromeBrowser:
         return NavigationResult(
             url, self.current_url(cancel=cancel), self._target_id, settled=self.last_wait_settled, attempts=attempt
         )
+
+    def _open_where(self, url: str, cancel: CancellationToken | None) -> NavigationResult | None:
+        """Where "open <url>" goes, before anything is loaded:
+
+        * a tab already shows it: work there (the working tab is not reloaded, another is switched to)
+        * the working tab is blank or on the same site: None — navigate it in place
+        * the working tab shows another site: open ``url`` in a new tab, keeping that page
+        """
+        conn, _ = self._page(cancel)  # a live working tab (recreated if it was closed)
+        with contextlib.suppress(CDPError, OSError):  # the registry is event-driven; confirm it once
+            self.tabs.sync(
+                conn.call("Target.getTargets", cancel=cancel, timeout=SETUP_TIMEOUT).get("targetInfos") or []
+            )
+        existing = self.tabs.find(url)
+        if existing is not None:
+            if existing.id == self._target_id:
+                self._note(None, "already_open", f"{url} is already open in the working tab", tab=existing.id)
+            else:
+                self._activate(existing.id, cancel)
+                self._note(None, "tab_reused", f"{url} was already open; switched to that tab", tab=existing.id)
+            self.wait_ready(cancel=cancel)
+            return NavigationResult(url, self.current_url(cancel=cancel), existing.id, reused_tab=True)
+        working = self.tabs.get(self._target_id)
+        if working is None or _replaceable(working.url, url):
+            return None
+        kept = working.url
+        result = self.new_tab(url, cancel=cancel)
+        result.new_tab = True
+        self._note(None, "opened_beside", f"opened {url} in a new tab; {kept} stays open", tab=result.tab)
+        return result
 
     def _abandon_load(self, cancel: CancellationToken | None) -> None:
         """Stop a load that will not finish, so the tab answers the next command at once."""
@@ -1507,6 +1536,19 @@ def arrived(requested: str, actual: str) -> bool:
     host_a = (a.hostname or "").lower().removeprefix("www.")
     host_b = (b.hostname or "").lower().removeprefix("www.")
     return bool(host_a) and host_a == host_b and (b.path or "/").startswith((a.path or "/").rstrip("/") or "/")
+
+
+BLANK_PAGES = ("about:blank", "chrome://newtab", "chrome://new-tab-page", "chrome-search://", "edge://newtab")
+
+
+def _replaceable(current: str, requested: str) -> bool:
+    """The working tab may be navigated to ``requested``: it is blank (a new tab page) or already
+    on the same site — anything else is a page someone may be using, left open."""
+    if not current or current.startswith(BLANK_PAGES):
+        return True
+    here = (urlparse(current).hostname or "").lower().removeprefix("www.")
+    there = (urlparse(requested).hostname or "").lower().removeprefix("www.")
+    return bool(here) and here == there
 
 
 def _no_display() -> bool:

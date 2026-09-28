@@ -70,6 +70,7 @@ class ResolverContext:
     environments: tuple[str, ...] = ()
     workflows: tuple[str, ...] = ()
     _targets: TargetRegistry | None = field(default=None, repr=False, compare=False)
+    _repositories: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_app(cls, app: App) -> ResolverContext:
@@ -138,6 +139,12 @@ class ResolverContext:
 
             self._targets = default_registry(user_file=user_targets_file())
         return self._targets
+
+    def repositories(self) -> tuple[str, ...]:
+        """Web addresses of the project's git remotes ("https://github.com/me/app"), origin first."""
+        if self._repositories is None:
+            self._repositories = repository_urls(self.root) if self.root is not None else ()
+        return self._repositories
 
     def workflow(self, word: str) -> str | None:
         word = word.strip().lower()
@@ -668,3 +675,51 @@ def resolve(text: str, context: ResolverContext | None = None) -> Resolution | N
 def explain(text: str, context: ResolverContext | None = None) -> Unknown | None:
     """Why ``text`` did not resolve, when HighhX recognised the verb but not an entity."""
     return _plan(text, context or ResolverContext())[1]
+
+
+_SCP_REMOTE = re.compile(r"^(?:[\w.-]+@)?(?P<host>[\w.-]+):(?P<path>(?!/).+)$")
+
+
+def remote_web_url(remote: str) -> str | None:
+    """The web page of a git remote: ``git@github.com:me/app.git`` → ``https://github.com/me/app``.
+    Credentials in the remote are never kept; local paths and unknown schemes give None."""
+    from urllib.parse import urlparse
+
+    remote = remote.strip()
+    if "://" in remote:
+        parsed = urlparse(remote)
+        if parsed.scheme not in ("https", "http", "ssh", "git") or not parsed.hostname:
+            return None
+        host, path = parsed.hostname, parsed.path
+    else:
+        match = _SCP_REMOTE.match(remote)
+        if match is None:
+            return None
+        host, path = match.group("host"), match.group("path")
+    path = path.strip("/").removesuffix(".git")
+    return f"https://{host.lower()}/{path}" if path else None
+
+
+def repository_urls(root: Path) -> tuple[str, ...]:
+    """The project's remotes as web addresses (read-only ``git config``; empty when there are none)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["git", "config", "--get-regexp", r"^remote\..*\.url$"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    remotes: list[tuple[str, str]] = []
+    for line in out.splitlines():
+        key, _, value = line.partition(" ")
+        url = remote_web_url(value)
+        if url is not None:
+            remotes.append((key.split(".")[1] if key.count(".") >= 2 else key, url))
+    remotes.sort(key=lambda r: r[0] != "origin")
+    return tuple(dict.fromkeys(url for _, url in remotes))

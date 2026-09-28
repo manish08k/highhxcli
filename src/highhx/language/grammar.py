@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from highhx.language.entities import (
     BY_SUFFIX,
@@ -123,6 +124,12 @@ def _place(ctx: ResolverContext, text: str) -> tuple[str, str] | None:
     return (found[0].id, found[1]) if found is not None else None
 
 
+def _repository_on(ctx: ResolverContext, site: Site) -> str | None:
+    """The project's repository page on ``site`` (a git remote on the same host), if it has one."""
+    host = site.host
+    return next((url for url in ctx.repositories() if (urlparse(url).hostname or "") == host), None)
+
+
 _NEW_TAB = re.compile(r"(?:a\s+)?new\s+tab(?:\s+(?:with|at|to|for|on)\s+(?P<where>.+))?", re.IGNORECASE)
 
 
@@ -148,6 +155,10 @@ def _open(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step
         state.site = site or registry.site_for_url(url)
         return [_step("browser.new_tab", {"url": url}, f"open {site.name if site else url} in a new tab", url)]
     place = _place(ctx, whole)
+    if place is not None and place[1] == "." and state.site is not None:
+        repository = _repository_on(ctx, state.site)
+        if repository is not None:  # "open github and open my repository": the project's page there
+            return [_step("browser.open", {"url": repository}, f"open {repository}", state.site.id)]
     if place is not None:
         where_id, place_path = place
         shown = "the project" if place_path == "." else place_path
@@ -165,7 +176,8 @@ def _open(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step
     place = _place(ctx, target)
     if place is not None:
         return [_step("filesystem.open", {"path": place[1], **extra}, f"open {place[1]}{shown_in}", place[0])]
-    url = as_url(target) if not _existing(ctx, target) else None
+    known = registry.site(target) if "://" not in target else None  # "youtube.com": the site's own address
+    url = as_url(target) if known is None and not _existing(ctx, target) else None
     if url is not None:
         site = registry.site_for_url(url)
         state.site, state.surface = site, "browser"

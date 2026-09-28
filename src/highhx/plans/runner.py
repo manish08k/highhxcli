@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from highhx.plans.schema import ActionPlan, PlanStep
-from highhx.verification.strategies import FAILED, Check, Evidence, overall, verify
+from highhx.verification.strategies import FAILED, UNVERIFIED, Check, Evidence, overall, verify
 
 if TYPE_CHECKING:
     from highhx.actions.spec import ActionResult
@@ -142,6 +142,9 @@ class PlanRunner:
             status = result.status if result.status in ("denied", "blocked", "cancelled", "timeout") else "failed"
             check = Check(FAILED, result.error or status)
             return StepOutcome(step, status, check, result.error or status, seconds, result.summary)
+        if result.status == "planned":  # --dry-run: previewed, never executed — nothing to verify
+            check = Check(UNVERIFIED, "dry run — nothing was executed")
+            return StepOutcome(step, "succeeded", check, "", seconds, result.summary, action_ok=True)
         check = verify(
             step.verification,
             Evidence(

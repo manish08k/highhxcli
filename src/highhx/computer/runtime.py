@@ -290,7 +290,9 @@ class ComputerRuntime:
                 if problems and getattr(self.provider, "last_wait_settled", True) is False:
                     problems.append("the page was still loading when HighhX stopped waiting")
                 if details and details.get("reused_tab"):
-                    summary += " (it was already open in another tab)"
+                    summary += " (it was already open)"
+                elif details and details.get("new_tab"):
+                    summary += " in a new tab"
                 event.verified = not problems
                 if problems:
                     event.status, event.error = "failed", "; ".join(problems)

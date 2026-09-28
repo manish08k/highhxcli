@@ -6,6 +6,31 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-09-29
+
+`open <website>` in HighhX Free: the right tab, every time — and the project's own repository page.
+
+### Changed
+
+- **`open <website>` decides which tab to use.** A tab already showing the page is used (the
+  working tab is not reloaded, another tab is switched to); a blank tab or one on the same site
+  is navigated; a tab showing another site is kept and the page opens in a new tab. Repeated
+  opens never duplicate tabs.
+- A site typed as its domain (`open youtube.com`, `open docs.python.org`) opens the site's
+  registered address; a URL with a scheme (`open https://youtube.com`) is opened as typed.
+
+### Added
+
+- `open github and open my repository` opens the project's repository page: the git remote on
+  the same host as the open site (credentials in the remote are never used). Without a matching
+  remote it still opens the project folder.
+- GitLab and Bitbucket in the built-in site registry.
+
+### Fixed
+
+- `--dry-run` previews of a plan no longer report "verification failed: no page is open": a
+  previewed step is shown as not verified, because nothing ran.
+
 ## [0.6.3] - 2026-09-28
 
 The HighhX browser rebuilt around one browser-wide connection, a tab registry and a single
