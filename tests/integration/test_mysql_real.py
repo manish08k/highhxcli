@@ -35,7 +35,13 @@ def free_port() -> int:
 @pytest.fixture(scope="module")
 def mysql_server(tmp_path_factory: pytest.TempPathFactory):  # type: ignore[no-untyped-def]
     assert MYSQLD is not None
-    bindir = Path(MYSQLD).parent
+    # The client tools sit next to mysqld in a Homebrew keg, but in /usr/bin (with mysqld in
+    # /usr/sbin) on Debian/Ubuntu.
+    beside = Path(MYSQLD).parent / "mysql"
+    found = shutil.which("mysql")
+    if not beside.exists() and found is None:
+        pytest.skip("the mysql client is not installed")
+    bindir = beside.parent if beside.exists() else Path(found or "").parent
     base = tmp_path_factory.mktemp("mysql")
     data = base / "data"
     subprocess.run(
