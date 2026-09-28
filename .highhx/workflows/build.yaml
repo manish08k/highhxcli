@@ -1,0 +1,12 @@
+name: build
+description: Test, then build the project.
+settings:
+  fail_fast: true
+steps:
+  - id: test
+    name: Tests
+    run: "python -m pytest"
+  - id: build
+    name: Build
+    run: "python -m build"
+    depends_on: [test]

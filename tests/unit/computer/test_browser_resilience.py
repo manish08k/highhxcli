@@ -58,14 +58,16 @@ def test_lost_answer_is_an_unknown_outcome_and_is_never_resent(drop: str) -> Non
     server.close()
 
 
-def test_timeout_is_an_unknown_outcome_and_closes_the_connection() -> None:
-    """A late answer must not be mistaken for the answer to a later command."""
+def test_timeout_is_an_unknown_outcome_and_the_command_is_not_resent() -> None:
+    """The connection stays open (ids are unique, so a late answer is never mistaken for the
+    answer to a later command — see test_browser_recovery)."""
     server = FakeDevTools()
     server.stall = True
     conn = CDPConnection(f"ws://127.0.0.1:{server.port}/devtools/page/1", timeout=0.5)
     with pytest.raises(OutcomeUnknownError, match="did not answer"):
         conn.call("Runtime.evaluate", {"expression": "1"}, cancel=CancellationToken())
-    assert conn.ws.closed and len(server.received) == 1
+    assert len(server.received) == 1 and conn.usable
+    conn.close()
     server.close()
 
 

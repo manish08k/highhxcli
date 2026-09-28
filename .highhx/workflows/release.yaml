@@ -1,0 +1,23 @@
+name: release
+description: Test and build, then bump the version, update the changelog and tag.
+inputs:
+  bump:
+    description: "major, minor, patch or auto"
+    default: auto
+settings:
+  fail_fast: true
+steps:
+  - id: test
+    name: Tests
+    run: "python -m pytest"
+  - id: build
+    name: Build
+    run: "python -m build"
+    depends_on: [test]
+  - id: release
+    name: Version, changelog and tag
+    run: highhx release $ --yes
+    depends_on: [build]
+    approval:
+      message: Creates a release commit and tag.
+      risk: dangerous

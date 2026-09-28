@@ -12,6 +12,14 @@ steps:
   - type: {into: "textbox:Password", text_from_env: SHOP_PASSWORD}   # never logged
   - launch: Calculator
   - wait: 1.5
+  - new_tab: https://example.com     # or `new_tab: true` for an empty one
+  - switch_tab: Shop                 # a tab whose URL or title contains this
+  - back: true                       # also forward / refresh / close_tab
+  - hover: "link:Menu"
+  - double_click: "button:Zoom"
+  - drag: {from: "listitem:Task 1", to: "region:Done"}
+  - upload: {into: "textbox:Attachment", files: [report.pdf]}   # asks first: files leave the machine
+  - download: "link:Report"          # followed to completion
 ```
 
 Every step is discovered (element resolved by role and accessible name), validated,
@@ -35,7 +43,29 @@ from highhx.computer.runtime import ActionOutcome, ComputerRuntime, Expectation
 from highhx.core.errors import NotFoundError, UsageError, ValidationError
 from highhx.utils.validation import Any_, List, Map, Num, Obj, Prop, Str
 
-STEP_KEYS = ("open", "click", "type", "press", "select", "scroll", "expect", "launch", "wait")
+STEP_KEYS = (
+    "open",
+    "click",
+    "type",
+    "press",
+    "select",
+    "scroll",
+    "expect",
+    "launch",
+    "wait",
+    "back",
+    "forward",
+    "refresh",
+    "new_tab",
+    "close_tab",
+    "switch_tab",
+    "hover",
+    "double_click",
+    "drag",
+    "upload",
+    "download",
+)
+PAGE_STEPS = ("back", "forward", "refresh", "new_tab", "close_tab", "switch_tab")
 
 FLOW_SCHEMA = Obj(
     {
@@ -56,6 +86,22 @@ STEP_SCHEMAS = {
     "wait": Num(minimum=0),
     "type": Obj({"into": Prop(Str(min_length=1), required=True), "text": Prop(Str()), "text_from_env": Prop(Str())}),
     "select": Obj({"in": Prop(Str(min_length=1), required=True), "option": Prop(Str(), required=True)}),
+    "back": Any_(),
+    "forward": Any_(),
+    "refresh": Any_(),
+    "close_tab": Any_(),
+    "new_tab": Any_(),
+    "switch_tab": Str(min_length=1),
+    "hover": Str(min_length=1),
+    "double_click": Str(min_length=1),
+    "download": Str(min_length=1),
+    "drag": Obj({"from": Prop(Str(min_length=1), required=True), "to": Prop(Str(min_length=1), required=True)}),
+    "upload": Obj(
+        {
+            "into": Prop(Str(min_length=1), required=True),
+            "files": Prop(List(Str(min_length=1), min_items=1), required=True),
+        }
+    ),
     "expect": Obj(
         {
             "text": Prop(Str()),
@@ -115,7 +161,13 @@ def _describe(step: dict[str, Any]) -> str:
         return f"select {value['option']!r} in {value['in']}"
     if key == "expect":
         return "expect " + ", ".join(f"{k}={v!r}" for k, v in value.items())
-    return f"{key} {value}"
+    if key == "drag":
+        return f"drag {value['from']} onto {value['to']}"
+    if key == "upload":
+        return f"upload {', '.join(value['files'])} into {value['into']}"
+    if key in PAGE_STEPS and not isinstance(value, str):
+        return key.replace("_", " ")
+    return f"{key.replace('_', ' ')} {value}"
 
 
 class FlowRunner:
@@ -193,6 +245,23 @@ class FlowRunner:
         if key == "select":
             element = self._wait_for(Selector.parse(str(value["in"])), timeout)
             return rt.act(f"select:{element}", str(value["option"]))
+        if key in PAGE_STEPS:
+            argument = value if isinstance(value, str) and key in ("new_tab", "switch_tab") else None
+            return rt.page_action(key, argument)
+        if key in ("hover", "double_click", "download"):
+            element = self._wait_for(Selector.parse(str(value)), timeout)
+            return rt.act(f"{key}:{element}")
+        if key == "drag":
+            source = self._wait_for(Selector.parse(str(value["from"])), timeout)
+            drop = self.runtime.resolve(Selector.parse(str(value["to"]))).id
+            return rt.act(f"drag:{source}", drop)
+        if key == "upload":
+            files = [str(Path(f).expanduser().resolve()) for f in value["files"]]
+            missing = [f for f in files if not Path(f).is_file()]
+            if missing:
+                raise UsageError(f"No such file: {', '.join(missing)}")
+            element = self._wait_for(Selector.parse(str(value["into"])), timeout)
+            return rt.act(f"upload:{element}", "\n".join(files))
         if key == "expect":
             expectation = Expectation(
                 text=value.get("text"),

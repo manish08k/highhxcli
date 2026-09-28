@@ -1,0 +1,21 @@
+# Environment variables and profiles — `highhx env`, `highhx env check`.
+# Values live in .env files (never commit them); this file only describes them.
+default_profile: development
+
+variables: {}
+#  DATABASE_URL:
+#    description: Database connection string
+#    required: true
+#    secret: true
+#  PORT:
+#    default: "8000"
+#    pattern: "^[0-9]+$"
+
+profiles:
+  development:
+    files: [.env, .env.development]
+  staging:
+    files: [.env.staging]
+  production:
+    files: [.env.production]
+    protected: true

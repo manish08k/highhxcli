@@ -363,7 +363,9 @@ def test_play_opens_the_first_result_and_checks_it_plays(
 ) -> None:
     runtime = FakeRuntime()
     page = type(
-        "Browser", (), {"evaluate": lambda self, js, cancel=None: {"found": True, "paused": False, "title": "Song"}}
+        "Browser",
+        (),
+        {"evaluate": lambda self, js, cancel=None, **_kw: {"found": True, "paused": False, "title": "Song"}},
     )()
     session = type("Session", (), {"browser": page})()
     monkeypatch.setattr(computer, "_runtime", lambda _ctx: runtime)
@@ -375,7 +377,9 @@ def test_play_opens_the_first_result_and_checks_it_plays(
         "https://www.youtube.com/results?search_query=adhento+gani",
         "https://www.youtube.com/watch?v=abc",
     ]
-    browser_paused = type("Browser", (), {"evaluate": lambda self, js, cancel=None: {"found": True, "paused": True}})()
+    browser_paused = type(
+        "Browser", (), {"evaluate": lambda self, js, cancel=None, **_kw: {"found": True, "paused": True}}
+    )()
     session.browser = browser_paused
     assert not executor.run("browser.play", {"query": "adhento gani"}).ok  # opened, but not playing: reported
 

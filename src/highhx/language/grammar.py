@@ -123,6 +123,9 @@ def _place(ctx: ResolverContext, text: str) -> tuple[str, str] | None:
     return (found[0].id, found[1]) if found is not None else None
 
 
+_NEW_TAB = re.compile(r"(?:a\s+)?new\s+tab(?:\s+(?:with|at|to|for|on)\s+(?P<where>.+))?", re.IGNORECASE)
+
+
 # ---------------------------------------------------------------------- verbs
 @verb(
     "open",
@@ -132,6 +135,18 @@ def _place(ctx: ResolverContext, text: str) -> tuple[str, str] | None:
 def _open(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step] | Unknown | None:
     registry = _registry(ctx)
     whole = m.group("target").strip()
+    tab = _NEW_TAB.fullmatch(whole)
+    if tab is not None:
+        state.surface = "browser"
+        where = (tab.group("where") or "").strip()
+        if not where:
+            return [_step("browser.new_tab", {}, "open a new tab")]
+        site = registry.site(where)
+        url = site.url if site is not None else as_url(where)
+        if url is None:
+            return Unknown(where, f"I don't know a website called {where!r}.", ("open a new tab with example.com",))
+        state.site = site or registry.site_for_url(url)
+        return [_step("browser.new_tab", {"url": url}, f"open {site.name if site else url} in a new tab", url)]
     place = _place(ctx, whole)
     if place is not None:
         where_id, place_path = place
@@ -344,6 +359,90 @@ def _press(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Ste
 def _scroll(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step] | Unknown:
     direction = m.group("dir").lower()
     return [_step("computer.scroll", {"direction": direction, "source": state.surface}, f"scroll {direction}")]
+
+
+_ELEMENT = r"(?:the\s+)?[\"']?(?P<name>[^\"']+?)[\"']?(?:\s+(?P<role>button|link|tab|checkbox|menu\s*item|field|item))?"
+
+
+def _selector(m: re.Match[str], default_role: str = "button") -> tuple[str, str]:
+    role = (m.group("role") or default_role).replace(" ", "").lower()
+    name = m.group("name").strip()
+    return f"{role}:{name}", name
+
+
+@verb("history", ("back", "forward"), r"(?:go\s+)?(?P<dir>back|forward)(?:\s+(?:a|one)\s+page)?")
+def _history(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step]:
+    direction = m.group("dir").lower()
+    return [_step(f"browser.{direction}", {}, f"go {direction}")]
+
+
+@verb("refresh", ("refresh", "reload"), r"(?:refresh|reload)(?:\s+(?:the|this))?(?:\s+page)?")
+def _refresh(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step]:
+    return [_step("browser.refresh", {}, "reload the page")]
+
+
+@verb("close tab", ("close",), r"close\s+(?:the\s+|this\s+|current\s+)*tab")
+def _close_tab(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step]:
+    return [_step("browser.close_tab", {}, "close the tab")]
+
+
+@verb("switch tab", ("switch",), r"switch\s+to\s+(?:the\s+)?(?P<tab>.+?)\s+tab")
+def _switch_tab(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step]:
+    tab = m.group("tab").strip()
+    site = _registry(ctx).site(tab)
+    if site is not None:  # "the gmail tab": the site's host is what the tab's URL shows
+        tab = site.url.split("//", 1)[-1].split("/", 1)[0].removeprefix("www.")
+    state.surface = "browser"
+    return [_step("browser.switch_tab", {"tab": tab}, f"switch to the {m.group('tab').strip()} tab", tab)]
+
+
+@verb("hover", ("hover",), r"hover\s+(?:over\s+|on\s+)?" + _ELEMENT)
+def _hover(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step]:
+    target, name = _selector(m, "link")
+    return [_step("browser.hover", {"target": target}, f"hover over {name!r}", name)]
+
+
+@verb("double click", ("double", "double-click", "doubleclick"), r"double[\s-]?click\s+(?:on\s+)?" + _ELEMENT)
+def _double_click(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step]:
+    target, name = _selector(m)
+    return [_step("browser.double_click", {"target": target}, f"double-click {name!r}", name)]
+
+
+@verb("download", ("download",), r"download\s+" + _ELEMENT)
+def _download(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step]:
+    target, name = _selector(m, "link")
+    return [_step("browser.download", {"target": target}, f"download {name!r}", name)]
+
+
+@verb(
+    "upload",
+    ("upload", "attach"),
+    r"(?:upload|attach)\s+(?P<files>.+?)\s+(?:to|into|in)\s+(?:the\s+)?[\"']?(?P<field>[^\"']+?)[\"']?(?:\s+field)?",
+)
+def _upload(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step] | Unknown:
+    paths = [p.strip().strip("\"'`") for p in re.split(r"\s*(?:,|\band\b)\s*", m.group("files")) if p.strip()]
+    missing = [p for p in paths if _existing(ctx, p) is None]
+    if missing:
+        return Unknown(m.group(0), f"There is no file {missing[0]!r} in this project.", ())
+    field_name = m.group("field").strip()
+    return [
+        _step(
+            "browser.upload",
+            {"target": f"textbox:{field_name}", "paths": paths},
+            f"upload {', '.join(paths)}",
+            field_name,
+        )
+    ]
+
+
+@verb(
+    "drag",
+    ("drag",),
+    r"drag\s+(?:the\s+)?[\"']?(?P<source>[^\"']+?)[\"']?\s+(?:on)?to\s+(?:the\s+)?[\"']?(?P<target>[^\"']+?)[\"']?",
+)
+def _drag(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step]:
+    source, target = m.group("source").strip(), m.group("target").strip()
+    return [_step("browser.drag", {"source": source, "target": target}, f"drag {source!r} onto {target!r}", source)]
 
 
 @verb(

@@ -690,6 +690,9 @@ class SafetyPolicy:
             verdict.risk = RiskLevel.NORMAL
         elif kind == ActionKind.UI_SCROLL:
             verdict.risk = RiskLevel.SAFE
+        elif kind == ActionKind.UI_UPLOAD:
+            verdict.risk = RiskLevel.NORMAL
+            verdict.add(DATA_EGRESS, f"gives the page {action.target or 'local files'}", RiskLevel.DANGEROUS)
         return verdict
 
     def _classify_ui(self, action: ActionDescriptor, verdict: SafetyVerdict) -> None:

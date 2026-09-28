@@ -23,9 +23,9 @@ class WebSocketClosed(IntegrationError):
 
 
 class WebSocketTimeout(IntegrationError):
-    """No complete message arrived before the deadline (the connection is closed: a
-    half-read frame would leave the stream unusable, and a late answer must not be
-    mistaken for the answer to a later request)."""
+    """No complete message arrived before the deadline. If part of a frame had been read the
+    connection is closed (the stream would be unusable); between messages it stays open —
+    ``closed`` tells which."""
 
 
 class WebSocket:
@@ -85,14 +85,25 @@ class WebSocket:
             raise WebSocketClosed("The DevTools connection was lost while sending.") from None
 
     def _read_exact(
-        self, n: int, cancel: CancellationToken | None, deadline_poll: float, deadline: float | None = None
+        self,
+        n: int,
+        cancel: CancellationToken | None,
+        deadline_poll: float,
+        deadline: float | None = None,
+        *,
+        boundary: bool = False,
     ) -> bytes:
+        """``boundary``: nothing of the current message has been read, so giving up (cancel,
+        deadline) leaves the stream intact and the connection open."""
         while len(self._buffer) < n:
+            intact = boundary and not self._buffer
             if cancel is not None and cancel.cancelled:
-                self.close()  # a half-read frame leaves the stream unusable
+                if not intact:
+                    self.close()  # a half-read frame leaves the stream unusable
                 raise OperationCancelledError("Browser operation cancelled.")
             if deadline is not None and time.monotonic() > deadline:
-                self.close()
+                if not intact:
+                    self.close()
                 raise WebSocketTimeout("No answer from the browser in time.")
             self.sock.settimeout(deadline_poll)
             try:
@@ -115,7 +126,7 @@ class WebSocket:
         ``deadline`` is a ``time.monotonic()`` value; past it :class:`WebSocketTimeout` is raised."""
         message = b""
         while True:
-            b1, b2 = self._read_exact(2, cancel, poll, deadline)
+            b1, b2 = self._read_exact(2, cancel, poll, deadline, boundary=not message)
             fin, opcode = b1 & 0x80, b1 & 0x0F
             length = b2 & 0x7F
             if length == 126:

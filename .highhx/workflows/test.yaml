@@ -1,0 +1,15 @@
+name: test
+description: Lint, type-check and test in parallel.
+settings:
+  fail_fast: false
+  max_parallel: 3
+steps:
+  - id: lint
+    name: Lint
+    run: "ruff check ."
+  - id: typecheck
+    name: Type check
+    run: "mypy"
+  - id: test
+    name: Tests
+    run: "python -m pytest"

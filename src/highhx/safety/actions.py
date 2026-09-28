@@ -24,6 +24,8 @@ class ActionKind(StrEnum):
     UI_KEY = "ui_key"
     UI_SELECT = "ui_select"
     UI_SCROLL = "ui_scroll"
+    UI_UPLOAD = "ui_upload"
+    """Choose local files in a page's file field (their contents can then leave the machine)."""
     NAVIGATE = "navigate"
     APP_LAUNCH = "app_launch"
 

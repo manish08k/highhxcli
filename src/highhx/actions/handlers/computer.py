@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from highhx.actions.handlers.files import _confine
-from highhx.actions.handlers.native import _flow_step, _runtime
+from highhx.actions.handlers.native import _flow_step, _runtime, open_url
 from highhx.actions.spec import ActionContext, ActionResult, Inputs
 from highhx.agent.permissions import relative_to_root
 from highhx.agent.tools.base import ToolError
@@ -174,7 +174,7 @@ def browser_open(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     app = _app_for(inputs.get("app"))
     if app is not None and not app.automatable:
         return _open_url_with(ctx, url, app)
-    result = _flow_step(ctx, {"open": url})
+    result = open_url(ctx, url, reuse_tab=True)  # "open Gmail" again: the Gmail tab, not a second one
     site = default_registry(user_file=user_targets_file()).site_for_url(url)
     landed = str(result.output.get("url") or "")
     problem = _signin_problem(site, landed)
@@ -283,7 +283,7 @@ def browser_play(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     opened = runtime.navigate(target)
     if not opened.ok:
         return ActionResult(False, error="; ".join(opened.problems), summary="could not open the result")
-    state = ctx.computer().browser.evaluate(_PLAY_JS, cancel=ctx.cancel) or {}
+    state = ctx.computer().browser.evaluate(_PLAY_JS, cancel=ctx.cancel, retry_safe=True) or {}
     playing = bool(state.get("found")) and not state.get("paused", True)
     title = str(state.get("title") or (runtime.observation.title if runtime.observation else "") or chosen.name)
     return ActionResult(

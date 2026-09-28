@@ -358,7 +358,8 @@ def test_cdp_calls_are_cancellable() -> None:
     with pytest.raises(OperationCancelledError):
         conn.call("Runtime.evaluate", {"expression": "while(true){}"}, cancel=token)
     assert time.monotonic() - started < 2
-    assert conn.ws.closed
+    assert conn.usable  # cancelled between messages: the stream is intact
+    conn.close()
     server.close()
 
 

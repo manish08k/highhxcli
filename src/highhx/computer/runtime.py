@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import difflib
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -42,6 +43,25 @@ from highhx.safety.gate import ActionGate
 
 class InvalidActionError(ValidationError):
     """The requested action is not one of the valid candidates for the current UI."""
+
+
+EXTENDED_VERBS = {"hover": "click", "double_click": "click", "download": "click", "drag": "click", "upload": "type"}
+"""Actions on an element that are valid wherever its base action is (not offered to the AI agent
+as candidates, so its choices stay compact; deterministic requests and flows use them)."""
+
+PAGE_ACTIONS = ("back", "forward", "refresh", "new_tab", "close_tab", "switch_tab")
+
+
+def _extended(candidate_id: str, valid: dict[str, ActionCandidate], observation: Observation) -> ActionCandidate | None:
+    verb, _, element_id = candidate_id.partition(":")
+    base = EXTENDED_VERBS.get(verb)
+    if base is None or f"{base}:{element_id}" not in valid:
+        return None
+    element = observation.element(element_id)
+    label = element.label() if element is not None else element_id
+    return ActionCandidate(
+        candidate_id, verb, element_id, f"{verb.replace('_', ' ')} {label}", needs_text=verb in ("drag", "upload")
+    )
 
 
 @dataclass
@@ -108,6 +128,7 @@ class ComputerRuntime:
         self.cancel = cancel or CancellationToken()
         self.settle = settle
         self.observation: Observation | None = None
+        self.last_download: dict[str, Any] | None = None
         self._failed_sensitive: set[str] = set()
 
     # ---------------------------------------------------------------- observe
@@ -144,7 +165,7 @@ class ComputerRuntime:
     def act(self, candidate_id: str, text: str | None = None, *, expect: Expectation | None = None) -> ActionOutcome:
         observation = self.observation or self.observe()
         valid = {c.id: c for c in candidates(observation)}
-        candidate = valid.get(candidate_id)
+        candidate = valid.get(candidate_id) or _extended(candidate_id, valid, observation)
         if candidate is None:
             raise InvalidActionError(
                 f"'{candidate_id}' is not a valid action in the current UI.",
@@ -182,19 +203,34 @@ class ComputerRuntime:
                 candidate.description,
                 candidate.needs_text,
             )
+        if candidate.verb == "drag" and text is not None:
+            # the drop target is an element too: bind it to the live UI the same way
+            drop = observation.element(text)
+            moved = rebind(drop, live, ordinal(observation, drop)) if drop is not None else None
+            if moved is None:
+                raise NotFoundError(f"The drop target {text} is no longer on the screen.", hint="Observe again.")
+            text = moved.id
         current_action = describe_action(live_candidate, live, tool=self.tool, actor=self.actor, text=text)
         try:
             with self.gate.executing(authorization, current_action) as event:
-                self._perform(live_candidate, text)
-                after = self._settle_and_observe()
-                verified, problems = self._verify(live_candidate, live, after, text)
-                if expect is not None:
-                    problems += expect.check(after)
-                    verified = verified is not False and not problems
-                event.verified = verified
-                if verified is False:
-                    event.status = "failed"
-                    event.error = "; ".join(problems)
+                try:
+                    self._perform(live_candidate, text)
+                    after = self._settle_and_observe()
+                    verified, problems = self._verify(live_candidate, live, after, text)
+                    if live_candidate.verb == "download":
+                        # a download leaves the page as it was: it is verified by the finished file
+                        done = (self.last_download or {}).get("state") == "completed"
+                        verified, problems = done, [] if done else ["the download did not complete"]
+                        event.details["download"] = self.last_download
+                    if expect is not None:
+                        problems += expect.check(after)
+                        verified = verified is not False and not problems
+                    event.verified = verified
+                    if verified is False:
+                        event.status = "failed"
+                        event.error = "; ".join(problems)
+                finally:
+                    self._journal(event)
         except OutcomeUnknownError:
             # It may have happened (e.g. the browser connection dropped after the click was sent).
             # Never repeat it automatically — not even after the browser reconnects — and make the
@@ -213,7 +249,9 @@ class ComputerRuntime:
         summary = current_action.summary + ("" if verified is not False else f" — not verified: {'; '.join(problems)}")
         return ActionOutcome(candidate.id, verified is not False, verified, summary, after, problems)
 
-    def navigate(self, url: str, *, expect: Expectation | None = None) -> ActionOutcome:
+    def navigate(self, url: str, *, expect: Expectation | None = None, reuse_tab: bool = False) -> ActionOutcome:
+        """Open ``url`` (with ``reuse_tab``: switch to a tab already showing it) and verify where
+        the browser really is afterwards — a redirect is reported, a download is followed."""
         navigate = getattr(self.provider, "navigate", None)
         if navigate is None:
             raise UsageError(f"{self.provider.name} cannot open URLs.")
@@ -231,18 +269,96 @@ class ComputerRuntime:
             attributes=attrs(host=parsed.hostname or ""),
         )
         authorization = self.gate.authorize(action, policy_action="computer:navigate", grant="computer:navigate")
+        summary = action.summary
         with self.gate.executing(authorization) as event:
-            navigate(url, cancel=self.cancel)
-            after = self._settle_and_observe()
-            problems = [] if _same_page(url, after.url) else [f"the browser is at {after.url}, not {url}"]
-            if expect is not None:
-                problems += expect.check(after)
-            if problems and getattr(self.provider, "last_wait_settled", True) is False:
-                problems.append("the page was still loading when HighhX stopped waiting")
-            event.verified = not problems
-            if problems:
-                event.status, event.error = "failed", "; ".join(problems)
-        return ActionOutcome(f"navigate:{url}", not problems, not problems, action.summary, after, problems)
+            try:
+                result = navigate(url, cancel=self.cancel, **({"reuse_tab": True} if reuse_tab else {}))
+                details = result.to_dict() if hasattr(result, "to_dict") else None
+                if details is not None:
+                    event.details["navigation"] = details
+                download = (details or {}).get("download")
+                if download:
+                    # the URL was a file: it was downloaded, not opened — verified by the finished file
+                    after = self.observe()
+                    event.verified = download.get("state") == "completed"
+                    summary = f"Downloaded {download.get('path') or download.get('filename')}"
+                    return ActionOutcome(f"navigate:{url}", True, event.verified, summary, after, [])
+                after = self._settle_and_observe()
+                problems = [] if _same_page(url, after.url) else [f"the browser is at {after.url}, not {url}"]
+                if expect is not None:
+                    problems += expect.check(after)
+                if problems and getattr(self.provider, "last_wait_settled", True) is False:
+                    problems.append("the page was still loading when HighhX stopped waiting")
+                if details and details.get("reused_tab"):
+                    summary += " (it was already open in another tab)"
+                event.verified = not problems
+                if problems:
+                    event.status, event.error = "failed", "; ".join(problems)
+            finally:
+                self._journal(event)
+        return ActionOutcome(f"navigate:{url}", not problems, not problems, summary, after, problems)
+
+    def page_action(self, op: str, value: str | None = None) -> ActionOutcome:
+        """Tab and history actions — back, forward, refresh, new_tab (optionally at a URL),
+        close_tab, switch_tab (to a tab id or text in its URL/title) — through the safety gate,
+        then verified against what the browser shows."""
+        if op not in PAGE_ACTIONS:
+            raise UsageError(f"Unknown page action {op!r} (expected: {', '.join(PAGE_ACTIONS)}).")
+        method = getattr(
+            self.provider, {"back": "go_back", "forward": "go_forward", "refresh": "reload"}.get(op, op), None
+        )
+        if method is None:
+            raise UsageError(f"{self.provider.name} cannot {op.replace('_', ' ')}.")
+        if op == "new_tab" and value and not urlparse(value).scheme:
+            value = f"https://{value}"
+        label = {
+            "back": "Go back",
+            "forward": "Go forward",
+            "refresh": "Reload the page",
+            "new_tab": f"Open a new tab{f' at {value}' if value else ''}",
+            "close_tab": "Close the tab",
+            "switch_tab": f"Switch to the tab {value!r}",
+        }[op]
+        before = self.observation.url if self.observation is not None else ""
+        action = ActionDescriptor(
+            ActionKind.NAVIGATE,
+            label,
+            self.tool,
+            target=value or before or op,
+            application=self.provider.name,
+            actor=self.actor,
+            attributes=attrs(op=op, host=urlparse(value or "").hostname or ""),
+        )
+        authorization = self.gate.authorize(action, policy_action=f"computer:{op}", grant=f"computer:{op}")
+        with self.gate.executing(authorization) as event:
+            try:
+                args = [value] if op in ("new_tab", "switch_tab") and value else []
+                result = method(*args, cancel=self.cancel)
+                after = self._settle_and_observe()
+                problems: list[str] = []
+                expected = ""
+                if op in ("back", "forward") and isinstance(result, str):
+                    expected = result
+                elif op == "new_tab" and value:
+                    expected = value
+                elif op == "switch_tab" and isinstance(result, dict):
+                    expected = str(result.get("url") or "")
+                if expected and not _same_page(expected, after.url):
+                    problems.append(f"the browser is at {after.url}, not {expected}")
+                event.verified = not problems
+                if problems:
+                    event.status, event.error = "failed", "; ".join(problems)
+            finally:
+                self._journal(event)
+        return ActionOutcome(op, not problems, not problems, label, after, problems)
+
+    def _journal(self, event: Any) -> None:
+        """Attach what the browser went through during the action (recoveries, tab changes,
+        dialogs, downloads) to its audit record."""
+        drain = getattr(self.provider, "drain_journal", None)
+        entries = drain() if drain is not None else []
+        if entries:
+            event.details["browser"] = entries
 
     # ---------------------------------------------------------------- helpers
     def _perform(self, candidate: ActionCandidate, text: str | None) -> None:
@@ -261,8 +377,25 @@ class ComputerRuntime:
                 p.press(candidate.id.split(":", 1)[1], cancel=self.cancel)
             elif candidate.verb == "scroll":
                 p.scroll(candidate.id.split(":", 1)[1], cancel=self.cancel)
+            elif candidate.verb in EXTENDED_VERBS:
+                self._perform_extended(candidate.verb, element, text)
         except ElementNotFoundError as exc:
             raise NotFoundError(exc.message, hint="The UI changed; observe again.") from None
+
+    def _perform_extended(self, verb: str, element: str, text: str | None) -> None:
+        method = getattr(self.provider, verb, None)
+        if method is None:
+            raise UsageError(f"{self.provider.name} cannot {verb.replace('_', ' ')}.")
+        if verb == "drag":
+            method(element, text or "", cancel=self.cancel)
+        elif verb == "upload":
+            method(element, [p for p in (text or "").split("\n") if p], cancel=self.cancel)
+        elif verb == "download":
+            self.last_download = None
+            download = method(element, cancel=self.cancel)
+            self.last_download = download.to_dict() if hasattr(download, "to_dict") else None
+        else:
+            method(element, cancel=self.cancel)
 
     def _settle_and_observe(self) -> Observation:
         if self.cancel.wait(self.settle):
@@ -294,8 +427,12 @@ class ComputerRuntime:
             return ok, [] if ok else ["the control did not toggle"]
         if candidate.verb == "focus":
             return (same is not None and same.focused) or None, []
-        if candidate.verb == "scroll":
+        if candidate.verb in ("scroll", "hover"):
             return None, []
+        if candidate.verb == "upload" and same is not None:
+            names = [Path(p).name for p in (text or "").split("\n") if p]
+            ok = bool(names) and same.value.replace("\\", "/").rsplit("/", 1)[-1] == names[0]
+            return ok, [] if ok else ["the file field does not show the chosen file"]
         return (True, []) if changed else (False, ["no visible change after the action"])
 
 

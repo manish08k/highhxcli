@@ -11,7 +11,7 @@ decision/            deterministic: request → Decision (route, intent, target,
                      advanced: the Pro-only gate for JEv / advanced reasoning
 plans/               JSON action plan (schema v1, validation) · planner · runner (verify, stop on failure)
     ↓
-actions/             resolver (developer rules) · catalog (73 actions) · policy (risk, approval)
+actions/             resolver (developer rules) · catalog (85 actions) · policy (risk, approval)
                      · executor (validate → classify → approve → run → verify → record) · graphs
     ↓                ├─ automation/engine/  bridge protocol → C#/.NET engine (engine/dotnet) or Python engine
                      ├─ computer/           HighhX browser (DevTools) · computer runtime (element safety)
@@ -81,6 +81,29 @@ execute: ActionGate.authorize (classifier + catalog floor + policy + approval, t
 | `cloud/capabilities.py` | Capabilities from the platform-reported plan features |
 | `workflows/` | Parser, validator, DAG scheduler, engine (action steps, rollback, resume), running registry |
 | `voice/` | Engines (recorders, local speech-to-text, speech) and voice mode |
+
+## The HighhX browser
+
+`computer/browser.py` drives a Chromium-family browser on its own profile. One place for each
+concern:
+
+| Module | Responsibility |
+|---|---|
+| `computer/cdp.py` | Transport: **one** WebSocket to the browser endpoint, a flat session per tab (`Target.attachToTarget`). Errors say whether a command can have run: *not delivered* (safe to resend) vs *outcome unknown* (timeout, crash, tab closed, connection dropped). Command ids are unique, so a late answer is ignored, and a timeout does not tear the connection down. |
+| `computer/tabs.py` | The tab registry, kept current from target events: stable target ids, opener, URL/title, when HighhX last used each tab. Tabs are always chosen from it — never "the first tab listed". |
+| `ChromeBrowser` | Lifecycle (start, reconnect, restart a crashed or hung browser, stop a stalled load), tab selection (the remembered working tab → the most recently used survivor → a new tab), and `_run` — the **single recovery policy** every action goes through. |
+
+Every action has a retry class. *Safe* actions (reads, waits, screenshots, exact scrolls, exact
+history jumps, navigation — verified first) are recovered and repeated, at most three times with
+backoff. *Unsafe* actions (click, type, key, submit, upload, download, reload) are recovered and
+**never repeated** once they may have run: HighhX looks at the page and reports what it found
+(`OutcomeUnknownError`, audited as `unknown`). A command that was never delivered is always safe
+to send again.
+
+State transitions (`CONNECTED`, `PAGE_CLOSED`, `TARGET_CHANGED`, `CONNECTION_LOST`,
+`BROWSER_CRASHED`, `BROWSER_HUNG`, `NAVIGATION_FAILED`, `RECOVERY_REQUIRED` …), dialog decisions
+(alerts acknowledged; confirm/prompt/leave-page cancelled), followed or ignored popups and downloads
+are journaled and attached to the action's audit record (`details.browser`).
 
 ## Composition root
 

@@ -27,7 +27,7 @@ through one `ActionExecutor`. Code: `src/highhx/actions/`.
 `highhx actions list [category]`, `highhx actions show NAME` and `/tools` print the catalog;
 `highhx actions plan NAME key=value …` rates an action without running it.
 
-## The catalog (73 actions)
+## The catalog (85 actions)
 
 | Category | Actions |
 |---|---|
@@ -38,7 +38,7 @@ through one `ActionExecutor`. Code: `src/highhx/actions/`.
 | docker | build, run, stop, logs |
 | database | connect, migrate, backup, restore |
 | service | start, stop, restart, logs |
-| browser | open (navigate), click, fill (type), press, wait, extract (read), screenshot |
+| browser | open (navigate), search, play, find, click, double_click, hover, drag, fill (type), press, upload, download, wait, extract (read), screenshot, back, forward, refresh (reload), new_tab, close_tab, switch_tab, tabs |
 | computer | launch |
 | deployment | deploy, rollback, status, logs |
 | security | scan, doctor, diagnose |

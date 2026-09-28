@@ -170,8 +170,38 @@ def _flow_step(ctx: ActionContext, step: dict[str, Any], timeout: float = 10.0) 
     )
 
 
+def open_url(ctx: ActionContext, url: str, *, reuse_tab: bool = False) -> ActionResult:
+    """Open ``url`` in the HighhX browser (with ``reuse_tab``: switch to a tab already showing
+    it) and report where the browser really is — verified by the runtime."""
+    from highhx.core.errors import NotFoundError, UsageError, ValidationError
+
+    runtime = _runtime(ctx)
+    label = f"open {url}"
+    try:
+        outcome = runtime.navigate(url, reuse_tab=reuse_tab)
+    except (NotFoundError, UsageError, ValidationError) as exc:
+        return ActionResult(
+            False, output={"step": {"action": label, "ok": False, "error": exc.message}}, error=exc.message
+        )
+    observation = outcome.observation
+    detail = "; ".join(outcome.problems)
+    entry: dict[str, Any] = {"action": label, "ok": outcome.ok, "verified": outcome.verified}
+    if outcome.problems:
+        entry["problems"] = outcome.problems
+    output: dict[str, Any] = {"step": entry}
+    if observation is not None:
+        output["url"], output["title"] = observation.url, observation.title
+    return ActionResult(
+        outcome.ok,
+        output=output,
+        summary=outcome.summary[:1].lower() + outcome.summary[1:] + ("" if outcome.ok else f" — {detail}"),
+        verified=outcome.verified if isinstance(outcome.verified, bool) else None,
+        error="" if outcome.ok else detail,
+    )
+
+
 def browser_open(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    return _flow_step(ctx, {"open": str(inputs["url"])})
+    return open_url(ctx, str(inputs["url"]))
 
 
 def browser_click(ctx: ActionContext, inputs: Inputs) -> ActionResult:
@@ -247,3 +277,73 @@ def browser_screenshot(ctx: ActionContext, inputs: Inputs) -> ActionResult:
 
 def app_launch(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     return _flow_step(ctx, {"launch": str(inputs["name"])})
+
+
+# ------------------------------------------------------------- tabs & history
+def _page_step(ctx: ActionContext, op: str, value: str | None = None) -> ActionResult:
+    result = _flow_step(ctx, {op: value if value else True})
+    result.output["tab"] = ctx.computer().browser._target_id
+    return result
+
+
+def browser_back(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return _page_step(ctx, "back")
+
+
+def browser_forward(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return _page_step(ctx, "forward")
+
+
+def browser_refresh(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return _page_step(ctx, "refresh")
+
+
+def browser_new_tab(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return _page_step(ctx, "new_tab", str(inputs["url"]) if inputs.get("url") else None)
+
+
+def browser_close_tab(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return _page_step(ctx, "close_tab")
+
+
+def browser_switch_tab(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return _page_step(ctx, "switch_tab", str(inputs["tab"]))
+
+
+def browser_tabs(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    tabs = ctx.computer().browser.list_tabs(cancel=ctx.cancel)
+    return ActionResult(True, output={"tabs": tabs}, summary=f"{len(tabs)} tab(s) open")
+
+
+# ------------------------------------------------------------ element actions
+def browser_hover(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return _flow_step(ctx, {"hover": str(inputs["target"])}, float(inputs.get("timeout") or 10))
+
+
+def browser_double_click(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return _flow_step(ctx, {"double_click": str(inputs["target"])}, float(inputs.get("timeout") or 10))
+
+
+def browser_drag(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    step = {"drag": {"from": str(inputs["source"]), "to": str(inputs["target"])}}
+    return _flow_step(ctx, step, float(inputs.get("timeout") or 10))
+
+
+def browser_upload(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """Choose project files in a file field — never secret files, never outside the project
+    (uploading is data leaving the machine, so the gate asks first)."""
+    files = [
+        str(confine_path(ctx.app, str(raw), must_exist=True, for_agent=ctx.actor == Actor.AGENT))
+        for raw in inputs["paths"]
+    ]
+    return _flow_step(ctx, {"upload": {"into": str(inputs["target"]), "files": files}})
+
+
+def browser_download(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    result = _flow_step(ctx, {"download": str(inputs["target"])}, float(inputs.get("timeout") or 10))
+    download = _runtime(ctx).last_download
+    if download:
+        result.output["download"] = download
+        if download.get("path"):
+            result.summary = f"downloaded {download['path']}"
+    return result

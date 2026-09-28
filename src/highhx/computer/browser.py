@@ -4,28 +4,60 @@ The browser is started with a dedicated HighhX profile (never the user's
 personal profile) and a DevTools port bound to 127.0.0.1. Observations come from
 the DOM with accessible names; password and payment field values never leave
 the page. The session is recorded in the user state directory so separate
-`highhx computer` invocations reuse the same browser.
+`highhx computer` invocations reuse the same browser — and the same tab.
+
+Architecture (one place for each concern):
+
+* :mod:`~highhx.computer.cdp` — the transport: one WebSocket to the browser, a flat session
+  per tab, and errors that say whether a command can have run.
+* :mod:`~highhx.computer.tabs` — the tab registry, kept current from target events.
+* :class:`ChromeBrowser` — the lifecycle (start, reconnect, restart a crashed or hung
+  browser), tab selection, and :meth:`ChromeBrowser._run`, the single recovery policy every
+  action goes through (:class:`Retry`: safe actions are recovered and repeated, unsafe ones
+  are recovered and reported, never repeated). Every transition is journaled as a
+  :class:`BrowserState` change and ends up in the audit trail.
 """
 
 from __future__ import annotations
 
 import contextlib
-import itertools
 import json
+import logging
 import os
+import re
 import shutil
 import signal
 import subprocess  # nosec B404 - subprocess used with fixed argv only
 import sys
 import time
 import urllib.request
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
+from urllib.parse import urlparse
 
+from highhx.computer.cdp import (
+    BrowserDisconnectedError,
+    BrowserTimeoutError,
+    CDPConnection,
+    CDPError,
+    PageCrashedError,
+    TargetClosedError,
+)
 from highhx.computer.model import Observation, UIElement
 from highhx.computer.providers import Capability
-from highhx.computer.websocket import WebSocket, WebSocketClosed, WebSocketTimeout
-from highhx.core.errors import IntegrationError, OperationCancelledError, OutcomeUnknownError, ToolNotFoundError
+from highhx.computer.tabs import TabRegistry, same_document
+from highhx.computer.websocket import WebSocketClosed
+from highhx.core.errors import (
+    IntegrationError,
+    NotFoundError,
+    OperationCancelledError,
+    OutcomeUnknownError,
+    ToolNotFoundError,
+    UsageError,
+)
 from highhx.execution.cancellation import CancellationToken
 from highhx.utils.filesystem import atomic_write_text
 
@@ -146,6 +178,10 @@ ACT_JS = r"""
   if (!e) return {found: false};
   e.scrollIntoView({block: 'center', inline: 'center'});
   if (action === 'focus') { e.focus(); return {found: true}; }
+  if (action === 'locate') {
+    const r = e.getBoundingClientRect();
+    return {found: true, x: r.left + r.width / 2, y: r.top + r.height / 2};
+  }
   if (action === 'click') {
     e.focus({preventScroll: true}); e.click();
     const link = e.closest('a[href]');
@@ -193,162 +229,151 @@ def find_browser() -> str | None:
     return next((found for name in LINUX_BROWSERS if (found := shutil.which(name))), None)
 
 
-class CDPConnection:
-    """One DevTools WebSocket session with request/response matching."""
+log = logging.getLogger(__name__)
 
-    def __init__(self, ws_url: str, *, timeout: float = 30.0, target_id: str = "") -> None:
-        self.ws = WebSocket(ws_url, timeout=timeout)
-        self.timeout = timeout
-        self.target_id = target_id
-        self.crashed = False
-        """The page's renderer crashed (Inspector.targetCrashed); the page must be reopened."""
-        self.dialogs: list[dict[str, Any]] = []
-        """JavaScript dialogs HighhX closed so they would not block the page."""
-        self._ids = itertools.count(1)
-        self.events: list[dict[str, Any]] = []
-        self.navigations = 0
-        """Navigations requested/started in any frame since this connection opened."""
-        self.settled = 0
-        """Loads that finished (or same-document navigations) since this connection opened."""
-        self.loading_frames: set[str] = set()
-        self.main_frame = ""
-        """The top-level frame's id (from Page.frameNavigated), once known."""
-
-    @property
-    def usable(self) -> bool:
-        return not self.ws.closed and not self.crashed
-
-    def call(
-        self,
-        method: str,
-        params: dict[str, Any] | None = None,
-        *,
-        cancel: CancellationToken | None = None,
-        timeout: float | None = None,
-    ) -> dict[str, Any]:
-        if self.crashed:
-            raise PageCrashedError("The page crashed; it has to be reopened.")
-        message_id = next(self._ids)
-        try:
-            self.ws.send(json.dumps({"id": message_id, "method": method, "params": params or {}}))
-        except WebSocketClosed:
-            # Nothing reached the browser, so sending it again on a new connection is safe.
-            raise BrowserDisconnectedError(f"The browser connection was lost before {method} was sent.") from None
-        # From here on the browser may have acted on the command: a lost answer is an unknown
-        # outcome, never a reason to send it again (only idempotent navigation is re-issued, and
-        # only after looking at where the page is — see ChromeBrowser.navigate).
-        limit = timeout or self.timeout
-        deadline = time.monotonic() + limit
-        while True:
-            try:
-                if time.monotonic() > deadline:  # a steady stream of events must not extend the wait
-                    self.ws.close()
-                    raise WebSocketTimeout("No answer from the browser in time.")
-                raw = self.ws.recv(cancel=cancel, deadline=deadline)
-            except WebSocketTimeout:
-                raise BrowserTimeoutError(
-                    f"The browser did not answer {method} within {limit:.0f}s; it may or may not have run.",
-                    hint="Observe the page to see what happened; it will not be repeated automatically.",
-                ) from None
-            except WebSocketClosed:
-                raise OutcomeUnknownError(
-                    f"The browser connection was lost after {method} was sent; it may or may not have run.",
-                    hint="Observe the page to see what happened; it will not be repeated automatically.",
-                ) from None
-            try:
-                message = json.loads(raw)
-            except ValueError:
-                continue  # not a DevTools message; never let it end the session
-            if message.get("id") == message_id:
-                if "error" in message:
-                    raise IntegrationError(f"Browser error in {method}: {message['error'].get('message')}")
-                result: dict[str, Any] = message.get("result") or {}
-                return result
-            if "method" in message:
-                self._track(message)
-                self.events.append(message)
-                del self.events[:-200]
-                if self.crashed:
-                    raise PageCrashedError(
-                        f"The page crashed while {method} was running; it may or may not have run.",
-                        hint="HighhX reopens the page on the next action; observe it before deciding again.",
-                    )
-
-    def _handle_dialog(self, params: dict[str, Any]) -> None:
-        """A JavaScript dialog blocks every script on the page (and so every HighhX command).
-        Close it right away: an alert is acknowledged; anything that asks for a decision (confirm,
-        prompt, "leave page? unsaved changes will be lost") is cancelled — the answer that never
-        discards or confirms anything — and recorded."""
-        kind = str(params.get("type") or "")
-        accept = kind == "alert"
-        self.dialogs.append({"type": kind, "message": str(params.get("message") or "")[:300], "accepted": accept})
-        del self.dialogs[:-20]
-        # fire-and-forget (its answer is ignored by id); never nested inside call()
-        with contextlib.suppress(WebSocketClosed):
-            self.ws.send(
-                json.dumps(
-                    {"id": next(self._ids), "method": "Page.handleJavaScriptDialog", "params": {"accept": accept}}
-                )
-            )
-
-    def _track(self, message: dict[str, Any]) -> None:
-        method = message.get("method")
-        frame = str((message.get("params") or {}).get("frameId") or "")
-        if method == "Inspector.targetCrashed":
-            self.crashed = True
-        elif method == "Inspector.detached":
-            self.ws.close()  # the target went away or another client took it over
-        elif method == "Page.javascriptDialogOpening":
-            self._handle_dialog(message.get("params") or {})
-        if method in NAVIGATION_STARTED:
-            self.navigations += 1
-        if method == "Page.frameStartedLoading":
-            self.loading_frames.add(frame)
-        elif method == "Page.frameStoppedLoading":
-            self.loading_frames.discard(frame)
-            self.settled += 1
-        elif method == "Page.navigatedWithinDocument":
-            self.settled += 1
-        elif method == "Page.frameDetached":
-            # an iframe removed while loading never reports frameStoppedLoading
-            self.loading_frames.discard(frame)
-        elif method == "Page.frameNavigated":
-            info = (message.get("params") or {}).get("frame") or {}
-            if not info.get("parentId") and info.get("id"):
-                self.main_frame = str(info["id"])
-
-    @property
-    def main_frame_loading(self) -> bool:
-        """The top-level document is loading (unknown main frame: any frame counts)."""
-        if not self.main_frame:
-            return bool(self.loading_frames)
-        return self.main_frame in self.loading_frames
-
-    def close(self) -> None:
-        self.ws.close()
-
-
-NAVIGATION_STARTED = frozenset(
-    {"Page.frameRequestedNavigation", "Page.frameScheduledNavigation", "Page.frameStartedLoading"}
-)
 CONNECT_ATTEMPTS = 3
 """Connection attempts (with backoff) before a browser action fails with a clear error."""
-NAVIGATE_ATTEMPTS = 3
-"""Times an idempotent navigation is issued when the connection drops or the page crashes."""
+RECOVERY_ATTEMPTS = 3
+"""Attempts an action that is safe to retry gets when the connection, tab or page fails."""
+NAVIGATE_ATTEMPTS = RECOVERY_ATTEMPTS
 NAVIGATE_TIMEOUT = 45.0
 """Seconds Page.navigate may take to answer (it answers once the response headers arrive)."""
 SETUP_TIMEOUT = 5.0
 """Seconds each session set-up command may take; past that the tab has a stalled load, which is stopped."""
+READY_TIMEOUT = 5.0
+"""Seconds one readiness check may take while waiting for a page."""
+PING_AFTER = 10.0
+"""A connection silent for this long is checked (Browser.getVersion) before it is reused."""
+PING_TIMEOUT = 3.0
 NEW_TAB_GRACE = 2.0
-"""Seconds a new tab opened by a clicked link gets to show the link's address."""
+"""Seconds a new tab opened by a click gets to show where it is going."""
 NAVIGATION_GRACE = 0.5
+"""Seconds an action gets to start a navigation (form submit, link) before the page counts as settled."""
 SUBFRAME_GRACE = 3.0
 """How long to wait for iframes (ads, embeds) once the page itself is complete."""
-"""Seconds an action gets to start a navigation (form submit, link) before the page counts as settled."""
+DOWNLOAD_GRACE = 3.0
+"""Seconds a click or navigation gets to start a download."""
+DOWNLOAD_TIMEOUT = 600.0
+TRANSIENT_NETWORK_ERRORS = frozenset(
+    {
+        "net::ERR_TIMED_OUT",
+        "net::ERR_CONNECTION_TIMED_OUT",
+        "net::ERR_CONNECTION_RESET",
+        "net::ERR_CONNECTION_CLOSED",
+        "net::ERR_EMPTY_RESPONSE",
+        "net::ERR_NETWORK_CHANGED",
+        "net::ERR_NETWORK_IO_SUSPENDED",
+        "net::ERR_HTTP2_PROTOCOL_ERROR",
+    }
+)
+"""Network failures that say nothing about the site: an idempotent navigation is tried again."""
+NETWORK_BACKOFF = 1.0
+RESET_HINT = "Run `highhx computer browser stop` to reset the HighhX browser, then try again."
+
+_AUTH_HOSTS = frozenset(
+    {
+        "accounts.google.com",
+        "login.microsoftonline.com",
+        "login.live.com",
+        "appleid.apple.com",
+        "github.com",
+        "gitlab.com",
+        "www.facebook.com",
+        "api.twitter.com",
+        "x.com",
+    }
+)
+_AUTH_HOST_PREFIXES = ("login.", "auth.", "accounts.", "sso.", "id.", "signin.")
+_AUTH_PATH = re.compile(r"/(o/)?(oauth2?|authorize|auth|signin|sign-in|login|sso|saml)(/|\b)", re.IGNORECASE)
+
+T = TypeVar("T")
+
+
+class BrowserState(StrEnum):
+    """Where the browser connection stands; every transition is journaled (and audited)."""
+
+    STOPPED = "stopped"
+    CONNECTED = "connected"
+    PAGE_VALID = "page_valid"
+    PAGE_CLOSED = "page_closed"
+    TARGET_CHANGED = "target_changed"
+    CONNECTION_LOST = "connection_lost"
+    BROWSER_CRASHED = "browser_crashed"
+    BROWSER_HUNG = "browser_hung"
+    NAVIGATION_IN_PROGRESS = "navigation_in_progress"
+    NAVIGATION_FAILED = "navigation_failed"
+    RECOVERY_REQUIRED = "recovery_required"
+
+
+class Retry(StrEnum):
+    """Whether an action may be performed again after a failure whose outcome is unknown."""
+
+    SAFE = "safe"
+    """Reads, waits, screenshots, exact scrolls, history jumps, navigation (verified first)."""
+    UNSAFE = "unsafe"
+    """Clicks, typing, keys, submits, uploads, downloads: repeating could do it twice."""
+
+
+@dataclass
+class NavigationResult:
+    requested: str
+    url: str
+    """Where the page actually is afterwards (observed, not assumed)."""
+    tab: str
+    settled: bool = True
+    attempts: int = 1
+    reused_tab: bool = False
+    download: dict[str, Any] | None = None
+    """The URL was a file: it was downloaded instead of opened."""
+
+    @property
+    def redirected(self) -> bool:
+        return bool(self.url) and not same_document(self.requested, self.url)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "requested": self.requested,
+            "url": self.url,
+            "tab": self.tab,
+            "redirected": self.redirected,
+            "settled": self.settled,
+            "attempts": self.attempts,
+            "reused_tab": self.reused_tab,
+            "download": self.download,
+        }
+
+
+@dataclass
+class Download:
+    guid: str
+    url: str
+    filename: str
+    path: str = ""
+    """The final file, once complete."""
+    state: str = "in_progress"
+    """in_progress | completed | canceled"""
+    received: int = 0
+    total: int = 0
+    started: float = field(default_factory=time.monotonic)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "url": self.url,
+            "filename": self.filename,
+            "path": self.path,
+            "state": self.state,
+            "bytes": self.received,
+        }
 
 
 class ChromeBrowser:
-    """A HighhX-controlled Chromium-family browser (the BrowserAutomationProvider)."""
+    """A HighhX-controlled Chromium-family browser (the BrowserAutomationProvider).
+
+    One connection to the browser endpoint serves every tab; the tab registry is kept current
+    from the browser's target events; every action runs through :meth:`_run`, the single place
+    where failures are classified, recorded and recovered from according to the action's
+    :class:`Retry` class.
+    """
 
     name = "browser"
 
@@ -359,16 +384,50 @@ class ChromeBrowser:
         self.binary = binary or find_browser()
         self.headless = headless if headless is not None else _no_display()
         self._conn: CDPConnection | None = None
-        self._mark: tuple[CDPConnection, int, int] | None = None
+        self._pid = 0
+        self.tabs = TabRegistry()
         self._target_id = ""
-        """The tab HighhX works in: reconnections return to it rather than to whichever tab is first."""
+        """The tab HighhX works in (a stable DevTools target id)."""
+        self._session_id = ""
+        self._mark: tuple[str, int, int] | None = None
         self._tabs_before: set[str] | None = None
-        """Tabs that existed before a click, to follow the tab a clicked link opened."""
+        """Tabs that existed before a click, to recognise the tab the click opened."""
         self._clicked_href = ""
         """The address of the link the last click activated ('' when it was not a link)."""
+        self.state = BrowserState.STOPPED
+        self.journal: list[dict[str, Any]] = []
+        """Recovery, tab, dialog and download events not yet written to the audit trail."""
+        self.downloads: dict[str, Download] = {}
         self.reconnects = 0
+        self._interrupted = False
+        """An operation was cancelled mid-way: its load may still be pending in the tab."""
         self.last_wait_settled = True
         """Whether the last wait for the page ended because it settled (False: it timed out)."""
+
+    # --------------------------------------------------------------- journal
+    def _note(self, state: BrowserState | None, event: str, detail: str, **extra: Any) -> None:
+        if state is not None:
+            self.state = state
+        self.journal.append({"event": event, "state": str(self.state), "detail": detail, **extra})
+        del self.journal[:-200]
+        log.info("browser %s (%s): %s", event, self.state, detail)
+
+    def drain_journal(self) -> list[dict[str, Any]]:
+        """Events since the last drain (dialog decisions included), for the audit trail."""
+        if self._conn is not None:
+            for session in self._conn.sessions.values():
+                for dialog in session.dialogs:
+                    decision = "accepted" if dialog["accepted"] else "dismissed"
+                    self._note(
+                        None,
+                        "dialog",
+                        f"{decision} a {dialog['type']} dialog: {dialog['message']!r}",
+                        dialog=dialog["type"],
+                        accepted=dialog["accepted"],
+                    )
+                session.dialogs.clear()
+        entries, self.journal = self.journal, []
+        return entries
 
     # ----------------------------------------------------------------- state
     def capability(self) -> Capability:
@@ -378,16 +437,19 @@ class ChromeBrowser:
             self.name, True, f"{Path(self.binary).name} via DevTools ({'headless' if self.headless else 'visible'})"
         )
 
-    def _state(self) -> dict[str, Any] | None:
+    def _saved(self) -> dict[str, Any]:
         try:
             data = json.loads(self.state_file.read_text())
         except (OSError, ValueError):
-            return None
-        if not isinstance(data, dict) or not _alive(int(data.get("pid") or 0)):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _state(self) -> dict[str, Any] | None:
+        data = self._saved()
+        if not data or not _alive(int(data.get("pid") or 0)):
             return None
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{int(data['port'])}/json/version", timeout=2) as r:  # nosec B310
-                r.read()
+            self._devtools(int(data["port"]), "/json/version")
         except (OSError, ValueError, KeyError):
             return None
         return data
@@ -400,7 +462,12 @@ class ChromeBrowser:
         state = self._state()
         if state is not None:
             return state
-        self._stop_unresponsive()
+        previous = self._saved()
+        if previous.get("pid") and not _alive(int(previous["pid"])):
+            if self.state is not BrowserState.BROWSER_CRASHED:  # not already recorded by the connection
+                self._note(BrowserState.BROWSER_CRASHED, "browser_gone", "the browser had exited; starting it again")
+        elif self._stop_unresponsive():
+            self._note(BrowserState.BROWSER_HUNG, "browser_hung", "the browser stopped responding; restarted it")
         if not self.binary:
             raise ToolNotFoundError(
                 "chrome", purpose="automate the browser", hint="Install Google Chrome or set HIGHHX_BROWSER."
@@ -459,8 +526,10 @@ class ChromeBrowser:
         state = self._state()
         self.close()
         self._target_id = ""
+        self.tabs = TabRegistry()
         with contextlib.suppress(OSError):
             self.state_file.unlink()
+        self.state = BrowserState.STOPPED
         if state is None:
             return self._stop_unresponsive()
         _terminate(int(state["pid"]))
@@ -471,9 +540,8 @@ class ChromeBrowser:
         or its port is gone) holds the profile lock, so a new one would exit at once. Stop it —
         only when the process really is HighhX's browser on HighhX's profile (never a reused pid)."""
         try:
-            data = json.loads(self.state_file.read_text())
-            pid = int(data.get("pid") or 0)
-        except (OSError, ValueError, TypeError, AttributeError):
+            pid = int(self._saved().get("pid") or 0)
+        except (ValueError, TypeError):
             return False
         if not _alive(pid) or not _uses_profile(pid, self.profile_dir):
             return False
@@ -482,6 +550,14 @@ class ChromeBrowser:
             self.state_file.unlink()
         return True
 
+    def _save_tab(self, target: str) -> None:
+        """Remember the working tab so the next `highhx` invocation continues in it."""
+        data = self._saved()
+        if data and data.get("tab") != target:
+            data["tab"] = target
+            with contextlib.suppress(OSError):
+                atomic_write_text(self.state_file, json.dumps(data), mode=0o600)
+
     # ------------------------------------------------------------ connection
     def _devtools(self, port: int, path: str, *, method: str = "GET") -> Any:
         request = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method)
@@ -489,98 +565,71 @@ class ChromeBrowser:
             body = r.read()
         return json.loads(body) if body.strip().startswith((b"{", b"[")) else None
 
-    def _pages(self, port: int) -> list[dict[str, Any]]:
-        targets = self._devtools(port, "/json/list") or []
-        return [
-            t
-            for t in targets
-            if t.get("type") == "page"
-            and t.get("webSocketDebuggerUrl")
-            and not str(t.get("url") or "").startswith(("devtools://", "chrome-extension://"))
-        ]
-
-    def _connection(self, cancel: CancellationToken | None) -> CDPConnection:
-        """The live page session — reconnecting (and restarting the browser, and reopening a
-        crashed or closed tab) when needed, with a bounded number of attempts."""
-        if self._conn is not None and self._conn.usable:
-            return self._conn
-        replacing = self._conn is not None
-        crashed = self._conn is not None and self._conn.crashed
-        self.close()
+    def _browser(self, cancel: CancellationToken | None) -> CDPConnection:
+        """The healthy browser connection: reused while it answers, rebuilt (restarting the
+        browser when needed) when it does not — with a bounded number of attempts."""
+        conn = self._conn
+        if conn is not None and conn.usable:
+            if time.monotonic() - conn.last_answer < PING_AFTER or self._ping(conn, cancel):
+                return conn
+        if conn is not None:
+            if self._pid and not _alive(self._pid):
+                self._note(BrowserState.BROWSER_CRASHED, "browser_gone", "the browser process exited; restarting it")
+            else:
+                self._note(
+                    BrowserState.CONNECTION_LOST, "connection_lost", "the browser connection was lost; reconnecting"
+                )
+            self.close()
         last: Exception | None = None
         for attempt in range(CONNECT_ATTEMPTS):
             if cancel is not None and cancel.cancelled:
                 raise OperationCancelledError("Browser operation cancelled.")
             try:
-                self._conn = self._open_session(crashed=crashed, cancel=cancel)
-                if replacing:
-                    self.reconnects += 1
+                self._conn = self._connect(cancel)
                 return self._conn
             except (OSError, ValueError, KeyError, IntegrationError) as exc:
                 last = exc
                 self.close()
-                crashed = False
                 if attempt + 1 < CONNECT_ATTEMPTS and self._pause(cancel, 0.25 * (2**attempt)):
                     raise OperationCancelledError("Browser operation cancelled.") from None
         detail = last.message if isinstance(last, IntegrationError) else str(last)
+        self._note(BrowserState.RECOVERY_REQUIRED, "connect_failed", detail)
         raise IntegrationError(
-            f"Could not connect to the browser after {CONNECT_ATTEMPTS} attempts: {detail}",
-            hint="Run `highhx computer browser stop` to reset the HighhX browser, then try again.",
+            f"Could not connect to the browser after {CONNECT_ATTEMPTS} attempts: {detail}", hint=RESET_HINT
         )
 
-    def _open_session(self, *, crashed: bool, cancel: CancellationToken | None) -> CDPConnection:
-        port = int(self.start(cancel=cancel)["port"])
-        pages = self._pages(port)
-        if crashed and self._target_id:
-            # a crashed renderer cannot be trusted again: close its tab and start a fresh one
-            with contextlib.suppress(OSError, ValueError):
-                self._devtools(port, f"/json/close/{self._target_id}")
-            pages = [p for p in pages if p.get("id") != self._target_id]
-            self._target_id = ""
-        page = next((p for p in pages if self._target_id and p.get("id") == self._target_id), None)
-        if page is None and pages:
-            page = pages[0]
-        if page is None:
-            page = self._devtools(port, "/json/new?about:blank", method="PUT")
+    def _ping(self, conn: CDPConnection, cancel: CancellationToken | None) -> bool:
         try:
-            conn = self._attach(page, cancel)
-        except BrowserTimeoutError:
-            # A navigation that never committed (a server that does not answer, a client that gave
-            # up on it) holds every command of a new session — except Page.stopLoading, which the
-            # browser answers itself. Abandon that load and attach again; opening is idempotent.
-            stopper = CDPConnection(str(page["webSocketDebuggerUrl"]), target_id=str(page.get("id") or ""))
-            try:
-                stopper.call("Page.stopLoading", cancel=cancel, timeout=SETUP_TIMEOUT)
-            finally:
-                stopper.close()
-            conn = self._attach(page, cancel)
-        self._target_id = conn.target_id
-        return conn
+            conn.call("Browser.getVersion", cancel=cancel, timeout=PING_TIMEOUT)
+        except IntegrationError:
+            return False
+        return True
 
-    def _attach(self, page: dict[str, Any], cancel: CancellationToken | None) -> CDPConnection:
-        """A new DevTools session on ``page`` with the domains and settings HighhX relies on."""
-        conn = CDPConnection(str(page["webSocketDebuggerUrl"]), target_id=str(page.get("id") or ""))
+    def _connect(self, cancel: CancellationToken | None) -> CDPConnection:
+        state = self.start(cancel=cancel)
+        version = self._devtools(int(state["port"]), "/json/version") or {}
+        conn = CDPConnection(str(version["webSocketDebuggerUrl"]))
         try:
-            conn.call("Page.enable", cancel=cancel, timeout=SETUP_TIMEOUT)
-            tree = conn.call("Page.getFrameTree", cancel=cancel, timeout=SETUP_TIMEOUT)
-            conn.main_frame = str(((tree.get("frameTree") or {}).get("frame") or {}).get("id") or "")
-            conn.call("Runtime.enable", cancel=cancel, timeout=SETUP_TIMEOUT)
-            conn.call("Inspector.enable", cancel=cancel, timeout=SETUP_TIMEOUT)
-            with contextlib.suppress(IntegrationError):
-                # keys reach the page even when the window is behind the terminal or its address
-                # bar has keyboard focus (otherwise Enter can silently go nowhere)
-                conn.call("Emulation.setFocusEmulationEnabled", {"enabled": True}, cancel=cancel, timeout=SETUP_TIMEOUT)
-            with contextlib.suppress(IntegrationError, OSError):  # else downloads keep the browser default
+            conn.listeners.append(self._on_event)
+            conn.call("Target.setDiscoverTargets", {"discover": True}, cancel=cancel, timeout=SETUP_TIMEOUT)
+            infos = conn.call("Target.getTargets", cancel=cancel, timeout=SETUP_TIMEOUT).get("targetInfos") or []
+            self.tabs.sync(infos)
+            with contextlib.suppress(CDPError, OSError):  # else downloads keep the browser default
                 self.downloads_dir.mkdir(parents=True, exist_ok=True)
                 conn.call(
-                    "Page.setDownloadBehavior",
-                    {"behavior": "allow", "downloadPath": str(self.downloads_dir)},
+                    "Browser.setDownloadBehavior",
+                    {"behavior": "allowAndName", "downloadPath": str(self.downloads_dir), "eventsEnabled": True},
                     cancel=cancel,
                     timeout=SETUP_TIMEOUT,
                 )
         except BaseException:
             conn.close()
             raise
+        if self._pid:
+            self.reconnects += 1  # every connection after the first is a recovery
+        self._pid = int(state["pid"])
+        self._session_id = ""  # sessions belonged to the old connection
+        self._note(BrowserState.CONNECTED, "connected", f"connected to the browser (pid {self._pid})")
         return conn
 
     @property
@@ -588,86 +637,472 @@ class ChromeBrowser:
         return self.state_dir / "downloads"
 
     def close(self) -> None:
+        """Close the connection (the browser keeps running for the next command)."""
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+        self._session_id = ""
 
-    def _send(
-        self, method: str, params: dict[str, Any] | None = None, *, cancel: CancellationToken | None = None
-    ) -> dict[str, Any]:
-        """One DevTools command on the live session. A command that never reached the browser is
-        sent once more on a fresh connection; one that may have run is never repeated here."""
+    # ---------------------------------------------------------------- events
+    def _on_event(self, message: dict[str, Any]) -> None:
+        method = str(message.get("method") or "")
+        params = message.get("params") or {}
+        if method in ("Target.targetCreated", "Target.targetInfoChanged"):
+            self.tabs.update(params.get("targetInfo") or {})
+        elif method == "Target.targetDestroyed":
+            target = str(params.get("targetId") or "")
+            if self.tabs.remove(target) is not None and target == self._target_id:
+                self._note(BrowserState.PAGE_CLOSED, "page_closed", "the tab HighhX was using was closed")
+        elif method == "Target.targetCrashed" and params.get("targetId") == self._target_id:
+            self._note(BrowserState.RECOVERY_REQUIRED, "page_crashed", "the page crashed")
+        elif method == "Browser.downloadWillBegin":
+            download = Download(
+                str(params.get("guid") or ""), str(params.get("url") or ""), str(params.get("suggestedFilename") or "")
+            )
+            self.downloads[download.guid] = download
+            self._note(None, "download_started", f"downloading {download.filename or download.url}")
+        elif method == "Browser.downloadProgress":
+            self._download_progress(params)
+
+    def _download_progress(self, params: dict[str, Any]) -> None:
+        download = self.downloads.get(str(params.get("guid") or ""))
+        if download is None or download.state != "in_progress":
+            return
+        download.received = int(params.get("receivedBytes") or download.received)
+        download.total = int(params.get("totalBytes") or download.total)
+        state = str(params.get("state") or "")
+        if state == "completed":
+            download.path = str(self._finish_download(download))
+            download.state = "completed"
+            self._note(None, "download_completed", f"downloaded {download.path}", bytes=download.received)
+        elif state == "canceled":
+            download.state = "canceled"
+            self._note(None, "download_canceled", f"the download of {download.filename or download.url} was canceled")
+
+    def _finish_download(self, download: Download) -> Path:
+        """The browser saved the file under its guid; give it its own name (never overwriting)."""
+        source = self.downloads_dir / download.guid
+        name = Path(download.filename or "download").name or "download"
+        target = self.downloads_dir / name
+        stem, suffix = Path(name).stem, Path(name).suffix
+        counter = 1
+        while target.exists():
+            target = self.downloads_dir / f"{stem} ({counter}){suffix}"
+            counter += 1
         try:
-            return self._connection(cancel).call(method, params, cancel=cancel)
-        except BrowserDisconnectedError:
-            self.close()
-            return self._connection(cancel).call(method, params, cancel=cancel)
+            source.rename(target)
+        except OSError:
+            return source
+        return target
 
-    def _before_action(self, cancel: CancellationToken | None, *, follow_tabs: bool = False) -> CDPConnection:
-        """Remember the navigation count so ``wait_ready`` can tell whether the action started one
-        (and, for clicks, which tabs exist so a tab the clicked link opens is followed)."""
-        conn = self._connection(cancel)
-        self._mark = (conn, conn.navigations, conn.settled)
-        self._tabs_before, self._clicked_href = None, ""
-        if follow_tabs:
-            with contextlib.suppress(OSError, ValueError, KeyError, IntegrationError):
-                self._tabs_before = {str(p.get("id")) for p in self._pages(int(self.start(cancel=cancel)["port"]))}
-        return conn
+    # ------------------------------------------------------------------ tabs
+    def _page(self, cancel: CancellationToken | None) -> tuple[CDPConnection, str]:
+        """The live session in the working tab — choosing, creating or re-attaching as needed."""
+        conn = self._browser(cancel)
+        with contextlib.suppress(WebSocketClosed):
+            conn.pump(cancel=cancel)  # tab closed / crashed events that already arrived
+        if not conn.usable:  # ... or the connection itself turned out to be gone
+            conn = self._browser(cancel)
+        if self._interrupted and self._target_id in self.tabs.tabs:
+            # the last operation was cancelled (Ctrl+C): stop whatever load it left behind, or the
+            # tab would hold every command of this session until that load gives up
+            self._interrupted = False
+            target = self._target_id
+            self._forget_session()
+            self._target_id, self._session_id = target, self._attach(conn, target, cancel, stop_loading=True)
+            return conn, self._session_id
+        self._interrupted = False
+        for _ in range(RECOVERY_ATTEMPTS):
+            session = conn.sessions.get(self._session_id) if self._session_id else None
+            if session is not None and not session.closed and not session.crashed and self._target_id in self.tabs.tabs:
+                return conn, self._session_id
+            crashed = session is not None and session.crashed
+            target = self._choose_tab(conn, crashed=crashed, cancel=cancel)
+            try:
+                return conn, self._attach_target(conn, target, cancel)
+            except CDPError as exc:
+                if not exc.target_gone:
+                    raise
+                # it closed between the listing and the attach: forget it and choose again
+                self.tabs.remove(target)
+                self._session_id = ""
+                self._note(BrowserState.PAGE_CLOSED, "page_closed", "the tab closed while HighhX was attaching")
+        raise IntegrationError("Could not find a usable tab in the browser.", hint=RESET_HINT)
 
-    def _eval(self, expression: str, cancel: CancellationToken | None, *, user_gesture: bool = False) -> Any:
-        params = {"expression": expression, "returnByValue": True, "awaitPromise": True}
+    def _choose_tab(self, conn: CDPConnection, *, crashed: bool, cancel: CancellationToken | None) -> str:
+        previous = self._target_id or str(self._saved().get("tab") or "")
+        if crashed and previous:
+            with contextlib.suppress(IntegrationError):  # a crashed renderer cannot be trusted again
+                conn.call("Target.closeTarget", {"targetId": previous}, cancel=cancel, timeout=SETUP_TIMEOUT)
+            self.tabs.remove(previous)
+            self._note(BrowserState.RECOVERY_REQUIRED, "page_replaced", "closed the crashed tab")
+        if previous in self.tabs.tabs:
+            return previous
+        if self._target_id and self.state is not BrowserState.PAGE_CLOSED:
+            self._note(BrowserState.PAGE_CLOSED, "page_closed", "the tab HighhX was using is gone")
+        tab = self.tabs.best()
+        if tab is not None:
+            if self._target_id:
+                self._note(
+                    BrowserState.TARGET_CHANGED, "tab_changed", f"continuing in the tab at {tab.url}", tab=tab.id
+                )
+            return tab.id
+        target = self._create_tab(conn, "about:blank", cancel)
+        if self._target_id:
+            self._note(BrowserState.TARGET_CHANGED, "tab_created", "no tab was left; opened a new one", tab=target)
+        return target
+
+    def _create_tab(self, conn: CDPConnection, url: str, cancel: CancellationToken | None) -> str:
+        result = conn.call("Target.createTarget", {"url": url}, cancel=cancel, timeout=SETUP_TIMEOUT)
+        target = str(result.get("targetId") or "")
+        deadline = time.monotonic() + SETUP_TIMEOUT
+        while target not in self.tabs.tabs and time.monotonic() < deadline:
+            conn.pump(cancel=cancel, seconds=0.05)  # Target.targetCreated
+        if target not in self.tabs.tabs:
+            self.tabs.sync(
+                conn.call("Target.getTargets", cancel=cancel, timeout=SETUP_TIMEOUT).get("targetInfos") or []
+            )
+        if target not in self.tabs.tabs:
+            raise IntegrationError("The browser did not open a new tab.")
+        return target
+
+    def _attach_target(self, conn: CDPConnection, target: str, cancel: CancellationToken | None) -> str:
+        try:
+            session_id = self._attach(conn, target, cancel)
+        except BrowserTimeoutError:
+            # A load that never commits (a server that does not answer, a client that gave up on
+            # it) holds the tab's commands; Page.stopLoading is answered by the browser itself.
+            self._note(
+                BrowserState.NAVIGATION_IN_PROGRESS, "stalled_load", "the tab was stuck loading; stopped that load"
+            )
+            session_id = self._attach(conn, target, cancel, stop_loading=True)
+        self._target_id, self._session_id = target, session_id
+        self.tabs.touch(target)
+        self._save_tab(target)
+        self.state = BrowserState.PAGE_VALID
+        return session_id
+
+    def _attach(
+        self, conn: CDPConnection, target: str, cancel: CancellationToken | None, *, stop_loading: bool = False
+    ) -> str:
+        """A new session on ``target`` with the domains and settings HighhX relies on."""
+        result = conn.call(
+            "Target.attachToTarget", {"targetId": target, "flatten": True}, cancel=cancel, timeout=SETUP_TIMEOUT
+        )
+        session_id = str(result["sessionId"])
+        events = conn.track_session(session_id, target)
+        try:
+            if stop_loading:
+                conn.call("Page.stopLoading", session_id=session_id, cancel=cancel, timeout=SETUP_TIMEOUT)
+            for method in ("Page.enable", "Runtime.enable", "Inspector.enable"):
+                conn.call(method, session_id=session_id, cancel=cancel, timeout=SETUP_TIMEOUT)
+            tree = conn.call("Page.getFrameTree", session_id=session_id, cancel=cancel, timeout=SETUP_TIMEOUT)
+            events.main_frame = str(((tree.get("frameTree") or {}).get("frame") or {}).get("id") or "")
+            with contextlib.suppress(CDPError):
+                # keys reach the page even when the window is behind the terminal or its address
+                # bar has keyboard focus (otherwise Enter can silently go nowhere)
+                conn.call(
+                    "Emulation.setFocusEmulationEnabled",
+                    {"enabled": True},
+                    session_id=session_id,
+                    cancel=cancel,
+                    timeout=SETUP_TIMEOUT,
+                )
+        except BaseException:
+            events.closed = True
+            with contextlib.suppress(BrowserDisconnectedError):
+                conn.send("Target.detachFromTarget", {"sessionId": session_id})
+            raise
+        return session_id
+
+    def _forget_session(self) -> None:
+        if self._conn is not None and self._session_id in self._conn.sessions:
+            self._conn.sessions[self._session_id].closed = True
+            with contextlib.suppress(BrowserDisconnectedError):
+                self._conn.send("Target.detachFromTarget", {"sessionId": self._session_id})
+        self._session_id = ""
+
+    def list_tabs(self, *, cancel: CancellationToken | None = None) -> list[dict[str, Any]]:
+        conn = self._browser(cancel)
+        self.tabs.sync(conn.call("Target.getTargets", cancel=cancel, timeout=SETUP_TIMEOUT).get("targetInfos") or [])
+        return [{**t.to_dict(), "active": t.id == self._target_id} for t in self.tabs.pages()]
+
+    def switch_tab(self, target: str, *, cancel: CancellationToken | None = None) -> dict[str, Any]:
+        """Work in ``target`` (a tab id, or text in a tab's URL or title) from now on."""
+        tabs = self.list_tabs(cancel=cancel)
+        match = next((t for t in tabs if t["id"] == target), None) or next(
+            (t for t in tabs if target.lower() in f"{t['url']} {t['title']}".lower()), None
+        )
+        if match is None:
+            raise NotFoundError(f"No tab matches {target!r}.", hint="List the tabs to see what is open.")
+        self._activate(str(match["id"]), cancel)
+        self._note(None, "tab_switched", f"switched to the tab at {match['url']}", tab=match["id"])
+        return match
+
+    def _activate(self, target: str, cancel: CancellationToken | None) -> None:
+        conn = self._browser(cancel)
+        with contextlib.suppress(CDPError):
+            conn.call("Target.activateTarget", {"targetId": target}, cancel=cancel, timeout=SETUP_TIMEOUT)
+        if target != self._target_id or not self._session_id:
+            self._forget_session()
+            self._attach_target(conn, target, cancel)
+
+    def new_tab(self, url: str | None = None, *, cancel: CancellationToken | None = None) -> NavigationResult:
+        """Open a new tab (optionally at ``url``), verify it exists, and work in it."""
+        conn = self._browser(cancel)
+        before = set(self.tabs.tabs)
+        try:
+            target = self._create_tab(conn, "about:blank", cancel)
+        except OutcomeUnknownError:
+            # never open a second one blindly: adopt the tab if it did open
+            self.tabs.sync(
+                conn.call("Target.getTargets", cancel=cancel, timeout=SETUP_TIMEOUT).get("targetInfos") or []
+            )
+            opened = [t for t in self.tabs.pages() if t.id not in before]
+            if len(opened) != 1:
+                raise
+            target = opened[0].id
+        self._note(None, "tab_created", "opened a new tab", tab=target)
+        self._activate(target, cancel)
+        if url:
+            return self.navigate(url, cancel=cancel)
+        return NavigationResult("about:blank", "about:blank", target)
+
+    def close_tab(self, *, cancel: CancellationToken | None = None) -> dict[str, Any] | None:
+        """Close the working tab; continue in the most recently used remaining tab (if any)."""
+        conn, _ = self._page(cancel)
+        target = self._target_id
+        closed = self.tabs.get(target)
+        with contextlib.suppress(CDPError):  # already gone: closing is idempotent
+            conn.call("Target.closeTarget", {"targetId": target}, cancel=cancel, timeout=SETUP_TIMEOUT)
+        self._forget_session()
+        self.tabs.remove(target)
+        self._target_id = ""
+        self._note(None, "tab_closed", f"closed the tab at {closed.url if closed else target}", tab=target)
+        remaining = self.tabs.best()
+        if remaining is None:
+            return None
+        self._activate(remaining.id, cancel)
+        return remaining.to_dict()
+
+    # ------------------------------------------------------------- execution
+    def _run(
+        self, op: str, safety: Retry, fn: Callable[[CDPConnection, str], T], cancel: CancellationToken | None
+    ) -> T:
+        """Run ``fn`` in the working tab's session with the recovery policy.
+
+        * Not delivered (the connection or tab was gone): recover and run it again — always safe.
+        * Delivered, answer lost (timeout, crash, tab closed, connection dropped): recover; a
+          :attr:`Retry.SAFE` action runs again, a :attr:`Retry.UNSAFE` one is never repeated —
+          HighhX looks at the page and reports what it found.
+        * Bounded: after :data:`RECOVERY_ATTEMPTS` it fails with every reason.
+        """
+        problems: list[str] = []
+        for attempt in range(1, RECOVERY_ATTEMPTS + 1):
+            conn, session = self._page(cancel)
+            try:
+                result = fn(conn, session)
+            except OperationCancelledError:
+                self._interrupted = True
+                raise
+            except BrowserDisconnectedError as exc:
+                problems.append(f"attempt {attempt}: {exc.message}")
+                self._recover(exc)
+            except OutcomeUnknownError as exc:
+                self._recover(exc)
+                if safety is Retry.UNSAFE:
+                    raise self._unknown(op, exc, cancel) from None
+                problems.append(f"attempt {attempt}: {exc.message}")
+            else:
+                if self.state != BrowserState.PAGE_VALID:
+                    self.state = BrowserState.PAGE_VALID
+                self.tabs.touch(self._target_id)
+                return result
+            if attempt < RECOVERY_ATTEMPTS and self._pause(cancel, 0.2 * (2 ** (attempt - 1))):
+                raise OperationCancelledError("Browser operation cancelled.")
+        self._note(BrowserState.RECOVERY_REQUIRED, "gave_up", f"could not {op} after {RECOVERY_ATTEMPTS} attempts")
+        raise IntegrationError(
+            f"Could not {op}: the browser failed {RECOVERY_ATTEMPTS} times.", hint=RESET_HINT, details=problems
+        )
+
+    def _recover(self, exc: IntegrationError) -> None:
+        """Record what failed and invalidate exactly what it broke; the next attempt rebuilds it."""
+        conn = self._conn
+        if isinstance(exc, PageCrashedError):
+            self._note(BrowserState.RECOVERY_REQUIRED, "page_crashed", exc.message)
+            return  # the crashed session makes _page replace the tab
+        if isinstance(exc, TargetClosedError):
+            self._note(BrowserState.PAGE_CLOSED, "page_closed", exc.message)
+            self._session_id = ""
+            return
+        if isinstance(exc, BrowserTimeoutError):
+            # the connection is fine; that tab is not answering (e.g. a stalled load)
+            self._note(BrowserState.RECOVERY_REQUIRED, "no_answer", exc.message)
+            self._forget_session()
+            return
+        if conn is not None and conn.usable and isinstance(exc, BrowserDisconnectedError):
+            self._note(BrowserState.PAGE_CLOSED, "page_closed", exc.message)
+            self._session_id = ""
+            return
+        if self._pid and not _alive(self._pid):
+            self._note(BrowserState.BROWSER_CRASHED, "browser_gone", "the browser process exited; restarting it")
+        else:
+            self._note(BrowserState.CONNECTION_LOST, "connection_lost", exc.message)
+        self.close()
+
+    def _unknown(self, op: str, exc: OutcomeUnknownError, cancel: CancellationToken | None) -> OutcomeUnknownError:
+        """An unsafe action whose outcome is unknown: recover, look at the page, report both —
+        and never repeat the action."""
+        details = [exc.message]
+        with contextlib.suppress(IntegrationError):
+            details.append(f"after recovering, the page is at {self.current_url(cancel=cancel)}")
+        self._note(None, "not_repeated", f"{op} may have happened; not repeated", details=details)
+        return type(exc)(
+            f"{op[:1].upper()}{op[1:]} may or may not have happened: {exc.message}",
+            hint="HighhX recovered the browser and did not repeat it; observe the page and decide again.",
+            details=details,
+        )
+
+    def _eval_in(
+        self,
+        conn: CDPConnection,
+        session: str,
+        expression: str,
+        cancel: CancellationToken | None,
+        *,
+        user_gesture: bool = False,
+        timeout: float | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {"expression": expression, "returnByValue": True, "awaitPromise": True}
         if user_gesture:
             params["userGesture"] = True  # like a person's click: a target=_blank link may open its tab
-        result = self._send("Runtime.evaluate", params, cancel=cancel)
+        result = conn.call("Runtime.evaluate", params, session_id=session, cancel=cancel, timeout=timeout)
         if result.get("exceptionDetails"):
             raise IntegrationError(f"Page script failed: {result['exceptionDetails'].get('text')}")
         return (result.get("result") or {}).get("value")
 
-    def _abandon_load(self, cancel: CancellationToken | None) -> None:
-        """Stop a load that will not finish, so the tab answers the next command at once."""
-        with contextlib.suppress(IntegrationError, OSError, ValueError, KeyError):
-            self._send("Page.stopLoading", cancel=cancel)
+    def _eval(self, expression: str, cancel: CancellationToken | None, *, safety: Retry = Retry.SAFE) -> Any:
+        return self._run(
+            "run a page script", safety, lambda conn, session: self._eval_in(conn, session, expression, cancel), cancel
+        )
 
     def current_url(self, *, cancel: CancellationToken | None = None) -> str:
         return str(self._eval("location.href", cancel) or "")
 
-    # ----------------------------------------------------------------- actions
-    def navigate(self, url: str, *, cancel: CancellationToken | None = None) -> None:
-        """Open ``url`` and wait for it to load.
+    def _before_action(self, cancel: CancellationToken | None, *, follow_tabs: bool = False) -> None:
+        """Remember the navigation count so ``wait_ready`` can tell whether the action started one
+        (and, for clicks, which tabs exist so a tab the click opens is recognised)."""
+        conn, session = self._page(cancel)
+        events = conn.sessions[session]
+        self._mark = (session, events.navigations, events.settled)
+        self._tabs_before = set(self.tabs.tabs) if follow_tabs else None
+        self._clicked_href = ""
 
-        Opening a URL is idempotent, so unlike a click it may be issued again — but only after
-        reconnecting and looking at where the page is: if it already got there, it is not
-        requested again. Attempts are bounded; every failure says what happened."""
-        problems: list[str] = []
-        for attempt in range(1, NAVIGATE_ATTEMPTS + 1):
-            try:
-                if attempt > 1 and _same_document(url, self.current_url(cancel=cancel)):
-                    self.wait_ready(cancel=cancel)  # it got there before the connection dropped
-                    return
-                conn = self._before_action(cancel)
-                result = conn.call("Page.navigate", {"url": url}, cancel=cancel, timeout=NAVIGATE_TIMEOUT)
-                error = str(result.get("errorText") or "")
-                if error and error != "net::ERR_ABORTED":  # aborted: replaced by a redirect or a download
-                    raise IntegrationError(f"Could not open {url}: {error}", hint=_network_hint(error))
+    @staticmethod
+    def _pause(cancel: CancellationToken | None, seconds: float = 0.05) -> bool:
+        if cancel is not None:
+            return cancel.wait(seconds)
+        time.sleep(seconds)
+        return False
+
+    # ------------------------------------------------------------ navigation
+    def navigate(
+        self, url: str, *, cancel: CancellationToken | None = None, reuse_tab: bool = False
+    ) -> NavigationResult:
+        """Open ``url`` in the working tab and wait for it — or, with ``reuse_tab``, switch to a
+        tab that already shows it.
+
+        Opening a URL is idempotent, so after a failure it is issued again — but only after
+        recovering and looking at where the page is: if it already got there it is not
+        requested again. The result is what the browser shows afterwards, never an assumption."""
+        if reuse_tab:
+            self._browser(cancel)
+            existing = self.tabs.find(url)
+            if existing is not None and existing.id != self._target_id:
+                self._activate(existing.id, cancel)
+                self._note(None, "tab_reused", f"{url} was already open; switched to that tab", tab=existing.id)
                 self.wait_ready(cancel=cancel)
-                return
+                return NavigationResult(url, self.current_url(cancel=cancel), existing.id, reused_tab=True)
+        problems: list[str] = []
+        before = set(self.downloads)
+        for attempt in range(1, NAVIGATE_ATTEMPTS + 1):
+            conn, session = self._page(cancel)
+            try:
+                if attempt > 1:
+                    here = str(self._eval_in(conn, session, "location.href", cancel, timeout=SETUP_TIMEOUT) or "")
+                    if arrived(url, here):
+                        self._note(None, "navigation_confirmed", f"the page had already reached {here}")
+                        self.wait_ready(cancel=cancel)
+                        break
+                events = conn.sessions[session]
+                self._mark = (session, events.navigations, events.settled)
+                self.state = BrowserState.NAVIGATION_IN_PROGRESS
+                answer = conn.call(
+                    "Page.navigate", {"url": url}, session_id=session, cancel=cancel, timeout=NAVIGATE_TIMEOUT
+                )
+                error = str(answer.get("errorText") or "")
+                if error == "net::ERR_ABORTED":  # replaced by a redirect — or it is a file
+                    download = self._await_download(before, cancel)
+                    if download is not None:
+                        self._mark = None
+                        self.state = BrowserState.PAGE_VALID
+                        return NavigationResult(
+                            url, self.current_url(cancel=cancel), self._target_id, download=download.to_dict()
+                        )
+                elif error in TRANSIENT_NETWORK_ERRORS and attempt < NAVIGATE_ATTEMPTS:
+                    # a network hiccup, not an answer about the site: opening is idempotent, try again
+                    problems.append(f"attempt {attempt}: {error}")
+                    self._note(None, "network_retry", f"{url}: {error}; trying again")
+                    if self._pause(cancel, NETWORK_BACKOFF * attempt):
+                        raise OperationCancelledError("Browser operation cancelled.")
+                    continue
+                elif error:
+                    self._note(BrowserState.NAVIGATION_FAILED, "navigation_failed", f"{url}: {error}")
+                    raise IntegrationError(
+                        f"Could not open {url}: {error}", hint=_network_hint(error), details=problems
+                    )
+                self.wait_ready(cancel=cancel)
+                break
+            except OperationCancelledError:
+                self._interrupted = True
+                raise
             except BrowserTimeoutError:
                 # the connection is fine; the site is not answering. Retrying would only wait again.
+                self._note(BrowserState.NAVIGATION_FAILED, "site_timeout", f"{url} did not respond")
                 self._abandon_load(cancel)
                 raise IntegrationError(
                     f"Could not open {url}: the site did not respond within {NAVIGATE_TIMEOUT:.0f}s.",
                     hint="The site may be down or very slow; HighhX stopped loading it. Try again later.",
                 ) from None
             except (BrowserDisconnectedError, OutcomeUnknownError) as exc:
-                # the connection dropped or the page crashed mid-navigation; the next attempt
-                # reconnects (reopening a crashed tab) and looks before asking again
                 problems.append(f"attempt {attempt}: {exc.message}")
-        raise IntegrationError(
-            f"Could not open {url}: the browser connection failed {NAVIGATE_ATTEMPTS} times.",
-            hint="HighhX reconnected and checked the page before each retry. Run `highhx computer browser stop` "
-            "to reset the browser if this keeps happening.",
-            details=problems,
+                self._recover(exc)
+                if attempt < NAVIGATE_ATTEMPTS and self._pause(cancel, 0.2 * (2 ** (attempt - 1))):
+                    raise OperationCancelledError("Browser operation cancelled.") from None
+        else:
+            self._note(BrowserState.NAVIGATION_FAILED, "gave_up", f"could not open {url}")
+            raise IntegrationError(
+                f"Could not open {url}: the browser connection failed {NAVIGATE_ATTEMPTS} times.",
+                hint="HighhX recovered and checked the page before each retry. " + RESET_HINT,
+                details=problems,
+            )
+        if problems:
+            self._note(None, "recovered", f"opened {url} after recovering from: {'; '.join(problems)}")
+        tab = self.tabs.get(self._target_id)
+        if tab is not None:
+            tab.requested = url
+        return NavigationResult(
+            url, self.current_url(cancel=cancel), self._target_id, settled=self.last_wait_settled, attempts=attempt
         )
+
+    def _abandon_load(self, cancel: CancellationToken | None) -> None:
+        """Stop a load that will not finish, so the tab answers the next command at once."""
+        target = self._target_id
+        self._forget_session()
+        with contextlib.suppress(IntegrationError):
+            conn = self._browser(cancel)
+            if target in self.tabs.tabs:
+                self._target_id, self._session_id = target, self._attach(conn, target, cancel, stop_loading=True)
 
     def wait_ready(self, *, timeout: float = 30.0, cancel: CancellationToken | None = None) -> None:
         """Wait until the page settled after the last action.
@@ -679,80 +1114,172 @@ class ChromeBrowser:
 
         A slow page is not an error: after ``timeout`` the wait ends and
         :attr:`last_wait_settled` is False, so callers observe whatever has loaded. A crashed
-        page is an error (:class:`PageCrashedError`); a dropped connection is reconnected.
+        page is an error (:class:`PageCrashedError`); anything else is recovered from.
         """
         deadline = time.monotonic() + timeout
         mark, self._mark = self._mark, None
         tabs_before, self._tabs_before = self._tabs_before, None
-        navigating: tuple[CDPConnection, int] | None = None
-        if mark is not None:
-            conn, before, settled = mark
+        navigating: tuple[str, int] | None = None
+        if mark is not None and self._conn is not None:
+            session_id, before, settled = mark
+            events = self._conn.sessions.get(session_id)
             grace = time.monotonic() + NAVIGATION_GRACE
-            while conn is self._conn and conn.navigations == before and time.monotonic() < grace:
-                try:
-                    self._eval("0", cancel)  # also drains pending navigation events
-                except PageCrashedError:
-                    raise
-                except (IntegrationError, WebSocketClosed):
+            while events is not None and not events.closed and events.navigations == before:
+                if time.monotonic() >= grace or self._conn is None:
                     break
-                if self._pause(cancel):
-                    raise OperationCancelledError("Browser operation cancelled.")
-            if conn.navigations != before:
-                navigating = (conn, settled)  # the page itself moved on: stay (a popup beside it is an ad)
-            elif tabs_before is not None and self._clicked_href:
-                self._follow_new_tab(tabs_before, self._clicked_href, cancel)  # then wait for its document
+                try:
+                    self._conn.pump(cancel=cancel, seconds=0.05)
+                except WebSocketClosed:
+                    break
+            if events is not None and events.navigations != before:
+                navigating = (session_id, settled)  # the page itself moved on: stay (a popup beside it is an ad)
+            elif tabs_before is not None:
+                self._follow_new_tab(tabs_before, cancel)
         page_complete_at: float | None = None
         self.last_wait_settled = False
         while time.monotonic() < deadline:
             try:
-                conn = self._connection(cancel)
-                complete = self._eval("document.readyState", cancel) == "complete" and not conn.main_frame_loading
-                if navigating is not None and navigating[0] is conn:
-                    complete = complete and conn.settled > navigating[1]  # the navigation itself finished
+                conn, session = self._page(cancel)
+                events = conn.sessions[session]
+                state = self._eval_in(conn, session, "document.readyState", cancel, timeout=READY_TIMEOUT)
+                complete = state == "complete" and not events.main_frame_loading
+                if navigating is not None and navigating[0] == session:
+                    complete = complete and events.settled > navigating[1]  # the navigation itself finished
                 if complete:
                     page_complete_at = page_complete_at or time.monotonic()
                     # iframes (ads, embeds) get a short grace, not the whole timeout
-                    if not conn.loading_frames or time.monotonic() - page_complete_at >= SUBFRAME_GRACE:
+                    if not events.loading_frames or time.monotonic() - page_complete_at >= SUBFRAME_GRACE:
                         self.last_wait_settled = True
+                        self.state = BrowserState.PAGE_VALID
                         return
                 else:
                     page_complete_at = None
             except PageCrashedError:
                 raise
-            except (IntegrationError, WebSocketClosed):
-                pass
+            except OperationCancelledError:
+                self._interrupted = True
+                raise
+            except (BrowserDisconnectedError, OutcomeUnknownError) as exc:
+                self._recover(exc)
+            except IntegrationError:
+                pass  # e.g. the document is being replaced
             if self._pause(cancel):
+                self._interrupted = True
                 raise OperationCancelledError("Browser operation cancelled.")
 
-    def _follow_new_tab(self, before: set[str], href: str, cancel: CancellationToken | None) -> bool:
-        """A clicked link that opened its address in a new tab (target=_blank) continues there.
-        Any other new tab — a script's window.open, an ad — is not followed: HighhX stays on the
-        page the person was working in."""
+    def _follow_new_tab(self, before: set[str], cancel: CancellationToken | None) -> None:
+        """Continue in a tab the last click opened — only when it is the one the person meant:
+        opened by the working tab, and either the clicked link's own address (target=_blank) or
+        a sign-in window. Anything else (ads, trackers, unrelated windows) is left alone."""
+        opener = self._target_id
+        conn = self._conn
         deadline = time.monotonic() + NEW_TAB_GRACE
-        while True:
+        while conn is not None and time.monotonic() < deadline:
+            opened = self.tabs.opened_by(opener, since=before)
+            if not opened:
+                with contextlib.suppress(WebSocketClosed):
+                    conn.pump(cancel=cancel, seconds=0.1)
+                if not self.tabs.opened_by(opener, since=before):
+                    return  # the click opened nothing
+                continue
+            chosen = [t for t in opened if self._intended(t.url)]
+            if len(chosen) == 1:
+                self._activate(chosen[0].id, cancel)
+                self._note(
+                    BrowserState.TARGET_CHANGED,
+                    "tab_followed",
+                    f"the click opened {chosen[0].url} in a new tab; continuing there",
+                    tab=chosen[0].id,
+                )
+                return
+            if all(t.url not in ("", "about:blank") for t in opened):
+                for tab in opened:
+                    self._note(None, "popup_ignored", f"ignored a tab the page opened: {tab.url}", tab=tab.id)
+                return
+            with contextlib.suppress(WebSocketClosed):
+                conn.pump(cancel=cancel, seconds=0.1)  # a new tab reports about:blank until it starts loading
+
+    def _intended(self, url: str) -> bool:
+        """The clicked link's own address, or a sign-in window (OAuth/SSO) the click opened."""
+        if self._clicked_href and same_document(self._clicked_href, url):
+            return True
+        return is_sign_in_window(url)
+
+    def _await_download(self, before: set[str], cancel: CancellationToken | None) -> Download | None:
+        """A download that started since ``before`` (waiting briefly for it to start), followed
+        to completion — so a file is never mistaken for a page."""
+        conn = self._conn
+        deadline = time.monotonic() + DOWNLOAD_GRACE
+        started: Download | None = None
+        while conn is not None and started is None and time.monotonic() < deadline:
+            started = next((d for guid, d in self.downloads.items() if guid not in before), None)
+            if started is None:
+                conn.pump(cancel=cancel, seconds=0.1)
+        if started is None:
+            return None
+        return self.wait_download(started, cancel=cancel)
+
+    def wait_download(
+        self, download: Download, *, timeout: float = DOWNLOAD_TIMEOUT, cancel: CancellationToken | None = None
+    ) -> Download:
+        """Follow a download to completion (the connection may be rebuilt meanwhile)."""
+        deadline = time.monotonic() + timeout
+        while download.state == "in_progress":
+            if time.monotonic() > deadline:
+                raise IntegrationError(f"The download of {download.filename or download.url} did not finish in time.")
             try:
-                pages = self._pages(int(self.start(cancel=cancel)["port"]))
-            except (OSError, ValueError, KeyError, IntegrationError):
-                return False
-            new = [p for p in pages if str(p.get("id")) not in before]
-            match = next((p for p in new if _same_document(href, str(p.get("url") or ""))), None)
-            if match is not None:
-                self.close()
-                self._target_id = str(match.get("id") or "")
-                return True
-            # a new tab reports about:blank until its request starts; anything else is not ours
-            if not any(str(p.get("url") or "") in ("", "about:blank") for p in new):
-                return False
-            if time.monotonic() >= deadline or self._pause(cancel, 0.1):
-                return False
+                self._browser(cancel).pump(cancel=cancel, seconds=0.2)
+            except WebSocketClosed:
+                continue
+            if download.state == "in_progress" and self._conn is not None and self.reconnects:
+                # progress events of a download that began on an older connection may not arrive
+                raw = self.downloads_dir / download.guid
+                if raw.exists() and time.monotonic() - download.started > 2 and self._stable(raw):
+                    self._download_progress({"guid": download.guid, "state": "completed"})
+        if download.state == "canceled":
+            raise IntegrationError(f"The download of {download.filename or download.url} was canceled.")
+        return download
 
     @staticmethod
-    def _pause(cancel: CancellationToken | None, seconds: float = 0.05) -> bool:
-        if cancel is not None:
-            return cancel.wait(seconds)
-        time.sleep(seconds)
-        return False
+    def _stable(path: Path) -> bool:
+        size = path.stat().st_size
+        time.sleep(0.5)
+        return path.exists() and path.stat().st_size == size
 
+    # ----------------------------------------------------------------- history
+    def go_back(self, *, cancel: CancellationToken | None = None) -> str:
+        return self._history(-1, cancel)
+
+    def go_forward(self, *, cancel: CancellationToken | None = None) -> str:
+        return self._history(1, cancel)
+
+    def _history(self, delta: int, cancel: CancellationToken | None) -> str:
+        """Go to one exact history entry — idempotent, so it is safe to retry."""
+        history = self._run(
+            "read the history", Retry.SAFE, lambda c, s: c.call("Page.getNavigationHistory", session_id=s), cancel
+        )
+        index = int(history.get("currentIndex") or 0) + delta
+        entries = history.get("entries") or []
+        if not 0 <= index < len(entries):
+            raise UsageError(f"There is no page to go {'back' if delta < 0 else 'forward'} to.")
+        entry = entries[index]
+        self._before_action(cancel)
+        self._run(
+            "go back" if delta < 0 else "go forward",
+            Retry.SAFE,
+            lambda c, s: c.call("Page.navigateToHistoryEntry", {"entryId": entry["id"]}, session_id=s),
+            cancel,
+        )
+        self.wait_ready(cancel=cancel)
+        return str(entry.get("url") or "")
+
+    def reload(self, *, cancel: CancellationToken | None = None) -> None:
+        # a page that was the answer to a form would be submitted again: never repeated blindly
+        self._before_action(cancel)
+        self._run("reload the page", Retry.UNSAFE, lambda c, s: c.call("Page.reload", session_id=s), cancel)
+        self.wait_ready(cancel=cancel)
+
+    # ----------------------------------------------------------------- observe
     def observe(self, *, cancel: CancellationToken | None = None) -> Observation:
         data = self._eval(OBSERVE_JS, cancel) or {}
         elements = [
@@ -771,6 +1298,9 @@ class ChromeBrowser:
             for e in data.get("elements") or []
         ]
         browser = Path(self.binary).name if self.binary else "browser"
+        tab = self.tabs.get(self._target_id)
+        if tab is not None:
+            tab.url, tab.title = str(data.get("url") or tab.url), str(data.get("title") or tab.title)
         return Observation(
             provider=self.name,
             application=browser,
@@ -781,37 +1311,58 @@ class ChromeBrowser:
             captured_at=time.time(),
         )
 
-    def _act(self, element_id: str, action: str, arg: str = "", cancel: CancellationToken | None = None) -> None:
-        self._before_action(cancel, follow_tabs=action == "click")
-        result = self._eval(
-            f"({ACT_JS})({json.dumps(element_id)}, {json.dumps(action)}, {json.dumps(arg)})",
-            cancel,
-            user_gesture=action == "click",
-        )
-        if not result or not result.get("found"):
-            raise ElementNotFoundError(f"Element {element_id} is no longer on the page.")
-        if result.get("error"):
-            raise IntegrationError(f"Could not {action} {element_id}: {result['error']}")
-        if self._tabs_before is not None:
-            self._clicked_href = str(result.get("href") or "")
-
-    def evaluate(self, expression: str, *, cancel: CancellationToken | None = None) -> Any:
-        """Evaluate a fixed HighhX script in the page (never text from a model or a page)."""
-        return self._eval(expression, cancel)
+    def evaluate(self, expression: str, *, cancel: CancellationToken | None = None, retry_safe: bool = False) -> Any:
+        """Evaluate a fixed HighhX script in the page (never text from a model or a page).
+        ``retry_safe``: the script only reads, or doing it twice is harmless."""
+        return self._eval(expression, cancel, safety=Retry.SAFE if retry_safe else Retry.UNSAFE)
 
     def screenshot(self, *, cancel: CancellationToken | None = None) -> bytes:
         """The current page as PNG bytes (read-only; nothing on the page changes)."""
         import base64
 
-        data = self._send("Page.captureScreenshot", {"format": "png"}, cancel=cancel)
+        data = self._run(
+            "take a screenshot",
+            Retry.SAFE,
+            lambda c, s: c.call("Page.captureScreenshot", {"format": "png"}, session_id=s, cancel=cancel),
+            cancel,
+        )
         return base64.b64decode(str(data.get("data") or ""))
+
+    # ----------------------------------------------------------------- actions
+    def _act(
+        self, element_id: str, action: str, arg: str = "", cancel: CancellationToken | None = None
+    ) -> dict[str, Any]:
+        safety = Retry.SAFE if action in ("focus", "clear", "locate") else Retry.UNSAFE
+        if action == "click":
+            self._before_action(cancel, follow_tabs=True)
+        elif action != "locate":
+            self._before_action(cancel)
+        script = f"({ACT_JS})({json.dumps(element_id)}, {json.dumps(action)}, {json.dumps(arg)})"
+        result = self._run(
+            f"{action} {element_id}",
+            safety,
+            lambda c, s: self._eval_in(c, s, script, cancel, user_gesture=action == "click"),
+            cancel,
+        )
+        if not result or not result.get("found"):
+            raise ElementNotFoundError(f"Element {element_id} is no longer on the page.")
+        if result.get("error"):
+            raise IntegrationError(f"Could not {action} {element_id}: {result['error']}")
+        if action == "click":
+            self._clicked_href = str(result.get("href") or "")
+        return dict(result)
 
     def click(self, element_id: str, *, cancel: CancellationToken | None = None) -> None:
         self._act(element_id, "click", cancel=cancel)
 
     def type_text(self, element_id: str, text: str, *, cancel: CancellationToken | None = None) -> None:
         self._act(element_id, "clear", cancel=cancel)
-        self._send("Input.insertText", {"text": text}, cancel=cancel)
+        self._run(
+            "type text",
+            Retry.UNSAFE,  # inserting twice would duplicate the text
+            lambda c, s: c.call("Input.insertText", {"text": text}, session_id=s, cancel=cancel),
+            cancel,
+        )
 
     def press(self, key: str, *, cancel: CancellationToken | None = None) -> None:
         if key not in KEY_CODES:
@@ -821,54 +1372,147 @@ class ChromeBrowser:
         down: dict[str, Any] = {"type": "keyDown", "key": name, "code": code, "windowsVirtualKeyCode": vk}
         if text:
             down["text"] = text
-        self._send("Input.dispatchKeyEvent", down, cancel=cancel)
-        self._send(
-            "Input.dispatchKeyEvent",
-            {"type": "keyUp", "key": name, "code": code, "windowsVirtualKeyCode": vk},
-            cancel=cancel,
-        )
+        up = {"type": "keyUp", "key": name, "code": code, "windowsVirtualKeyCode": vk}
+
+        def keystroke(conn: CDPConnection, session: str) -> None:
+            conn.call("Input.dispatchKeyEvent", down, session_id=session, cancel=cancel)
+            conn.call("Input.dispatchKeyEvent", up, session_id=session, cancel=cancel)
+
+        self._run(f"press {key}", Retry.UNSAFE, keystroke, cancel)
 
     def scroll(self, direction: str, *, cancel: CancellationToken | None = None) -> None:
         delta = {"down": 600, "up": -600}.get(direction)
         if delta is None:
             raise IntegrationError(f"Unsupported scroll direction {direction!r}")
-        self._eval(f"window.scrollBy(0, {delta})", cancel)
+        # scroll to an exact position (read once), so a retry after a failure cannot scroll twice
+        start = float(self._eval("window.scrollY", cancel) or 0)
+        self._eval(f"window.scrollTo(0, {max(0.0, start + delta)})", cancel)
 
     def select(self, element_id: str, option: str, *, cancel: CancellationToken | None = None) -> None:
         self._act(element_id, "select", option, cancel=cancel)
+
+    def _center(self, element_id: str, cancel: CancellationToken | None) -> tuple[float, float]:
+        found = self._act(element_id, "locate", cancel=cancel)
+        return float(found["x"]), float(found["y"])
+
+    def _mouse(self, conn: CDPConnection, session: str, cancel: CancellationToken | None, **event: Any) -> None:
+        conn.call("Input.dispatchMouseEvent", event, session_id=session, cancel=cancel)
+
+    def hover(self, element_id: str, *, cancel: CancellationToken | None = None) -> None:
+        x, y = self._center(element_id, cancel)
+        self._run(
+            f"hover {element_id}",
+            Retry.SAFE,  # moving the pointer to the same place twice changes nothing
+            lambda c, s: self._mouse(c, s, cancel, type="mouseMoved", x=x, y=y),
+            cancel,
+        )
+
+    def double_click(self, element_id: str, *, cancel: CancellationToken | None = None) -> None:
+        x, y = self._center(element_id, cancel)
+        self._before_action(cancel, follow_tabs=True)
+
+        def double(conn: CDPConnection, session: str) -> None:
+            self._mouse(conn, session, cancel, type="mouseMoved", x=x, y=y)
+            for count in (1, 2):
+                for kind in ("mousePressed", "mouseReleased"):
+                    self._mouse(conn, session, cancel, type=kind, x=x, y=y, button="left", clickCount=count)
+
+        self._run(f"double-click {element_id}", Retry.UNSAFE, double, cancel)
+
+    def drag(self, source_id: str, target_id: str, *, cancel: CancellationToken | None = None) -> None:
+        """Drag one element onto another: HTML5 drag and drop (intercepted and replayed at the
+        drop target) and pointer-driven drags (mouse events) both work."""
+        (sx, sy), (tx, ty) = self._center(source_id, cancel), self._center(target_id, cancel)
+        self._before_action(cancel)
+
+        def drag(conn: CDPConnection, session: str) -> None:
+            seen = len(conn.events)
+            with contextlib.suppress(CDPError):
+                conn.call("Input.setInterceptDrags", {"enabled": True}, session_id=session, cancel=cancel)
+            self._mouse(conn, session, cancel, type="mouseMoved", x=sx, y=sy)
+            self._mouse(conn, session, cancel, type="mousePressed", x=sx, y=sy, button="left", clickCount=1)
+            for step in range(1, 11):
+                x, y = sx + (tx - sx) * step / 10, sy + (ty - sy) * step / 10
+                self._mouse(conn, session, cancel, type="mouseMoved", x=x, y=y, button="left")
+            intercepted = next(
+                (
+                    e
+                    for e in conn.events[seen:]
+                    if e.get("method") == "Input.dragIntercepted" and e.get("sessionId") == session
+                ),
+                None,
+            )
+            if intercepted is not None:
+                data = (intercepted.get("params") or {}).get("data") or {}
+                for kind in ("dragEnter", "dragOver", "drop"):
+                    conn.call(
+                        "Input.dispatchDragEvent",
+                        {"type": kind, "x": tx, "y": ty, "data": data},
+                        session_id=session,
+                        cancel=cancel,
+                    )
+            self._mouse(conn, session, cancel, type="mouseReleased", x=tx, y=ty, button="left", clickCount=1)
+            with contextlib.suppress(CDPError):
+                conn.call("Input.setInterceptDrags", {"enabled": False}, session_id=session, cancel=cancel)
+
+        self._run(f"drag {source_id} onto {target_id}", Retry.UNSAFE, drag, cancel)
+
+    def upload(self, element_id: str, paths: list[str], *, cancel: CancellationToken | None = None) -> None:
+        """Choose ``paths`` in a file input (the caller confines and approves them)."""
+        selector = json.dumps(f'[data-highhx-id="{element_id}"]')
+
+        def choose(conn: CDPConnection, session: str) -> None:
+            found = conn.call(
+                "Runtime.evaluate", {"expression": f"document.querySelector({selector})"}, session_id=session
+            )
+            handle = (found.get("result") or {}).get("objectId")
+            if not handle:
+                raise ElementNotFoundError(f"Element {element_id} is no longer on the page.")
+            kind = self._eval_in(
+                conn, session, f"(document.querySelector({selector}).type || '').toLowerCase()", cancel
+            )
+            if kind != "file":
+                raise UsageError(f"Element {element_id} is not a file field.")
+            conn.call("DOM.setFileInputFiles", {"files": paths, "objectId": handle}, session_id=session, cancel=cancel)
+
+        self._before_action(cancel)
+        self._run(f"upload to {element_id}", Retry.UNSAFE, choose, cancel)
+
+    def download(self, element_id: str, *, cancel: CancellationToken | None = None) -> Download:
+        """Click a link or button that downloads a file and follow the download to completion."""
+        before = set(self.downloads)
+        self.click(element_id, cancel=cancel)
+        download = self._await_download(before, cancel)
+        if download is None:
+            raise IntegrationError("The click did not start a download.")
+        return download
 
 
 class ElementNotFoundError(IntegrationError):
     """The element from the last observation is gone (the UI changed)."""
 
 
-class BrowserDisconnectedError(IntegrationError):
-    """The connection was gone before a command was sent: nothing happened, so it is safe to
-    send the command again on a new connection."""
+def is_sign_in_window(url: str) -> bool:
+    """A popup for signing in (OAuth / SSO): a known identity host, or a login./auth./… host,
+    at a sign-in path. Payment windows are not included: they are followed only when asked for."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    known = host in _AUTH_HOSTS or host.startswith(_AUTH_HOST_PREFIXES)
+    return known and bool(_AUTH_PATH.search(parsed.path or ""))
 
 
-class BrowserTimeoutError(OutcomeUnknownError):
-    """A command got no answer in time (the connection is closed so a late answer is never
-    mistaken for another command's); it may or may not have run."""
-
-
-class PageCrashedError(OutcomeUnknownError):
-    """The page's renderer crashed; whatever was running may or may not have taken effect."""
+def arrived(requested: str, actual: str) -> bool:
+    """The browser is where it was sent (a ``www.``/scheme redirect or a deeper path counts)."""
+    a, b = urlparse(requested), urlparse(actual)
+    host_a = (a.hostname or "").lower().removeprefix("www.")
+    host_b = (b.hostname or "").lower().removeprefix("www.")
+    return bool(host_a) and host_a == host_b and (b.path or "/").startswith((a.path or "/").rstrip("/") or "/")
 
 
 def _no_display() -> bool:
     if sys.platform.startswith("linux"):
         return not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     return bool(os.environ.get("HIGHHX_HEADLESS"))
-
-
-def _same_document(requested: str, actual: str) -> bool:
-    """The page is already at ``requested`` (ignoring a trailing slash and the fragment)."""
-
-    def norm(url: str) -> str:
-        return url.split("#", 1)[0].rstrip("/")
-
-    return bool(actual) and norm(requested) == norm(actual)
 
 
 _NETWORK_HINTS = {
@@ -904,6 +1548,10 @@ def _uses_profile(pid: int, profile: Path) -> bool:
 def _alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if hasattr(os, "WNOHANG"):
+        with contextlib.suppress(ChildProcessError, OSError):
+            if os.waitpid(pid, os.WNOHANG)[0] == pid:  # our child exited: reap it (not a zombie "alive")
+                return False
     try:
         os.kill(pid, 0)
     except OSError:

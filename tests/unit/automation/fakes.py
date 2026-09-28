@@ -94,6 +94,7 @@ def browser(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         return ""
 
     monkeypatch.setattr(computer, "_flow_step", flow)
+    monkeypatch.setattr(computer, "open_url", lambda ctx, url, reuse_tab=False: flow(ctx, {"open": url}))
     monkeypatch.setattr(computer, "_run", run)
     return record
 
@@ -120,7 +121,9 @@ def media(monkeypatch: pytest.MonkeyPatch, browser: dict[str, Any]) -> FakeRunti
     """browser.play against a fake page whose video starts playing."""
     runtime = FakeRuntime()
     page = type(
-        "Page", (), {"evaluate": lambda self, js, cancel=None: {"found": True, "paused": False, "title": "A video"}}
+        "Page",
+        (),
+        {"evaluate": lambda self, js, cancel=None, **_kw: {"found": True, "paused": False, "title": "A video"}},
     )()
     session = type("Session", (), {"browser": page, "cancel": None, "_desktop_app": None, "_runtimes": {}})()
     monkeypatch.setattr(computer, "_runtime", lambda _ctx: runtime)

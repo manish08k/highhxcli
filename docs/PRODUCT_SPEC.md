@@ -89,7 +89,7 @@ as an action; `highhx <command>` runs any HighhX command inside the session.
 | Area | What works without AI |
 |---|---|
 | Plain language | A deterministic grammar (tests, checks, build, fix/format, dependencies, services, logs, git, docker, database, deploy with a named target, workflows, files, search, browser with URLs, known apps); compound requests when every part resolves |
-| Actions | 73 catalog actions: project, filesystem, git, package, docker, database, service, browser, computer, deployment, security, workflow, shell |
+| Actions | 85 catalog actions: project, filesystem, git, package, docker, database, service, browser, computer, deployment, security, workflow, shell |
 | Files | Read, write, copy, move, delete, search — confined to the project, secret files refused, `.gitignore` respected, every change journaled for `/undo` |
 | Git | status, diff, log, branch, checkout, commit, tag, push, pull, revert — commit/tag/checkout/pull can be undone |
 | Shell | `!command` — classified by what it does, approval by risk, blocked when catastrophic |

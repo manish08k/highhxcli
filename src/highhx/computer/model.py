@@ -231,14 +231,36 @@ def describe_action(
     element = observation.element(candidate.element) if candidate.element else None
     focused = next((e for e in observation.elements if e.focused), None)
     application = observation.application + (f" <{observation.url}>" if observation.url else "")
-    if candidate.verb in ("click", "focus", "select") and element is not None:
-        kind = {"click": ActionKind.UI_CLICK, "focus": ActionKind.UI_SCROLL, "select": ActionKind.UI_SELECT}[
-            candidate.verb
-        ]
+    if candidate.verb == "upload" and element is not None:
+        names = [p.replace("\\", "/").rsplit("/", 1)[-1] for p in (text or "").split("\n") if p]
+        return ActionDescriptor(
+            kind=ActionKind.UI_UPLOAD,
+            summary=f"Upload {', '.join(names) or 'files'} into {element.stable_label()}",
+            tool=tool,
+            target=", ".join(names),
+            application=application,
+            actor=actor,
+            attributes=attrs(
+                role=element.role,
+                name=element.name,
+                ordinal=ordinal(observation, element),
+                files_sha=_digest(text or ""),
+            ),
+        )
+    if candidate.verb in _ELEMENT_VERBS and element is not None:
+        kind = _ELEMENT_VERBS[candidate.verb]
+        drop = observation.element(text) if candidate.verb == "drag" and text else None
+        extra: dict[str, object] = {}
+        if candidate.verb == "download":
+            extra["download"] = "True"  # the classifier treats it as a download, whatever the markup says
+        if drop is not None:
+            extra["drop"] = drop.stable_label()
         return ActionDescriptor(
             kind=kind,
-            summary=f"{candidate.verb.capitalize()} {element.stable_label()}"
-            + (f" → {text!r}" if text and candidate.verb == "select" else ""),
+            summary=_VERB_LABELS.get(candidate.verb, candidate.verb.capitalize())
+            + f" {element.stable_label()}"
+            + (f" → {text!r}" if text and candidate.verb == "select" else "")
+            + (f" onto {drop.stable_label()}" if drop is not None else ""),
             tool=tool,
             target=element.name or element.id,
             application=application,
@@ -247,8 +269,8 @@ def describe_action(
                 role=element.role,
                 name=element.name,
                 ordinal=ordinal(observation, element),
-                **{k: v for k, v in element.attributes.items() if k in _SAFETY_ATTRS},
                 option=text if candidate.verb == "select" else None,
+                **{**{k: v for k, v in element.attributes.items() if k in _SAFETY_ATTRS}, **extra},
             ),
         )
     if candidate.verb == "type" and element is not None:
@@ -322,6 +344,17 @@ def rebind(element: UIElement, observation: Observation, index: int) -> UIElemen
     same = [e for e in observation.elements if identity(e) == key]
     return same[index] if index < len(same) else None
 
+
+_ELEMENT_VERBS = {
+    "click": ActionKind.UI_CLICK,
+    "focus": ActionKind.UI_SCROLL,
+    "select": ActionKind.UI_SELECT,
+    "hover": ActionKind.UI_SCROLL,
+    "double_click": ActionKind.UI_CLICK,
+    "download": ActionKind.UI_CLICK,
+    "drag": ActionKind.UI_CLICK,
+}
+_VERB_LABELS = {"double_click": "Double-click", "hover": "Hover over", "download": "Download via", "drag": "Drag"}
 
 _SAFETY_ATTRS = frozenset(
     {"type", "href", "form_method", "form_has_password", "class", "download", "value", "title", "tag"}

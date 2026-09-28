@@ -1,0 +1,36 @@
+# HighhX project configuration for a python project.
+# Reference: docs/configuration.md — validate with `highhx config validate`.
+version: 1
+
+project:
+  name: "highhxcli"
+  type: python
+
+commands:
+  test: "python -m pytest"
+  build: "python -m build"
+  lint: "ruff check ."
+  format: "ruff format ."
+  fix: "ruff check --fix ."
+  typecheck: "mypy"
+  install: "python -m pip install -e ."
+
+environment:
+  default_profile: development
+
+release:
+  tag_prefix: v
+  changelog: CHANGELOG.md
+
+approvals:
+  auto_approve: normal
+  yes_max_risk: critical
+  typed_confirmation: critical
+
+# Example background service:
+# services:
+#   api:
+#     command: uvicorn app.main:app --port 8000
+#     port: 8000
+#     health:
+#       url: http://127.0.0.1:8000/health

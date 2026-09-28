@@ -6,7 +6,6 @@ from __future__ import annotations
 import contextlib
 import functools
 import http.server
-import json
 import os
 import socket
 import threading
@@ -17,10 +16,16 @@ from pathlib import Path
 import pytest
 
 from highhx.commands import App
-from highhx.computer.browser import ChromeBrowser, find_browser
+from highhx.computer.browser import ChromeBrowser, arrived, find_browser
 from highhx.computer.runtime import ComputerRuntime
 from highhx.core.context import Options
-from highhx.core.errors import ApprovalDeniedError, IntegrationError, NotFoundError, OutcomeUnknownError
+from highhx.core.errors import (
+    ApprovalDeniedError,
+    IntegrationError,
+    NotFoundError,
+    OperationCancelledError,
+    OutcomeUnknownError,
+)
 from highhx.safety.actions import Actor
 from highhx.safety.audit import AuditLog
 from highhx.safety.gate import ActionGate, ApprovalMode
@@ -60,6 +65,21 @@ def site(tmp_path: Path) -> Iterator[str]:
         "<a href='file.bin' download>Download report</a>"
     )
     (tmp_path / "file.bin").write_bytes(b"report")
+    (tmp_path / "dialogs.html").write_text(
+        "<!doctype html><title>Dialogs</title><p id=r>none</p>"
+        "<button onclick=\"r.textContent=confirm('Delete everything?')?'confirmed':'kept'\">Delete all</button>"
+        "<button onclick=\"r.textContent=prompt('Name?')===null?'no name':'named'\">Rename</button>"
+    )
+    (tmp_path / "interact.html").write_text(
+        "<!doctype html><title>Interact</title><p id=log>-</p>"
+        "<button onmouseover=\"log.textContent='hovered'\">Menu</button>"
+        "<button ondblclick=\"log.textContent='double'\">Zoom</button>"
+        "<div id=src draggable=true role=button aria-label=Card "
+        "ondragstart=\"event.dataTransfer.setData('text','card')\">Card</div>"
+        '<div id=dst role=button aria-label=Bin ondragover="event.preventDefault()" '
+        "ondrop=\"event.preventDefault();log.textContent='dropped '+event.dataTransfer.getData('text')\">Bin</div>"
+        "<label for=f>Attachment</label><input id=f type=file>"
+    )
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -153,6 +173,14 @@ def _click(browser: ChromeBrowser, name: str) -> None:
     browser.wait_ready(timeout=10)
 
 
+def _element(browser: ChromeBrowser, name: str) -> str:
+    return next(e.id for e in browser.observe().elements if e.name == name)
+
+
+def _events(browser: ChromeBrowser) -> list[dict[str, object]]:
+    return browser.drain_journal()
+
+
 def test_new_tabs_popups_dialogs_and_downloads_in_a_real_browser(site: str, tmp_path: Path) -> None:
     browser = ChromeBrowser(tmp_path / "state", headless=True)
     try:
@@ -164,8 +192,11 @@ def test_new_tabs_popups_dialogs_and_downloads_in_a_real_browser(site: str, tmp_
 
         browser.navigate(f"{site}/links.html")
         tab = browser._target_id
-        _click(browser, "Win a prize")  # two windows at once: a popup storm, stay
+        _click(browser, "Win a prize")  # a script's popup (an ad): stay
         assert browser._target_id == tab and browser.observe().title == "Links"
+        _click(browser, "Win a prize")  # … and the second one
+        assert browser._target_id == tab
+        assert sum(1 for e in _events(browser) if e["event"] == "popup_ignored") >= 2
 
         _click(browser, "Next page")  # the page navigated and a popup opened beside it: stay
         assert browser._target_id == tab and "You searched for same" in browser.observe().text
@@ -173,43 +204,58 @@ def test_new_tabs_popups_dialogs_and_downloads_in_a_real_browser(site: str, tmp_
         browser.navigate(f"{site}/links.html")
         _click(browser, "Save")  # a blocking alert() is closed; the page keeps answering
         assert browser.observe().title == "Links"
-        assert browser._conn is not None and browser._conn.dialogs[-1]["type"] == "alert"
+        dialogs = [e for e in _events(browser) if e["event"] == "dialog"]
+        assert dialogs and dialogs[-1]["dialog"] == "alert" and dialogs[-1]["accepted"] is True
 
-        _click(browser, "Download report")
-        deadline = time.monotonic() + 10
-        while not (browser.downloads_dir / "file.bin").exists() and time.monotonic() < deadline:
-            time.sleep(0.1)
-        assert (browser.downloads_dir / "file.bin").read_bytes() == b"report"
+        download = browser.download(_element(browser, "Download report"))
+        assert download.state == "completed" and Path(download.path).read_bytes() == b"report"
+        assert Path(download.path).parent == browser.downloads_dir and Path(download.path).name == "file.bin"
+    finally:
+        assert browser.stop()
+
+
+def test_confirm_and_prompt_are_cancelled_in_a_real_browser(site: str, tmp_path: Path) -> None:
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+    try:
+        browser.navigate(f"{site}/dialogs.html")
+        _click(browser, "Delete all")
+        assert "kept" in browser.observe().text  # confirm() was answered "cancel"
+        _click(browser, "Rename")
+        assert "no name" in browser.observe().text  # prompt() was cancelled
+        decisions = [(e["dialog"], e["accepted"]) for e in _events(browser) if e["event"] == "dialog"]
+        assert decisions == [("confirm", False), ("prompt", False)]
     finally:
         assert browser.stop()
 
 
 def test_crash_and_connection_loss_recovery_in_a_real_browser(site: str, tmp_path: Path) -> None:
+    from highhx.computer.browser import Retry
+
     browser = ChromeBrowser(tmp_path / "state", headless=True)
     try:
         browser.navigate(f"{site}/index.html")
         crashed_tab = browser._target_id
         with pytest.raises(OutcomeUnknownError):
-            browser._send("Page.crash")  # the renderer dies
+            browser._run("crash the page", Retry.UNSAFE, lambda c, s: c.call("Page.crash", session_id=s), None)
         browser.navigate(f"{site}/delete.html")  # a fresh tab, and the page opens
         assert browser._target_id != crashed_tab and browser.observe().title == "Items"
 
         # the connection dies right after Page.navigate is sent: reconnect, look, finish
         assert browser._conn is not None
-        conn = browser._conn
+        conn, session = browser._conn, browser._session_id
         original = conn.call
 
-        def drop_after_navigate(method: str, *args: object, **kwargs: object) -> dict[str, object]:
+        def drop_after_navigate(method: str, params: object = None, **kwargs: object) -> dict[str, object]:
             if method == "Page.navigate":
-                conn.ws.send(json.dumps({"id": 999_999, "method": method, "params": args[0] if args else {}}))
+                conn.send(method, params, session_id=session)  # type: ignore[arg-type]
                 conn.ws.sock.close()
                 conn.ws.closed = True
                 raise OutcomeUnknownError("lost after Page.navigate was sent")
-            return original(method, *args, **kwargs)  # type: ignore[arg-type]
+            return original(method, params, **kwargs)  # type: ignore[arg-type]
 
         conn.call = drop_after_navigate  # type: ignore[method-assign]
-        browser.navigate(f"{site}/form.html")
-        assert browser.observe().title == "Settings" and browser.reconnects >= 1
+        result = browser.navigate(f"{site}/form.html")
+        assert browser.observe().title == "Settings" and browser.reconnects >= 1 and result.attempts == 2
 
         free = socket.socket()
         free.bind(("127.0.0.1", 0))
@@ -218,6 +264,71 @@ def test_crash_and_connection_loss_recovery_in_a_real_browser(site: str, tmp_pat
         with pytest.raises(IntegrationError, match="ERR_CONNECTION_REFUSED") as info:
             browser.navigate(f"http://127.0.0.1:{port}/")
         assert "Nothing is listening" in (info.value.hint or "")
+    finally:
+        assert browser.stop()
+
+
+def test_closed_tab_and_killed_browser_are_recovered_in_a_real_browser(site: str, tmp_path: Path) -> None:
+    import os
+    import signal
+    import urllib.request
+
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+    try:
+        browser.navigate(f"{site}/index.html")
+        port = browser._saved()["port"]
+        urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/json/close/{browser._target_id}"
+        ).read()  # the person closes it
+        result = browser.navigate(f"{site}/delete.html")
+        assert browser.observe().title == "Items" and result.attempts <= 2  # the close may race the command
+        assert "page_closed" in [e["event"] for e in _events(browser)]
+
+        os.kill(int(browser._saved()["pid"]), signal.SIGKILL)  # the browser dies
+        time.sleep(0.5)
+        browser.navigate(f"{site}/form.html")
+        assert browser.observe().title == "Settings"
+        assert "browser_gone" in [e["event"] for e in _events(browser)]
+    finally:
+        assert browser.stop()
+
+
+def test_twenty_sequential_navigations_share_one_connection(site: str, tmp_path: Path) -> None:
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+    pages = ["index.html", "delete.html", "form.html", "results.html?q=x"]
+    try:
+        for i in range(20):
+            result = browser.navigate(f"{site}/{pages[i % 4]}")
+            assert result.url.startswith(f"{site}/{pages[i % 4].split('?')[0]}")
+        assert browser.reconnects == 0 and browser._conn is not None
+        assert len([s for s in browser._conn.sessions if s]) == 1  # one tab session throughout
+    finally:
+        assert browser.stop()
+
+
+def test_history_hover_double_click_drag_and_upload_in_a_real_browser(site: str, tmp_path: Path) -> None:
+    upload = tmp_path / "notes.txt"
+    upload.write_text("hello")
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+    try:
+        browser.navigate(f"{site}/index.html")
+        browser.navigate(f"{site}/interact.html")
+        assert browser.go_back().endswith("/index.html") and browser.observe().title == "Shop"
+        assert browser.go_forward().endswith("/interact.html")
+
+        browser.hover(_element(browser, "Menu"))
+        assert "hovered" in browser.observe().text
+        browser.double_click(_element(browser, "Zoom"))
+        assert "double" in browser.observe().text
+        browser.drag(_element(browser, "Card"), _element(browser, "Bin"))
+        assert "dropped card" in browser.observe().text
+        field = _element(browser, "Attachment")
+        browser.upload(field, [str(upload)])
+        chosen = next(e for e in browser.observe().elements if e.id == field)
+        assert chosen.value.endswith("notes.txt")
+
+        browser.reload()
+        assert browser.observe().title == "Interact"
     finally:
         assert browser.stop()
 
@@ -248,6 +359,7 @@ def test_a_stalled_load_never_leaves_the_browser_unusable(
     site: str, silent_server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from highhx.computer import browser as browser_module
+    from highhx.execution.cancellation import CancellationToken
 
     monkeypatch.setattr(browser_module, "NAVIGATE_TIMEOUT", 3.0)
     state = tmp_path / "state"
@@ -258,9 +370,18 @@ def test_a_stalled_load_never_leaves_the_browser_unusable(
         browser.navigate(f"{site}/index.html")  # at once, not after a hang
         assert browser.observe().title == "Shop"
 
-        # a client that gives up mid-load (Ctrl+C) — the next process must still get the tab
+        # Ctrl+C during a hanging load, then the next command in the same session
+        token = CancellationToken()
+        threading.Timer(0.5, token.cancel).start()
+        with pytest.raises(OperationCancelledError):
+            browser.navigate(silent_server, cancel=token)
+        started = time.monotonic()
+        browser.navigate(f"{site}/form.html")
+        assert browser.observe().title == "Settings" and time.monotonic() - started < 10
+
+        # a client that gives up mid-load and exits — the next process must still get the tab
         assert browser._conn is not None
-        browser._conn.ws.send(json.dumps({"id": 10**6, "method": "Page.navigate", "params": {"url": silent_server}}))
+        browser._conn.send("Page.navigate", {"url": silent_server}, session_id=browser._session_id)
         time.sleep(0.5)
         browser.close()
         started = time.monotonic()
@@ -268,5 +389,33 @@ def test_a_stalled_load_never_leaves_the_browser_unusable(
         other.navigate(f"{site}/delete.html")
         assert other.observe().title == "Items" and time.monotonic() - started < 15
         other.close()
+    finally:
+        assert browser.stop()
+
+
+def _online() -> bool:
+    try:
+        socket.create_connection(("github.com", 443), timeout=5).close()
+    except OSError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not os.environ.get("HIGHHX_TEST_BROWSER"), reason="set HIGHHX_TEST_BROWSER=1")
+def test_github_then_wikipedia_repeatedly_on_the_real_internet(tmp_path: Path) -> None:
+    """The reported regression: open GitHub, then Wikipedia (and Example), over and over,
+    in one session — every navigation arrives, on one connection, with no recovery needed."""
+    if not _online():
+        pytest.skip("no internet connection")
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+    sequence = ["https://github.com", "https://wikipedia.org", "https://example.com"]
+    try:
+        for _ in range(5):
+            for url in sequence:
+                result = browser.navigate(url)
+                assert arrived(url, result.url), (url, result.url)
+                assert result.attempts == 1
+        assert browser.reconnects == 0
+        assert [e["event"] for e in _events(browser)] == ["connected"]
     finally:
         assert browser.stop()

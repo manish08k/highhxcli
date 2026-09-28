@@ -6,6 +6,38 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+The HighhX browser rebuilt around one browser-wide connection, a tab registry and a single
+recovery policy.
+
+### Fixed
+
+- **"The browser connection was lost after Page.navigate was sent" after closing a tab (0.6.1).**
+  HighhX held a DevTools connection *to one tab*; when that tab closed or was replaced, the next
+  command failed. HighhX now connects to the browser itself, learns at once when a tab is
+  closed, replaced or crashes, and continues in the tab it was working in, the most recently
+  used remaining tab, or a new one.
+- A cancelled request (Ctrl+C) no longer leaves its tab holding every later command of the
+  session until the abandoned load gives up.
+- Transient network errors (timeouts, resets, a changed network) are retried; permanent ones
+  (unknown address, refused, certificate) are reported with a hint.
+- A download is never mistaken for a page: opening a file URL downloads it and says where.
+
+### Added
+
+- Tab management: `browser.new_tab`, `browser.close_tab`, `browser.switch_tab`, `browser.tabs`;
+  "open Gmail" switches to a tab already showing it. A clicked link that opens a new tab, or a
+  sign-in window, is followed; ads and other popups are not.
+- `browser.back`, `browser.forward` (exact history entries), `browser.refresh`, `browser.hover`,
+  `browser.double_click`, `browser.drag` (HTML5 and pointer drags), `browser.upload` (project
+  files only, asks first) and `browser.download` (followed to completion in the HighhX downloads
+  folder) — as actions, flow steps and plain requests ("go back", "close this tab", "download
+  the report link" …).
+- Every action has a retry class: safe actions are recovered and repeated (bounded, with
+  backoff); clicks, typing, keys, uploads, downloads and reloads are never repeated once they
+  may have run — HighhX looks at the page and reports what it found.
+- Browser recoveries, tab changes, popups, dialog decisions and downloads are recorded in the
+  audit trail (`details.browser`).
+
 ## [0.6.2] - 2026-09-28
 
 A reliable HighhX browser: it recovers from dropped connections, crashes and stalled pages

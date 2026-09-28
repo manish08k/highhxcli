@@ -87,7 +87,7 @@ exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "pragma: no co
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "0.6.3"
 src = ["src", "tests", "server/src", "server/tests"]
 extend-exclude = ["templates", "examples", "tests/fixtures"]
 
@@ -106,7 +106,7 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Body", "highhx_platform.de
 "tests/**" = ["PLR", "S", "B011"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "0.6.3"
 files = ["src/highhx"]
 strict_optional = true
 warn_unused_ignores = true
