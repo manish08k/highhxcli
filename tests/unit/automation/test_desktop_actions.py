@@ -5,10 +5,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tests.unit.automation.fakes import FakeEngine
 
 
-def test_switch_to_launches_focuses_and_verifies(agent_project: Path, executor_for, engine: FakeEngine) -> None:
+def test_switch_to_launches_focuses_and_verifies(
+    agent_project: Path, executor_for, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("highhx.computer.desktop._platform_key", lambda: "darwin")  # macOS app names
     executor, _ = executor_for(agent_project)
     result = executor.run("computer.focus", {"app": "slack"})
     assert result.ok and result.verified and result.output["launched"]

@@ -639,6 +639,7 @@ def _pty_session(
     import fcntl
     import pty
     import select
+    import signal
     import struct
     import termios
     import time
@@ -672,8 +673,27 @@ def _pty_session(
         if resize is not None and key == b"/status\r":
             fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", resize[1], resize[0], 0, 0))
         os.write(fd, key)
-        pump(b"Bye." if key == b"\x04" else "❯".encode())  # noqa: RUF001
-    os.waitpid(pid, 0)
+        if key == b"\x04":
+            # GNU readline (Linux) can lose an EOF that arrives while it is setting up the
+            # terminal for the next prompt; a person would press Ctrl+D again.
+            for _ in range(3):
+                pump(b"Bye.", timeout=5)
+                if b"Bye." in output:
+                    break
+                os.write(fd, key)
+            continue
+        pump("❯".encode())  # noqa: RUF001
+    # A session that has not exited (a key answered an unexpected prompt …) must fail the
+    # test with its output, not block CI forever in waitpid.
+    deadline = time.monotonic() + 15
+    while os.waitpid(pid, os.WNOHANG) == (0, 0):
+        if time.monotonic() > deadline:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            output += b"\n[the session did not exit; killed by the test]\n"
+            break
+        pump(b"\0", timeout=0.2)
+    os.close(fd)
     return output.decode("utf-8", "replace").replace("\r\n", "\n")
 
 

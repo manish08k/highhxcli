@@ -329,8 +329,9 @@ def test_open_site_and_search_workflow(agent_project: Path, executor_for, browse
 
 
 def test_search_in_a_browser_highhx_cannot_drive(
-    agent_project: Path, executor_for, browser: dict[str, Any], engine: FakeEngine
+    agent_project: Path, executor_for, browser: dict[str, Any], engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr("highhx.computer.desktop._platform_key", lambda: "darwin")  # macOS app names
     executor, _ = executor_for(agent_project)
     result = executor.run("browser.search", {"query": "python documentation", "app": "Safari"})
     assert result.ok and browser["flows"] == []  # the OS opens it there; nothing is automated

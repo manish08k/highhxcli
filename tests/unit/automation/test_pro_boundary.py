@@ -74,7 +74,9 @@ def test_free_computer_automation_touches_no_ai(
     tripwires: list[str],  # noqa: F811
     browser: dict[str, Any],
     engine: FakeEngine,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("highhx.computer.desktop._platform_key", lambda: "darwin")  # macOS app names
     app = make_app(agent_project)
     script = Script("open GitHub and search for highhx", "switch to Safari", "open spotifyy", "/quit")
     ui, buffer = make_ui(script)
