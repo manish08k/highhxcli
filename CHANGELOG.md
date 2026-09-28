@@ -6,6 +6,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-09-28
+
 The HighhX browser rebuilt around one browser-wide connection, a tab registry and a single
 recovery policy.
 
