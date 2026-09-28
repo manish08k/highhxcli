@@ -148,7 +148,7 @@ so scripts and CI are unaffected.
 ```text
 $ highhx
 
-  (the Knight)   HighhX v0.6.1
+  (the Knight)   HighhX v0.6.2
                  Developer command center
                  ~/code/shop
                  main • clean
@@ -280,7 +280,7 @@ $ highhx
      ▐▀▌
     ▗ ▄ ▖
    ▗▚▐█▌▞▖
-  ▗▚█▐█▌█▞▖      HighhX v0.6.1
+  ▗▚█▐█▌█▞▖      HighhX v0.6.2
    ▟█▐█▌█▙       Developer command center
   ▐▐█▌█▐█▌▌      ~/code/shop
   █▗▜▌█▐▛▖█      main • clean

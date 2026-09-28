@@ -6,6 +6,42 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-28
+
+A reliable HighhX browser: it recovers from dropped connections, crashes and stalled pages
+without ever repeating an action.
+
+### Fixed
+
+- **A slow or unresponsive site could leave the browser unusable.** While a navigation that
+  never commits is pending, Chrome answers nothing on a new DevTools session except
+  `Page.stopLoading`, so every later command (and the next `highhx` invocation, e.g. after
+  Ctrl+C) failed with "the browser did not answer". HighhX now stops that load when it
+  reconnects, and a site that does not respond is reported as such instead of being retried.
+- **A lost connection during `open` failed the action.** Opening a URL is idempotent, so it is
+  issued again — at most three times, and only after reconnecting and checking where the page
+  is (a page that already got there is not requested again). Clicks, typing and key presses
+  whose answer was lost are still never repeated.
+- A command that never reached the browser (the connection was already gone) is sent once
+  more on a new connection instead of failing; a failed send is no longer a raw OS error.
+- Reconnections return to the tab HighhX works in, not to whichever tab is listed first.
+- A crashed page is detected at once (it used to hang for 30s); its tab is replaced.
+- JavaScript dialogs no longer block every command: alerts are acknowledged, and confirms,
+  prompts and "leave page?" dialogs are cancelled — nothing is confirmed or discarded.
+- Links with `target=_blank` open (clicks carry a user gesture, like a person's click) and
+  HighhX continues in that tab; tabs opened by scripts or ads are not followed.
+- Enter and other keys reach the page even when the browser window is in the background or
+  its address bar has focus.
+- A `www.` redirect counts as arriving at the requested page.
+
+### Added
+
+- Network errors come with a plain-language hint (address not found, offline, connection
+  refused, certificate problem), and a failed open says when the page was still loading.
+- Downloads from the HighhX browser go to its own `downloads` folder in the user state directory.
+- Recovery tests: a scripted DevTools browser for connection loss, crashes, dialogs, stalled
+  loads, retries and tabs, plus real-Chrome tests (`HIGHHX_TEST_BROWSER=1`).
+
 ## [0.6.1] - 2026-09-28
 
 Local voice with whisper.cpp, and a fix for `/voice` commands being treated as speech.

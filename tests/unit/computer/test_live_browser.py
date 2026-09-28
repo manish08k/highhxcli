@@ -3,10 +3,14 @@ can start in this environment)."""
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import http.server
+import json
 import os
+import socket
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -16,7 +20,7 @@ from highhx.commands import App
 from highhx.computer.browser import ChromeBrowser, find_browser
 from highhx.computer.runtime import ComputerRuntime
 from highhx.core.context import Options
-from highhx.core.errors import ApprovalDeniedError, NotFoundError
+from highhx.core.errors import ApprovalDeniedError, IntegrationError, NotFoundError, OutcomeUnknownError
 from highhx.safety.actions import Actor
 from highhx.safety.audit import AuditLog
 from highhx.safety.gate import ActionGate, ApprovalMode
@@ -48,6 +52,14 @@ def site(tmp_path: Path) -> Iterator[str]:
         "<!doctype html><title>Results</title><p id=r></p><script>"
         "r.innerText='You searched for '+new URLSearchParams(location.search).get('q')</script>"
     )
+    (tmp_path / "links.html").write_text(
+        "<!doctype html><title>Links</title><a href='results.html?q=tab' target=_blank>Docs in a new tab</a>"
+        "<button onclick=\"window.open('index.html');window.open('delete.html')\">Win a prize</button>"
+        "<a href='results.html?q=same' onclick=\"window.open('delete.html')\">Next page</a>"
+        "<button onclick=\"alert('saved')\">Save</button>"
+        "<a href='file.bin' download>Download report</a>"
+    )
+    (tmp_path / "file.bin").write_bytes(b"report")
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -133,3 +145,128 @@ def test_runtime_gate_and_verification_in_a_real_browser(site: str, tmp_path: Pa
     finally:
         assert browser.stop()
         app.close()
+
+
+def _click(browser: ChromeBrowser, name: str) -> None:
+    element = next(e for e in browser.observe().elements if e.name == name)
+    browser.click(element.id)
+    browser.wait_ready(timeout=10)
+
+
+def test_new_tabs_popups_dialogs_and_downloads_in_a_real_browser(site: str, tmp_path: Path) -> None:
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+    try:
+        browser.navigate(f"{site}/links.html")
+        first_tab = browser._target_id
+        _click(browser, "Docs in a new tab")  # a legitimate new tab: continue there
+        assert "You searched for tab" in browser.observe().text
+        assert browser._target_id != first_tab
+
+        browser.navigate(f"{site}/links.html")
+        tab = browser._target_id
+        _click(browser, "Win a prize")  # two windows at once: a popup storm, stay
+        assert browser._target_id == tab and browser.observe().title == "Links"
+
+        _click(browser, "Next page")  # the page navigated and a popup opened beside it: stay
+        assert browser._target_id == tab and "You searched for same" in browser.observe().text
+
+        browser.navigate(f"{site}/links.html")
+        _click(browser, "Save")  # a blocking alert() is closed; the page keeps answering
+        assert browser.observe().title == "Links"
+        assert browser._conn is not None and browser._conn.dialogs[-1]["type"] == "alert"
+
+        _click(browser, "Download report")
+        deadline = time.monotonic() + 10
+        while not (browser.downloads_dir / "file.bin").exists() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert (browser.downloads_dir / "file.bin").read_bytes() == b"report"
+    finally:
+        assert browser.stop()
+
+
+def test_crash_and_connection_loss_recovery_in_a_real_browser(site: str, tmp_path: Path) -> None:
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+    try:
+        browser.navigate(f"{site}/index.html")
+        crashed_tab = browser._target_id
+        with pytest.raises(OutcomeUnknownError):
+            browser._send("Page.crash")  # the renderer dies
+        browser.navigate(f"{site}/delete.html")  # a fresh tab, and the page opens
+        assert browser._target_id != crashed_tab and browser.observe().title == "Items"
+
+        # the connection dies right after Page.navigate is sent: reconnect, look, finish
+        assert browser._conn is not None
+        conn = browser._conn
+        original = conn.call
+
+        def drop_after_navigate(method: str, *args: object, **kwargs: object) -> dict[str, object]:
+            if method == "Page.navigate":
+                conn.ws.send(json.dumps({"id": 999_999, "method": method, "params": args[0] if args else {}}))
+                conn.ws.sock.close()
+                conn.ws.closed = True
+                raise OutcomeUnknownError("lost after Page.navigate was sent")
+            return original(method, *args, **kwargs)  # type: ignore[arg-type]
+
+        conn.call = drop_after_navigate  # type: ignore[method-assign]
+        browser.navigate(f"{site}/form.html")
+        assert browser.observe().title == "Settings" and browser.reconnects >= 1
+
+        free = socket.socket()
+        free.bind(("127.0.0.1", 0))
+        port = free.getsockname()[1]
+        free.close()
+        with pytest.raises(IntegrationError, match="ERR_CONNECTION_REFUSED") as info:
+            browser.navigate(f"http://127.0.0.1:{port}/")
+        assert "Nothing is listening" in (info.value.hint or "")
+    finally:
+        assert browser.stop()
+
+
+@pytest.fixture
+def silent_server() -> Iterator[str]:
+    """Accepts connections and never answers (a hung site)."""
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(8)
+    held: list[socket.socket] = []
+    stop = threading.Event()
+
+    def accept() -> None:
+        server.settimeout(0.2)
+        while not stop.is_set():
+            with contextlib.suppress(OSError):
+                held.append(server.accept()[0])
+
+    threading.Thread(target=accept, daemon=True).start()
+    yield f"http://127.0.0.1:{server.getsockname()[1]}/"
+    stop.set()
+    for sock in [*held, server]:
+        sock.close()
+
+
+def test_a_stalled_load_never_leaves_the_browser_unusable(
+    site: str, silent_server: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from highhx.computer import browser as browser_module
+
+    monkeypatch.setattr(browser_module, "NAVIGATE_TIMEOUT", 3.0)
+    state = tmp_path / "state"
+    browser = ChromeBrowser(state, headless=True)
+    try:
+        with pytest.raises(IntegrationError, match="did not respond"):
+            browser.navigate(silent_server)
+        browser.navigate(f"{site}/index.html")  # at once, not after a hang
+        assert browser.observe().title == "Shop"
+
+        # a client that gives up mid-load (Ctrl+C) — the next process must still get the tab
+        assert browser._conn is not None
+        browser._conn.ws.send(json.dumps({"id": 10**6, "method": "Page.navigate", "params": {"url": silent_server}}))
+        time.sleep(0.5)
+        browser.close()
+        started = time.monotonic()
+        other = ChromeBrowser(state, headless=True)
+        other.navigate(f"{site}/delete.html")
+        assert other.observe().title == "Items" and time.monotonic() - started < 15
+        other.close()
+    finally:
+        assert browser.stop()

@@ -237,6 +237,8 @@ class ComputerRuntime:
             problems = [] if _same_page(url, after.url) else [f"the browser is at {after.url}, not {url}"]
             if expect is not None:
                 problems += expect.check(after)
+            if problems and getattr(self.provider, "last_wait_settled", True) is False:
+                problems.append("the page was still loading when HighhX stopped waiting")
             event.verified = not problems
             if problems:
                 event.status, event.error = "failed", "; ".join(problems)
@@ -298,8 +300,14 @@ class ComputerRuntime:
 
 
 def _same_page(requested: str, actual: str) -> bool:
+    """The browser ended up where it was sent (a ``www.`` redirect, either way, counts)."""
     a, b = urlparse(requested), urlparse(actual)
-    return (a.hostname or "") == (b.hostname or "") and (b.path or "/").startswith((a.path or "/").rstrip("/") or "/")
+
+    def host(url: Any) -> str:
+        name = (url.hostname or "").lower()
+        return name.removeprefix("www.")
+
+    return host(a) == host(b) and (b.path or "/").startswith((a.path or "/").rstrip("/") or "/")
 
 
 def _selector_text(selector: Selector) -> str:

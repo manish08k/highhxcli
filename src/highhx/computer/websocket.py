@@ -78,7 +78,11 @@ class WebSocket:
             header += bytes([0x80 | 127]) + struct.pack("!Q", length)
         mask = os.urandom(4)
         masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
-        self.sock.sendall(header + mask + masked)
+        try:
+            self.sock.sendall(header + mask + masked)
+        except OSError:  # broken pipe / reset: the browser went away
+            self._abort()
+            raise WebSocketClosed("The DevTools connection was lost while sending.") from None
 
     def _read_exact(
         self, n: int, cancel: CancellationToken | None, deadline_poll: float, deadline: float | None = None
@@ -149,7 +153,7 @@ class WebSocket:
             return
         try:
             self._send_frame(0x8, b"")
-        except OSError:
+        except (OSError, WebSocketClosed):
             pass
         self.closed = True
         try:
