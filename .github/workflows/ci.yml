@@ -28,7 +28,7 @@ jobs:
       - name: Type check
         run: mypy
       - name: Test
-        run: pytest -q
+        run: pytest -v -p no:cacheprovider -o faulthandler_timeout=300
 
   platform:
     name: Platform backend
@@ -44,7 +44,7 @@ jobs:
         run: mypy server/src --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
       - name: Test
         working-directory: server
-        run: pytest -q
+        run: pytest -v -p no:cacheprovider -o faulthandler_timeout=300
 
   package:
     name: Build and install
