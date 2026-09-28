@@ -24,11 +24,11 @@ from highhx.computer.session import ComputerSession
 from highhx.core.errors import PlanRequiredError
 from highhx.decision.advanced import ADVANCED_REASONING, advanced_reasoning_available, require_advanced_reasoning
 from highhx.safety.actions import Actor
-from tests.unit.actions.test_agent_and_boundaries import FakeRecorder, FakeSpeaker, FakeTranscriber
 from tests.unit.agent.conftest import reply
 from tests.unit.agent.test_free_pro_boundary import tripwires  # noqa: F401
 from tests.unit.agent.test_repl import Script, make_ui, pro_account
 from tests.unit.automation.fakes import FakeEngine
+from tests.unit.voice.fakes import FakeRecorder, FakeSpeaker, FakeTranscriber
 
 AI_STACK = (
     "highhx.agent.session",
@@ -174,7 +174,7 @@ def test_voice_on_free_is_the_same_automation_pipeline(
     browser: dict[str, Any],
 ) -> None:
     app = make_app(agent_project)
-    repl, buffer, speaker = _voice_repl(app, None, ("open GitHub",), "", "", "y", "/quit")
+    repl, buffer, speaker = _voice_repl(app, None, ("open GitHub",), "", "", "/quit")
     repl.run()
     assert browser["flows"] == [{"open": "https://github.com"}]  # the same executor and verification
     assert "↳ verified" in buffer.getvalue() and speaker.said == ["open GitHub: done."]
@@ -185,7 +185,7 @@ def test_voice_never_runs_what_it_does_not_know(
     agent_project: Path, make_app: Any, browser: dict[str, Any], engine: FakeEngine
 ) -> None:
     app = make_app(agent_project)
-    repl, buffer, _ = _voice_repl(app, None, ("open spotifyy then press enter",), "", "", "y", "/quit")
+    repl, buffer, _ = _voice_repl(app, None, ("open spotifyy then press enter",), "", "", "/quit")
     repl.run()
     assert "I don't know this action yet" in buffer.getvalue()
     assert browser["flows"] == [] and engine.sent("key", "type", "hotkey", "click") == []
@@ -193,7 +193,7 @@ def test_voice_never_runs_what_it_does_not_know(
 
 def test_voice_on_pro_goes_to_the_agent(agent_project: Path, make_app: Any, make_session: Any) -> None:
     session, provider, _ = make_session(agent_project, [reply("On it.")])
-    repl, _buffer, _ = _voice_repl(session.app, session, ("open github",), "", "", "y", "/quit")
+    repl, _buffer, _ = _voice_repl(session.app, session, ("open github",), "", "", "/quit")
     repl.run()
     assert len(provider.requests) == 1  # the same router: a Pro session sends it to the agent
 

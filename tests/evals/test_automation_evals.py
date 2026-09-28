@@ -86,3 +86,16 @@ def test_eval_summary(decider: DeterministicDecider, capsys: pytest.CaptureFixtu
             print(f"  {name:<13} {passed[name]}/{total[name]}")
     assert passed == total
     assert routes["local"] >= 40 and routes["pro"] >= 6 and routes["unknown"] >= 8
+
+
+def test_a_chained_destructive_command_is_never_run(decider: DeterministicDecider) -> None:
+    """The resolver refuses it and points to !command — where the destructive part is critical
+    and cannot be approved away."""
+    from highhx.safety.classifier import classify_command
+
+    decision = decider.decide("run python hello.py; rm -rf ~")
+    assert decision.route == "unknown" and decision.plan is None
+    assert decision.unknown is not None
+    [suggestion] = decision.unknown.suggestions
+    verdict = classify_command(suggestion.removeprefix("!"))
+    assert verdict.risk.label == "critical" and not verdict.bypassable

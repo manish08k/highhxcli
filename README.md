@@ -148,7 +148,7 @@ so scripts and CI are unaffected.
 ```text
 $ highhx
 
-  (the Knight)   HighhX v0.6.0
+  (the Knight)   HighhX v0.6.1
                  Developer command center
                  ~/code/shop
                  main • clean
@@ -206,8 +206,29 @@ $ highhx
   command acts on it. See [docs/CLI_REFERENCE.md](docs/CLI_REFERENCE.md).
 - **First run.** The first session shows a short *Getting started*: `/init`, a first request,
   `/plan` + `/approve`, and `/login` for Pro.
-- **Voice.** `highhx voice` or `/voice on`: push-to-talk with a local speech-to-text engine;
-  transcripts are confirmed before they run ([docs/VOICE.md](docs/VOICE.md)).
+- **Voice.** Type `/voice on` (or run `highhx voice`) and speak. The first time, HighhX
+  offers to set up everything local voice needs — whisper.cpp, an audio recorder and a
+  checksum-verified model — then remembers it. Speech-to-text runs entirely on your machine:
+  free, offline, no account, no Pro. Push-to-talk: Enter on an empty line records, Enter stops; the transcript
+  goes through exactly the same resolver, plan, approvals, verification and audit as typed
+  text, and spoken requests get a spoken reply. `/voice status`, `/voice setup`,
+  `/voice test`, `/voice off` — handled by the session itself, never by the resolver or the
+  Pro screen ([docs/VOICE.md](docs/VOICE.md)).
+
+```text
+❯ /voice on
+
+🎙 Voice on
+Speech-to-text: whisper.cpp (base.en)
+Microphone: ready
+Voice replies: enabled
+Push-to-talk: press Enter on an empty line to talk · /voice off
+
+❯                      (Enter on an empty line)
+🎙 Listening...
+◉ Transcribing...
+✓ "Open YouTube and play Adhento Gani"
+```
 
 ## HighhX Free: plain-language automation
 
@@ -259,7 +280,7 @@ $ highhx
      ▐▀▌
     ▗ ▄ ▖
    ▗▚▐█▌▞▖
-  ▗▚█▐█▌█▞▖      HighhX v0.6.0
+  ▗▚█▐█▌█▞▖      HighhX v0.6.1
    ▟█▐█▌█▙       Developer command center
   ▐▐█▌█▐█▌▌      ~/code/shop
   █▗▜▌█▐▛▖█      main • clean

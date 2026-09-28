@@ -13,7 +13,11 @@ will use most.
 | `highhx do [--plan] "request"` | Run a request deterministically (no AI) and exit; `--plan` shows the deterministic decision and the JSON action plan without running (`--json` for the data) |
 | `highhx agent ["request"]` | The same session (a request becomes the first message); one-shot AI request outside a terminal (Pro) |
 | `highhx agent --verify test[,check,build] "goal"` | Pro, headless: an autonomous task; exit 0 only when HighhX verified it (`--attempts N`, `--json` for the report) |
-| `highhx voice` | The session with voice on |
+| `highhx voice` | The session with voice on (sets up local voice on first use) |
+| `highhx voice status` | whisper.cpp, model, recorder, microphone and replies (`--json` for the data) |
+| `highhx voice setup` | Install whisper.cpp and a recorder, download and verify the model — asks first (`--yes` to agree in advance) |
+| `highhx voice model [name]` | Show or switch the whisper model: `tiny.en`, `base.en` (default), `small.en` |
+| `highhx voice test [--file WAV]` | Record and transcribe a sample (or a WAV file) — runs nothing |
 
 Global options work everywhere: `--json`, `--dry-run`, `--yes/-y`, `--force`, `--quiet/-q`,
 `--verbose/-v`, `--debug`, `--no-color`, `--cwd/-C DIR`, `--config-profile NAME`.
@@ -25,7 +29,7 @@ Global options work everywhere: `--json`, `--dry-run`, `--yes/-y`, `--force`, `-
 | plain language | Free: the deterministic resolver plans it (open Gmail, play lofi on YouTube, switch to Slack, run the tests …) and each step runs and is verified; unknown names are explained; open-ended requests show the Pro panel. Pro: the AI agent |
 | `!command` | A shell command as the `shell.run` action (classified, approved by risk, audited) |
 | `highhx <command>` | Any HighhX command, in place |
-| Enter on an empty line | Talk (when voice is on) |
+| Enter on an empty line | Talk when voice is on: speak, then Enter again ([VOICE.md](VOICE.md)) |
 | `\` at line end, or `"""` … `"""` | Multi-line input |
 | ↑ / ↓, Ctrl+R | Input history (kept across sessions) |
 | Ctrl+C | Interrupt the running request (twice at the prompt: exit) |
@@ -54,7 +58,10 @@ did (→ `/history`, `/changes`).
 | | `/context` · `/tools [category]` · `/config` · `/memory [clear]` | Project facts · capabilities and actions · configuration · project memory |
 | Account & AI | `/login` · `/account` · `/pro` · `/usage` | Sign in · your plan · what Pro adds · AI usage |
 | | `/model [name]` · `/mode [ask\|auto-edit\|read-only]` | Pro: the AI model · the agent's approval mode |
-| Session | `/voice [on\|off\|mute\|status]` · `/clear` · `/help` · `/quit` | Voice · new conversation · commands · exit |
+| Session | `/voice` (= `/voice on`) · `/voice off` | Local voice (whisper.cpp): set up on first use, then push-to-talk (Enter on an empty line) with spoken replies · stop it |
+| | `/voice status` · `/voice setup` · `/voice test` | What voice has and lacks · install or repair it · transcribe a sample, run nothing |
+| | `/voice mute` · `/voice unmute` | Spoken replies off / on |
+| | `/clear` · `/help` · `/quit` | New conversation · commands · exit |
 
 ## Everyday commands
 

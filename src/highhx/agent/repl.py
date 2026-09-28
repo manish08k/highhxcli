@@ -139,7 +139,12 @@ SLASH_COMMANDS = (
         "mode", "/mode [ask|auto-edit|read-only]", "The agent's approval mode", agent=True, group="Account & AI"
     ),
     # Session
-    SlashCommand("voice", "/voice [on|off|mute|status]", "Push-to-talk and spoken replies", group="Session"),
+    SlashCommand(
+        "voice",
+        "/voice [on|off|status|setup|test]",
+        "Local voice (whisper.cpp): push-to-talk and spoken replies",
+        group="Session",
+    ),
     SlashCommand("clear", "/clear", "Start a fresh conversation (memory and settings stay)", group="Session"),
     SlashCommand("help", "/help", "This list", group="Session"),
     SlashCommand("quit", "/quit", "Exit (also /exit, Ctrl+D)", group="Session"),
@@ -372,14 +377,15 @@ class AgentREPL:
         if self.first_run:
             self.welcome()
         if self.session is not None:
-            self.ui.print("What would you like me to do? [dim](/help for commands)[/dim]")
+            self.ui.print("What would you like me to do? [dim](/help · /voice · /status)[/dim]")
         else:
             self.ui.print(
                 "What would you like to do? HighhX automates your computer and your project — no AI needed:\n"
                 "  [italic]run the tests[/italic] · [italic]show git status[/italic] · [italic]open Safari[/italic]"
                 " · [italic]open YouTube and play …[/italic]\n"
                 "  [italic]open Chrome and search for …[/italic] · [italic]create a folder called …[/italic]"
-                " · [dim]`!ls` · /help[/dim]"
+                " · [dim]`!ls`[/dim]\n"
+                "  [dim]/help · /voice · /status[/dim]"
             )
 
     def welcome(self) -> None:
@@ -444,7 +450,9 @@ class AgentREPL:
         interrupts = 0
         try:
             while self._running:
-                if pending is not None:
+                if self._voice is not None and self._voice.typed_instead:
+                    text, self._voice.typed_instead = self._voice.typed_instead, None
+                elif pending is not None:
                     text, pending = pending, None
                     self.ui.print(f"\n[bold magenta]{PROMPT}[/bold magenta]{escape(text)}")
                 else:
@@ -462,14 +470,16 @@ class AgentREPL:
                         self.ui.print("\n[dim]Press Ctrl+C again or type /quit to exit.[/dim]")
                         continue
                 interrupts = 0
+                spoken = False
                 if self._voice is not None and self._voice.active and not text.strip():
-                    heard = self.voice.listen(self._read_line)
+                    with prompt_interrupts():
+                        heard = self.voice.listen()
                     if not heard:
                         continue
-                    text = heard
+                    text, spoken = heard, True
                 self.last_summary = ""
-                self.handle(text)
-                if self._voice is not None and self._voice.active and self.last_summary:
+                self.handle(text)  # typed or spoken: the same request pipeline
+                if spoken and self._voice is not None and self._voice.active and self.last_summary:
                     self._voice.speak(self.last_summary)
         finally:
             save_history()
@@ -845,12 +855,27 @@ class AgentREPL:
         if nested_session(argv):
             self.ui.notice("info", "You are already in the HighhX session — just type your request.")
             return 0
+        words = command_words(argv)
+        if words and words[0] == "voice":
+            return self.voice_command(words[1:])
         shown = label or "highhx " + " ".join(argv)
         code = self._local(shown, lambda: self._invoke(argv))
         words = command_words(argv)
         if words and words[0] in ACCOUNT_COMMANDS:
             self.refresh_entitlements()
         return code
+
+    def voice_command(self, args: list[str]) -> int:
+        """``highhx voice …`` typed inside the session: the /voice equivalent (no second session)."""
+        sub = args[0].lower() if args else "on"
+        if sub in ("--check", "check"):
+            sub = "status"
+        if sub not in ("on", "off", "status", "setup", "test"):
+            self.ui.notice("warn", "In the session use /voice on, off, status, setup or test.")
+            return 2
+        self.ui.print(f"[dim]In the session this is /voice {sub}.[/dim]")
+        self.cmd_voice(sub)
+        return 0
 
     def _invoke(self, argv: list[str]) -> int:
         from highhx.actions.invoke import invoke_cli
@@ -1004,6 +1029,14 @@ class AgentREPL:
             for command in (c for c in SLASH_COMMANDS if c.group == group):
                 table.add_row(f"  {escape(command.usage)}", escape(command.help), "Pro" if command.agent else "")
         self.ui.print(table)
+        self.ui.print(
+            "\n[bold]Voice[/bold] [dim](local whisper.cpp — set up automatically on first use, no account)[/dim]\n"
+            "  [bold magenta]/voice[/bold magenta], [bold magenta]/voice on[/bold magenta]  turn voice on — then Enter on an empty line to talk, Enter to stop\n"
+            "  [bold magenta]/voice off[/bold magenta]     stop voice input and spoken replies\n"
+            "  [bold magenta]/voice status[/bold magenta]  whisper.cpp, model, recorder and microphone\n"
+            "  [bold magenta]/voice setup[/bold magenta]   install or repair what voice needs\n"
+            "  [bold magenta]/voice test[/bold magenta]    transcribe a sample — runs nothing"
+        )
         self.ui.print(
             "\n[dim]!<command> shell command (risk-checked) · highhx <command> any HighhX command · "
             '\\ or """ multi-line · Ctrl+C interrupts · Ctrl+D exits[/dim]'
@@ -1252,22 +1285,23 @@ class AgentREPL:
         self.command(["login"])
 
     def cmd_voice(self, arg: str) -> None:
-        choice = arg.strip().lower() or ("off" if self._voice is not None and self._voice.active else "on")
+        choice = " ".join(arg.strip().lower().split()) or "on"  # /voice alone turns voice on
         voice = self.voice
         if choice == "on":
             voice.enable()
         elif choice == "off":
             voice.disable()
-        elif choice in ("mute", "unmute"):
-            voice.set_muted(choice == "mute")
+        elif choice in ("mute", "unmute", "replies off", "replies on"):
+            voice.set_muted(choice in ("mute", "replies off"))
         elif choice == "status":
-            rows = [("Voice", "on" if voice.active else "off"), ("Replies", "muted" if voice.muted else "spoken")]
-            rows += [(k.capitalize(), v) for k, v in voice.engines.describe().items()]
-            self._grid(rows)
-            for note in voice.engines.notes:
-                self.ui.print(f"  [dim]• {escape(note)}[/dim]")
+            voice.show_status()
+        elif choice == "setup":
+            voice.setup()
+        elif choice == "test":
+            with prompt_interrupts():
+                voice.test()
         else:
-            self.ui.notice("warn", "Use /voice on, off, mute, unmute or status.")
+            self.ui.notice("warn", "Use /voice on, off, status, setup, test, mute or unmute.")
 
     def cmd_workflows(self, _arg: str) -> None:
         self.command(["workflow", "list"])

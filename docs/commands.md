@@ -122,19 +122,63 @@ highhx agent stop [OPTIONS]
 
 ### `highhx voice`
 
-Opens the same session as `highhx`, with voice on: press Enter on an empty line to
-talk and Enter again to stop; the transcript is shown and confirmed before anything
-runs, and outcomes are spoken. Speech-to-text runs locally (whisper.cpp or Vosk with a
-model you installed) — see docs/VOICE.md. On Free, spoken requests are resolved
-deterministically; on Pro, the AI agent handles them.
+Opens the same session as `highhx`, with voice on: speak, press Enter, and the
+transcript runs through the normal HighhX pipeline — the same resolver (Free) or agent
+(Pro), risk checks, approvals, verification and audit as a typed request.
+
+Speech-to-text is whisper.cpp, fully local and free (no account, no cloud). The first
+time, HighhX offers to install whisper.cpp and an audio recorder and to download a
+verified model — see docs/VOICE.md.
+
+highhx voice            the session with voice on
+highhx voice status     what is installed and ready
+highhx voice setup      install / download what is missing
+highhx voice model      show or switch the whisper model
+highhx voice test       record and transcribe a sample (runs nothing)
+
+#### `highhx voice model`
+
+Show the whisper.cpp model voice uses and whether it is downloaded, or switch to NAME
+(tiny.en, base.en — the default — or small.en). A new model is downloaded by
+`highhx voice setup` or the next /voice on.
 
 ```
-highhx voice [OPTIONS]
+highhx voice model [OPTIONS] [NAME]
+```
+
+#### `highhx voice setup`
+
+Install what local voice needs (whisper.cpp and an audio recorder, with Homebrew or the
+system package manager), download and SHA-256-verify the whisper model, and check the
+microphone. Asks before installing or downloading; --yes agrees in advance.
+
+```
+highhx voice setup [OPTIONS]
+```
+
+#### `highhx voice status`
+
+Show whether local voice is ready: whisper.cpp, the model, the recorder, the
+microphone and spoken replies — and the fix for anything missing. Detection only:
+nothing is installed, downloaded or recorded.
+
+```
+highhx voice status [OPTIONS]
+```
+
+#### `highhx voice test`
+
+Check voice end to end: push-to-talk (speak, then Enter), transcribe with whisper.cpp
+and show the transcript and its confidence. Nothing is run. With --file, transcribe a
+WAV file instead of the microphone.
+
+```
+highhx voice test [OPTIONS]
 ```
 
 | Option | Description |
 |---|---|
-| `--check` | Only report which voice engines are available here. |
+| `--file` | Transcribe this 16 kHz WAV file instead of the microphone. |
 
 ## Automation (no AI)
 

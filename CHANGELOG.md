@@ -6,6 +6,64 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-28
+
+Local voice with whisper.cpp, and a fix for `/voice` commands being treated as speech.
+
+### Fixed
+
+- **`/voice status` (and any line typed while recording) could reach the resolver and show
+  the HighhX Pro screen.** `/voice on` started a recording at once; the next line typed —
+  e.g. `/voice status` — only ended that recording, and the room noise it captured was
+  transcribed and sent on as a request. Now `/voice` / `/voice on` only turn voice on (push-to-talk
+  starts with Enter on an empty line), and a line typed during a recording discards the audio
+  untranscribed and is handled as typed. `/voice`, `/voice on`, `/voice off`, `/voice status`,
+  `/voice setup` and `/voice test` are session commands that never reach the resolver, the AI
+  agent or the capability gate.
+- `/voice` with no argument always turns voice on (it used to toggle).
+- Model downloads work on Python builds without a CA store (python.org's macOS installer):
+  the operating system's CA bundle is used; TLS verification stays on.
+
+### Added
+
+- **whisper.cpp as the only speech-to-text engine** — local, free, no account, no Pro.
+  First use of `/voice on` offers to install whisper.cpp and an audio recorder (Homebrew on
+  macOS; the system package manager and a pinned whisper.cpp v1.9.4 source build on Linux)
+  and to download the `base.en` model with a progress bar and SHA-256 verification into the
+  user data directory. What setup finds is remembered in `voice.json`; nothing is reinstalled
+  or re-downloaded.
+- **`highhx voice status | setup | model | test [--file WAV]`** and **`/voice status | setup
+  | test`**: readiness (speech-to-text, model, microphone, recorder, replies, push-to-talk),
+  setup that asks before installing, model switching (`tiny.en`, `base.en`, `small.en`) and
+  a transcription test that runs nothing. `highhx voice …` typed inside the session runs the
+  matching `/voice` command.
+- Microphone handling: denied access (macOS delivers digital silence) is reported with the
+  System Settings path and a retry; recordings stop after 60 s.
+- Transcripts whisper.cpp is unsure of (mean token probability below 60 %) are shown for
+  confirmation before anything runs; `"confirm": "always"` in `voice.json` confirms every one.
+- Voice regression tests with a fake microphone, whisper.cpp, package manager and model
+  server (`tests/unit/voice/`), and prerecorded-speech integration tests against the real
+  whisper.cpp (`tests/integration/test_voice_whisper.py`, skipped where it is not installed).
+
+### Changed
+
+- The safety pipeline is unchanged: a transcript is handed to the same `handle()` as typed
+  text — resolver or agent, action plan, risk, approval, executor, verification, audit. Voice
+  adds only the `voice.heard` event (transcript and confidence) and a spoken reply to spoken
+  requests (typed requests are no longer spoken).
+- The `run python hello.py; rm -rf ~` eval now expects what the resolver has always done —
+  refuse it and point to `!command`, where the destructive part is critical and cannot be
+  approved — with a test pinning that guardrail.
+
+### Removed
+
+- Vosk support and the `HIGHHX_VOICE_STT` / `HIGHHX_VOSK_MODEL` variables.
+
+### Known limitations
+
+- The default `base.en` model is English-only: non-English names (e.g. Telugu song titles)
+  may be misheard. Voice input is not supported on Windows or WSL yet.
+
 ## [0.6.0] - 2026-09-28
 
 HighhX Free becomes deterministic computer automation: natural language → deterministic

@@ -75,7 +75,7 @@ cases:
   - {request: create a file called ../escape.py, route: unknown, reason: inside the project}
   - {request: run ls -la, route: unknown, reason: "!command"}
   - {request: run python missing.py, route: unknown, reason: no file}
-  - {request: "run python hello.py; rm -rf ~", route: pro}
+  - {request: "run python hello.py; rm -rf ~", route: unknown, reason: "!command"}  # never run locally; the !command path blocks it
   - {request: open main.py, route: unknown, reason: no file or folder}
   - {request: open spotifyy, route: unknown, reason: "'spotifyy'"}
   - {request: open safari and play lofi, route: unknown, reason: HighhX browser}

@@ -43,7 +43,7 @@ def test_real_terminal_actions_plan_approve_and_tools(tmp_path: Path) -> None:
     assert "filesystem.read" in text and "/approve runs exactly this plan" in text
     assert "✓ filesystem.read" in text
     assert "git.push" in text and "high" in text
-    assert "Speech-to-text" in text or "speech-to-text" in text.lower()
+    assert "HighhX Voice" in text and "whisper.cpp" in text  # /voice status: detection only
     assert "filesystem.read — README.md" in text  # /history: the session's timeline
     assert "Bye." in text
 

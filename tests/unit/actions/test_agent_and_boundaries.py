@@ -185,40 +185,11 @@ def test_broken_plugins_do_not_break_the_catalog(agent_project: Path, make_app, 
 
 
 # -------------------------------------------------------------------- voice
-class FakeRecorder:
-    name = "fake-mic"
-
-    def record(self, path: Path, stop: Any) -> None:
-        stop.wait(5)
-        path.write_bytes(b"RIFF" + b"\0" * 100)
-
-
-class FakeTranscriber:
-    name = "fake-stt"
-
-    def __init__(self, *texts: str) -> None:
-        self.texts = list(texts)
-
-    def transcribe(self, path: Path) -> str:
-        assert path.exists()
-        return self.texts.pop(0)
-
-
-class FakeSpeaker:
-    name = "fake-tts"
-
-    def __init__(self) -> None:
-        self.said: list[str] = []
-
-    def say(self, text: str) -> None:
-        self.said.append(text)
-
-    def stop(self) -> None:
-        return None
+from tests.unit.voice.fakes import FakeRecorder, FakeSpeaker, FakeTranscriber, Machine, machine  # noqa: E402, F401
 
 
 def voice_repl(
-    app: Any, *lines: str, heard: tuple[str, ...] = (), listen: bool = True
+    app: Any, *lines: str, heard: tuple[Any, ...] = (), manager: Any = None
 ) -> tuple[AgentREPL, Any, FakeSpeaker]:
     from highhx.voice.engines import VoiceEngines
     from highhx.voice.mode import VoiceMode
@@ -226,68 +197,72 @@ def voice_repl(
     script = Script(*lines)
     ui, buffer = make_ui(script)
     speaker = FakeSpeaker()
-    engines = VoiceEngines(
-        recorder=FakeRecorder() if listen else None,
-        transcriber=FakeTranscriber(*heard) if listen else None,
-        speaker=speaker,
-    )
-    repl = AgentREPL(
-        None, ui, None, app=app, read_line=script, voice=True, voice_mode=VoiceMode(ui, app.ctx.events, engines=engines)
-    )
+    engines = VoiceEngines(recorder=FakeRecorder(), transcriber=FakeTranscriber(*heard), speaker=speaker)
+    mode = VoiceMode(ui, app.ctx.events, engines=None if manager else engines, manager=manager)
+    repl = AgentREPL(None, ui, None, app=app, read_line=script, voice=True, voice_mode=mode)
     return repl, buffer, speaker
 
 
-def test_voice_feeds_the_same_pipeline(agent_project: Path, make_app, capsys) -> None:
+def test_voice_feeds_the_same_pipeline(agent_project: Path, make_app) -> None:
     app = make_app(agent_project)
-    # Enter (talk) → Enter (stop) → confirm → handled like typed text → spoken outcome
-    repl, buffer, speaker = voice_repl(app, "", "", "y", "/quit", heard=("run the tests",))
+    # voice on → listening → Enter (stop) → ✓ transcript → handled like typed text → spoken outcome
+    repl, buffer, speaker = voice_repl(app, "", "", "/quit", heard=("run the tests",))
     repl.run()
     out = buffer.getvalue()
-    assert "🎙 Voice on" in out and "Heard:" in out and "run the tests" in out
+    assert "🎙 Voice on" in out and "🎙 Listening..." in out and "✓ “run the tests”" in out
     assert "◉ run the tests  project.test · low" in out
     assert speaker.said == ["run the tests: done."]
 
 
-def test_voice_transcripts_must_be_confirmed(agent_project: Path, make_app) -> None:
+def test_doubtful_transcripts_must_be_confirmed(agent_project: Path, make_app) -> None:
+    from highhx.voice.engines import Transcript
+
     app = make_app(agent_project)
-    repl, buffer, speaker = voice_repl(app, "", "", "n", "/quit", heard=("delete everything",))
+    repl, buffer, speaker = voice_repl(app, "", "", "n", "/quit", heard=(Transcript("delete everything", 0.31),))
     repl.run()
-    assert "Not run." in buffer.getvalue() and "◉" not in buffer.getvalue() and speaker.said == []
+    out = buffer.getvalue()
+    assert "Heard:" in out and "confidence 31%" in out
+    assert "Not run." in out and "◉ delete" not in out and speaker.said == []
 
 
 def test_voice_edit_corrects_the_transcript(agent_project: Path, make_app) -> None:
+    from highhx.voice.engines import Transcript
+
     app = make_app(agent_project)
-    repl, buffer, _ = voice_repl(app, "", "", "e", "show git status", "/quit", heard=("so get stay tus",))
+    repl, buffer, _ = voice_repl(
+        app, "", "", "e", "show git status", "/quit", heard=(Transcript("so get stay tus", 0.2),)
+    )
     repl.run()
     assert "◉ git status" in buffer.getvalue()
 
 
 def test_voice_on_free_speaks_the_pro_boundary(agent_project: Path, make_app, tripwires: list[str]) -> None:  # noqa: F811
     app = make_app(agent_project)
-    repl, buffer, speaker = voice_repl(app, "", "", "y", "", "/quit", heard=("fix the failing tests",))
+    repl, buffer, speaker = voice_repl(app, "", "", "/quit", heard=("fix the failing tests",))
     repl.run()
     assert "HighhX Pro capability" in buffer.getvalue()
     assert speaker.said == ["AI debugging requires HighhX Pro."]
     assert tripwires == []  # voice on Free touches no AI
 
 
-def test_voice_without_speech_to_text_is_honest(agent_project: Path, make_app) -> None:
+def test_typed_requests_are_not_spoken(agent_project: Path, make_app) -> None:
     app = make_app(agent_project)
-    repl, buffer, speaker = voice_repl(app, "run the tests", "/voice status", "/voice mute", "/quit", listen=False)
+    repl, buffer, speaker = voice_repl(app, "", "", "show git status", "/quit", heard=("run the tests",))
+    repl.run()
+    assert "◉ git status" in buffer.getvalue()
+    assert speaker.said == ["run the tests: done."]  # only the spoken request gets a spoken reply
+
+
+def test_voice_unavailable_is_honest_and_keeps_the_session(agent_project: Path, make_app, machine: Machine) -> None:  # noqa: F811
+    app = make_app(agent_project)
+    machine.programs.pop("whisper-cli")
+    (machine.bin / "whisper-cli").unlink()
+    repl, buffer, speaker = voice_repl(app, "n", "run the tests", "/quit", manager=machine.manager())
     repl.run()
     out = buffer.getvalue()
-    assert "Listening is off" in out and "fake-tts" in out
-    assert speaker.said == ["run the tests: done."]
-
-
-def test_voice_unavailable(agent_project: Path, make_app) -> None:
-    from highhx.voice.engines import VoiceEngines
-    from highhx.voice.mode import VoiceMode
-
-    app = make_app(agent_project)
-    ui, buffer = make_ui(Script())
-    mode = VoiceMode(ui, app.ctx.events, engines=VoiceEngines(notes=["no recorder found"]))
-    assert mode.enable() is False and "Voice is not available" in buffer.getvalue()
+    assert "Whisper.cpp is not installed." in out and "Voice setup skipped" in out
+    assert "Voice input is not ready" in out and "🎙 Voice on" not in out
+    assert "◉ run the tests" in out and speaker.said == [] and machine.ran == []
 
 
 def test_spoken_form() -> None:
@@ -300,7 +275,8 @@ def test_spoken_form() -> None:
 
 def test_voice_check_command(cli, tmp_path: Path) -> None:
     data = cli("voice", "--check", "--json", cwd=tmp_path).json()
-    assert set(data) >= {"recorder", "speech-to-text", "speech", "can_listen", "can_speak", "notes"}
+    assert set(data) >= {"ready", "stt", "model", "recorder", "microphone", "replies", "mode", "missing"}
+    assert data["stt"] == "whisper.cpp"
 
 
 # ------------------------------------------------------------ Free boundary

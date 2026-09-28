@@ -467,6 +467,11 @@ class TerminalUI:
         except EOFError:
             return ""
 
+    def read_line(self, prompt: str) -> str:
+        """One line of input (EOFError and KeyboardInterrupt propagate to the caller)."""
+        self._pause()
+        return self._read_line(prompt)
+
     def _render_details(self, details: Sequence[str]) -> None:
         for detail in details:
             if detail.startswith(("--- ", "+++ ", "@@")) or "\n@@ " in detail:
