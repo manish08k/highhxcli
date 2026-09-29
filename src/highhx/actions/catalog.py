@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterator
 from functools import cache
 from typing import TYPE_CHECKING, Any
 
-from highhx.actions.handlers import computer, files, native
+from highhx.actions.handlers import computer, desktop, files, native
 from highhx.actions.handlers.delegate import delegate, flag, listed, opt
 from highhx.actions.policy import Risk
 from highhx.actions.spec import (
@@ -28,6 +28,7 @@ from highhx.actions.spec import (
 from highhx.cloud.plans import AGENT_CODE_CHANGES, AGENT_COMMANDS, AGENT_COMPUTER_USE, AGENT_DEPLOY, AGENT_GIT
 from highhx.core.errors import HighhXError
 from highhx.execution.retry import RetryPolicy
+from highhx.project.index import KINDS as FILE_KINDS
 from highhx.safety.actions import ActionKind
 from highhx.utils.validation import Bool, Int, List, Map, Num, Obj, Prop, Str
 
@@ -41,6 +42,9 @@ READ_RETRY = RetryPolicy(attempts=3, delay=0.5, backoff=2.0, max_delay=5.0)
 
 EXIT = {"command": "the HighhX command that ran", "exit_code": "its exit code"}
 NO_INPUT = Obj({})
+COORD = Int(minimum=-100_000, maximum=100_000)
+"""A desktop coordinate in points (negative on displays left of / above the main one)."""
+BACKGROUND_APP = Prop(Str(min_length=1), description="Deliver to this application in the background (best effort).")
 SERVICES_INPUT = Obj({"services": Prop(List(Str(min_length=1)), description="Service names (default: all).")})
 
 
@@ -355,6 +359,28 @@ def _specs() -> list[ActionSpec]:
             compensate=computer.undo_create,
             feature=AGENT_CODE_CHANGES,
             target=lambda i: str(i.get("path", "")),
+        ),
+        ActionSpec(
+            "filesystem.find",
+            "Find project files by kind (pdf, image, document …), name keywords and modification time "
+            "(names and dates only — contents are never read; secret files are skipped).",
+            files.find,
+            Obj(
+                {
+                    "kinds": Prop(List(Str(choices=tuple(FILE_KINDS)))),
+                    "keywords": Prop(List(Str(min_length=1))),
+                    "modified_after": Prop(Str(min_length=1), description="ISO date/time (inclusive)."),
+                    "modified_before": Prop(Str(min_length=1), description="ISO date/time (exclusive)."),
+                    "sort": Prop(Str(choices=("newest", "oldest", "name"))),
+                    "limit": Prop(Int(minimum=1, maximum=200)),
+                    "path": Prop(Str(min_length=1), description="Only inside this project folder."),
+                }
+            ),
+            {"files": "[{path, name, kind, size, modified}]", "partial": "the project was too large to index fully"},
+            permissions=(READ_PROJECT,),
+            idempotent=True,
+            retry=READ_RETRY,
+            timeout=60,
         ),
         ActionSpec(
             "filesystem.search",
@@ -1057,7 +1083,7 @@ def _specs() -> list[ActionSpec]:
         ActionSpec(
             "computer.focus",
             "Bring an application to the front.",
-            computer.computer_focus,
+            desktop.focus,
             Obj({"app": Prop(Str(min_length=1), required=True)}),
             {"app": "focused application"},
             Risk.LOW,
@@ -1069,9 +1095,9 @@ def _specs() -> list[ActionSpec]:
         ),
         ActionSpec(
             "computer.type",
-            "Type text into the frontmost application (never into a terminal — use !command).",
-            computer.computer_type,
-            Obj({"text": Prop(Str(min_length=1), required=True)}),
+            "Type text into the frontmost application — or into `app` in the background (never into a terminal — use !command).",
+            desktop.type_text,
+            Obj({"text": Prop(Str(min_length=1), required=True), "app": BACKGROUND_APP}),
             {"app": "where it was typed", "characters": "how many"},
             Risk.MEDIUM,
             ActionKind.UI_TYPE,
@@ -1083,8 +1109,8 @@ def _specs() -> list[ActionSpec]:
         ActionSpec(
             "computer.press",
             "Press a key in the frontmost application (Enter and Delete ask first; never in a terminal).",
-            computer.computer_press,
-            Obj({"key": Prop(Str(min_length=1), required=True)}),
+            desktop.press,
+            Obj({"key": Prop(Str(min_length=1), required=True), "app": BACKGROUND_APP}),
             {"app": "where", "key": "which key"},
             Risk.LOW,
             ActionKind.UI_KEY,
@@ -1099,8 +1125,8 @@ def _specs() -> list[ActionSpec]:
         ActionSpec(
             "computer.hotkey",
             "Press a key combination in the frontmost application, e.g. cmd+t (never in a terminal).",
-            computer.computer_hotkey,
-            Obj({"keys": Prop(Str(min_length=1), required=True)}),
+            desktop.hotkey,
+            Obj({"keys": Prop(Str(min_length=1), required=True), "app": BACKGROUND_APP}),
             {"app": "where", "keys": "the combination"},
             Risk.MEDIUM,
             ActionKind.UI_KEY,
@@ -1112,7 +1138,7 @@ def _specs() -> list[ActionSpec]:
         ActionSpec(
             "computer.click",
             'Click a control in the frontmost application by role and name, e.g. "button:Save".',
-            computer.computer_click,
+            desktop.click,
             Obj({"target": Prop(Str(min_length=1), required=True), "timeout": Prop(Num(minimum=0))}),
             {"step": "outcome"},
             Risk.LOW,
@@ -1125,8 +1151,16 @@ def _specs() -> list[ActionSpec]:
         ActionSpec(
             "computer.scroll",
             "Scroll the HighhX browser page (default) or the frontmost application.",
-            computer.computer_scroll,
-            Obj({"direction": Prop(Str(choices=("up", "down"))), "source": Prop(Str(choices=("browser", "desktop")))}),
+            desktop.scroll,
+            Obj(
+                {
+                    "direction": Prop(Str(choices=("up", "down", "left", "right"))),
+                    "source": Prop(Str(choices=("browser", "desktop"))),
+                    "amount": Prop(Int(minimum=1, maximum=20)),
+                    "x": Prop(COORD, description="Desktop: scroll at this point (with y)."),
+                    "y": Prop(COORD),
+                }
+            ),
             {"step": "outcome"},
             Risk.SAFE,
             ActionKind.UI_SCROLL,
@@ -1146,6 +1180,225 @@ def _specs() -> list[ActionSpec]:
             timeout=120,
             agent=False,
             target=lambda i: str(i.get("name", "")),
+        ),
+        # ------------------------------------------- the HighhX Computer Runtime (desktop)
+        ActionSpec(
+            "computer.observe",
+            "Observe the desktop: the frontmost application and window, all windows, the accessibility "
+            "tree (roles, names, states, bounds; secret fields are never read) and, when asked, a screenshot.",
+            desktop.observe,
+            Obj({"app": Prop(Str(min_length=1)), "tree": Prop(Bool()), "screenshot": Prop(Bool())}),
+            {"app": "frontmost application", "windows": "[…]", "elements": "[…]", "screenshot": "{path …}"},
+            Risk.LOW,
+            ActionKind.READ,
+            (DESKTOP,),
+            idempotent=True,
+            timeout=60,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+        ),
+        ActionSpec(
+            "computer.screenshot",
+            "Capture the screen (or one window by id) to a PNG in HighhX's screenshots folder.",
+            desktop.screenshot,
+            Obj({"window": Prop(Int(minimum=0))}),
+            {"path": "the PNG", "width": "pixels", "height": "pixels", "scale": "pixels per point"},
+            Risk.LOW,
+            ActionKind.READ,
+            (DESKTOP,),
+            idempotent=True,
+            timeout=30,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+        ),
+        ActionSpec(
+            "computer.windows",
+            "List on-screen windows front to back (id, application, title, bounds) and the frontmost one.",
+            desktop.windows,
+            Obj({"app": Prop(Str(min_length=1))}),
+            {"frontmost": "application", "windows": "[{id, pid, app, title, x, y, width, height}]"},
+            Risk.LOW,
+            ActionKind.READ,
+            (DESKTOP,),
+            idempotent=True,
+            timeout=30,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+        ),
+        ActionSpec(
+            "computer.apps",
+            "List running applications with a user interface.",
+            desktop.apps,
+            NO_INPUT,
+            {"apps": "[{name, pid, bundle_id, frontmost}]"},
+            Risk.LOW,
+            ActionKind.READ,
+            (DESKTOP,),
+            idempotent=True,
+            timeout=30,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+        ),
+        ActionSpec(
+            "computer.element_at",
+            "The accessibility element at a desktop point (application, role, name, bounds).",
+            desktop.element_at,
+            Obj({"x": Prop(COORD, required=True), "y": Prop(COORD, required=True)}),
+            {"role": "role", "name": "accessible name", "bounds": "[x, y, width, height]"},
+            Risk.LOW,
+            ActionKind.READ,
+            (DESKTOP,),
+            idempotent=True,
+            timeout=30,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+        ),
+        ActionSpec(
+            "computer.click_at",
+            "Click at a desktop point — or on the text named by `text`, found by perception (accessibility "
+            "first, OCR as the fallback). Right/middle button, double or triple click; with `background`, "
+            "deliver it to `app` without bringing it to the front (best effort).",
+            desktop.click_at,
+            Obj(
+                {
+                    "x": Prop(COORD),
+                    "y": Prop(COORD),
+                    "text": Prop(Str(min_length=1, check=lambda v: "at most 200 characters" if len(v) > 200 else None)),
+                    "button": Prop(Str(choices=("left", "right", "middle"))),
+                    "count": Prop(Int(minimum=1, maximum=3)),
+                    "app": Prop(Str(min_length=1)),
+                    "background": Prop(Bool()),
+                }
+            ),
+            {"element": "what was under the pointer", "grounded": "how `text` was found"},
+            Risk.MEDIUM,
+            ActionKind.UI_CLICK,
+            (DESKTOP,),
+            timeout=60,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+            target=lambda i: str(i.get("text") or f"({i.get('x')}, {i.get('y')})"),
+        ),
+        ActionSpec(
+            "computer.move",
+            "Move the pointer to a desktop point (hover), and verify it is there.",
+            desktop.move,
+            Obj({"x": Prop(COORD, required=True), "y": Prop(COORD, required=True)}),
+            {"cursor": "[x, y] after the move"},
+            Risk.LOW,
+            ActionKind.UI_CLICK,
+            (DESKTOP,),
+            timeout=30,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+            target=lambda i: f"({i.get('x')}, {i.get('y')})",
+        ),
+        ActionSpec(
+            "computer.drag",
+            "Press at one desktop point, move to another and release.",
+            desktop.drag,
+            Obj(
+                {
+                    "from_x": Prop(COORD, required=True),
+                    "from_y": Prop(COORD, required=True),
+                    "to_x": Prop(COORD, required=True),
+                    "to_y": Prop(COORD, required=True),
+                    "button": Prop(Str(choices=("left", "right", "middle"))),
+                    "duration_ms": Prop(Int(minimum=0, maximum=5000)),
+                }
+            ),
+            {"from": "[x, y]", "to": "[x, y]"},
+            Risk.MEDIUM,
+            ActionKind.UI_CLICK,
+            (DESKTOP,),
+            timeout=60,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+            target=lambda i: f"({i.get('from_x')}, {i.get('from_y')}) → ({i.get('to_x')}, {i.get('to_y')})",
+        ),
+        ActionSpec(
+            "computer.menu",
+            'Choose an application menu item by its path, e.g. "File > Save" (never in a terminal).',
+            desktop.menu,
+            Obj(
+                {
+                    "app": Prop(Str(min_length=1), required=True),
+                    "path": Prop(Str(min_length=1), required=True, description='"File > Save"'),
+                }
+            ),
+            {"app": "application", "path": "the items chosen"},
+            Risk.MEDIUM,
+            ActionKind.UI_CLICK,
+            (DESKTOP,),
+            timeout=60,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+            target=lambda i: f"{i.get('app')}: {i.get('path')}",
+        ),
+        ActionSpec(
+            "computer.window",
+            "Move and resize a window (by id, or an application's frontmost window), and verify its new frame.",
+            desktop.window_frame,
+            Obj(
+                {
+                    "window": Prop(Int(minimum=0)),
+                    "app": Prop(Str(min_length=1)),
+                    "x": Prop(COORD, required=True),
+                    "y": Prop(COORD, required=True),
+                    "width": Prop(Int(minimum=1, maximum=100_000), required=True),
+                    "height": Prop(Int(minimum=1, maximum=100_000), required=True),
+                }
+            ),
+            {"frame": "[x, y, width, height] after the change"},
+            Risk.LOW,
+            ActionKind.UI_SELECT,
+            (DESKTOP,),
+            timeout=30,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+            target=lambda i: str(i.get("app") or i.get("window") or ""),
+        ),
+        ActionSpec(
+            "computer.quit",
+            "Ask an application to quit (it may ask to save first), and verify it did.",
+            desktop.quit_app,
+            Obj({"app": Prop(Str(min_length=1), required=True)}),
+            {"app": "application", "quit": "whether it quit"},
+            Risk.MEDIUM,
+            ActionKind.APP_LAUNCH,
+            (DESKTOP,),
+            timeout=60,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+            target=lambda i: str(i.get("app", "")),
+        ),
+        ActionSpec(
+            "computer.clipboard_read",
+            "Read the clipboard's plain text (it may hold private data: always asked for the agent).",
+            desktop.clipboard_read,
+            NO_INPUT,
+            {"text": "the clipboard text", "characters": "its length"},
+            Risk.MEDIUM,
+            ActionKind.READ,
+            (DESKTOP,),
+            idempotent=True,
+            timeout=30,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+        ),
+        ActionSpec(
+            "computer.clipboard_write",
+            "Replace the clipboard with plain text, and verify it by reading it back.",
+            desktop.clipboard_write,
+            Obj({"text": Prop(Str(min_length=1), required=True)}),
+            {"characters": "how many"},
+            Risk.MEDIUM,
+            ActionKind.UI_TYPE,
+            (DESKTOP,),
+            timeout=30,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+            target=lambda i: f"{len(str(i.get('text', '')))} character(s)",
         ),
         # ------------------------------------------------------------ deployment
         ActionSpec(

@@ -20,7 +20,7 @@ import pytest
 from highhx.agent.tools.computer import ComputerActTool, ComputerObserveTool
 from highhx.computer.desktop import MacAccessibility, TesseractOCR
 from highhx.computer.session import ComputerSession
-from highhx.core.errors import IntegrationError, OperationCancelledError, ToolNotFoundError, UsageError
+from highhx.core.errors import IntegrationError, OperationCancelledError, ToolNotFoundError
 from highhx.execution.cancellation import CancellationToken
 from highhx.safety.actions import Actor
 
@@ -108,14 +108,26 @@ def test_agent_screen_observation_is_read_only_text(fake_bin: Path) -> None:
 
 
 @pytest.mark.parametrize("platform", ["linux", "win32"])
-def test_native_desktop_automation_is_refused_where_not_implemented(
+def test_desktop_automation_is_available_everywhere_and_honest_about_prerequisites(
     platform: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from highhx.automation.engine import bridge as bridge_module
+    from highhx.automation.engine.platforms import backend_for
+    from highhx.automation.engine.protocol import FEATURES
+
+    monkeypatch.setattr(bridge_module, "engine_binary", lambda: None)
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    ran: list[list[str]] = []
+    backend = backend_for(lambda argv, what: (ran.append(argv), (1, "", "not run"))[1], platform=platform)
+    features = backend.op_capabilities()["features"]  # every platform says what it can do, and why not
+    assert set(features) == set(FEATURES) and all(f["detail"] for f in features.values())
     monkeypatch.setattr(sys, "platform", platform)
-    capability = MacAccessibility().capability()
-    assert not capability.available and "not implemented" in capability.detail
-    session = ComputerSession(SimpleNamespace(), actor=Actor.USER)  # type: ignore[arg-type]
-    with pytest.raises(UsageError, match="only implemented on macOS"):
-        session.provider("desktop")
+    capability = MacAccessibility().capability()  # the macOS provider stays macOS-only
+    assert not capability.available and "only on macOS" in capability.detail
     with pytest.raises(IntegrationError, match="only available on macOS"):
         MacAccessibility()._osascript("function run() {}")
+    engine = type("Engine", (), {"run": lambda *a, **k: None})()
+    session = ComputerSession(SimpleNamespace(engine=engine), actor=Actor.USER)  # type: ignore[arg-type]
+    assert session.provider("desktop").name == "accessibility"  # no longer refused here
+    session.close()

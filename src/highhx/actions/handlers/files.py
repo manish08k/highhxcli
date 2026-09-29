@@ -243,6 +243,40 @@ def project_files(ctx: ActionContext, base: Path, glob: str = "*") -> list[Path]
     return sorted(p for p in base.rglob(glob) if not (set(p.relative_to(root).parts) & SKIP_DIRS))
 
 
+def find(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """Project files by kind, name keywords and modification time — metadata only, never contents
+    (the same index the resolver uses: no secret files, no dependency folders, no HighhX state)."""
+    from datetime import datetime
+
+    from highhx.project.index import FileQuery, ProjectFileIndex
+
+    base = _confine(ctx, str(inputs.get("path") or "."), must_exist=True)
+
+    def epoch(key: str) -> float | None:
+        raw = inputs.get(key)
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(str(raw)).timestamp()
+        except ValueError:
+            raise ToolError(f"{key} must be an ISO date/time, got {raw!r}") from None
+
+    query = FileQuery(
+        kinds=tuple(str(k) for k in inputs.get("kinds") or ()),
+        keywords=tuple(str(k) for k in inputs.get("keywords") or ()),
+        modified_after=epoch("modified_after"),
+        modified_before=epoch("modified_before"),
+        sort=str(inputs.get("sort") or "newest"),
+        under=_rel(ctx, base),
+        limit=int(inputs.get("limit") or 20),
+    )
+    index = ProjectFileIndex(ctx.app.root)
+    files = [f.to_dict() for f in index.find(query)]
+    shown = ", ".join(f["path"] for f in files[:5]) + (f", … ({len(files) - 5} more)" if len(files) > 5 else "")
+    summary = f"{len(files)} file(s): {shown}" if files else "no matching files"
+    return ActionResult(True, output={"files": files, "partial": index.partial}, summary=summary)
+
+
 def search(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     base = _confine(ctx, str(inputs.get("path") or "."), must_exist=True)
     flags = re.IGNORECASE if inputs.get("ignore_case") else 0

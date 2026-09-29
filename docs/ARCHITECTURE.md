@@ -7,13 +7,16 @@ rules are enforced. Product-level behaviour is specified in [PRODUCT_SPEC.md](PR
 interfaces           highhx (session) · highhx "request" · highhx <command> · workflows · voice · the Pro agent
     ↓
 language/            parser (normalise, clauses) · grammar (verb registry) · entities · targets (YAML registry)
+                     · constraints · references (conversation memory) · understand → HXIR (see UNDERSTANDING.md)
 decision/            deterministic: request → Decision (route, intent, target, entities, plan) · risk classes
                      advanced: the Pro-only gate for JEv / advanced reasoning
 plans/               JSON action plan (schema v1, validation) · planner · runner (verify, stop on failure)
     ↓
-actions/             resolver (developer rules) · catalog (85 actions) · policy (risk, approval)
+actions/             resolver (developer rules) · catalog (99 actions) · policy (risk, approval)
                      · executor (validate → classify → approve → run → verify → record) · graphs
-    ↓                ├─ automation/engine/  bridge protocol → C#/.NET engine (engine/dotnet) or Python engine
+    ↓                ├─ computer/driver     HighhXDriver — the Computer API (see COMPUTER_RUNTIME.md)
+                     ├─ automation/engine/  bridge protocol v2 → C#/.NET engine (engine/dotnet) or the built-in
+                     │                      engine's platform backends (macOS · Windows · Linux)
                      ├─ computer/           HighhX browser (DevTools) · computer runtime (element safety)
                      └─ verification/       strategies: page_open, media_playing, file_exists …
     ↓
@@ -67,11 +70,14 @@ execute: ActionGate.authorize (classifier + catalog floor + policy + approval, t
 | `actions/context.py` | Structured project context (names only, never secret values) |
 | `actions/events.py` | Event names, the JSON Lines event log |
 | `language/` | Parser, verb grammar, entity extraction, target registry (`data/targets.yaml` + the user's `targets.yaml`) |
+| `language/understand.py`, `language/hxir.py`, `language/references.py`, `language/constraints.py` | What a request means as validated data (HXIR): references, constraints, ambiguity — see [UNDERSTANDING.md](UNDERSTANDING.md) |
+| `project/index.py` | The project's files as entities (names and dates only, lazily indexed, secrets skipped) |
 | `decision/deterministic.py`, `decision/risk.py` | Free: the deterministic decision (route local · unknown · pro), risk classes |
 | `decision/advanced.py` | The Pro-only gate for JEv / advanced decision-model reasoning (today fulfilled by the Pro agent) |
 | `plans/schema.py`, `plans/planner.py`, `plans/runner.py`, `plans/request.py` | JSON action plans: schema and validation, building, verified execution, one-shot requests |
 | `verification/strategies.py` | Named post-conditions for plan steps |
-| `automation/engine/` | The automation bridge: protocol v1, engine selection, Python engine, .NET engine client, a desktop provider for the computer runtime |
+| `automation/engine/` | The automation bridge: protocol v2 (the computer-operations contract), engine selection and version negotiation, the built-in engine and its platform backends (`platforms/`: macOS, Windows, Linux), the .NET engine client, the desktop provider for the computer runtime |
+| `computer/driver.py`, `computer/perception/` | `HighhXDriver`, the HighhX Computer API (observation, input, windows, sessions); optional grounding of text to a point — see [COMPUTER_RUNTIME.md](COMPUTER_RUNTIME.md) |
 | `engine/dotnet/` | The C#/.NET automation engine (`highhx-automation`) |
 | `observability/runs.py` | Automation run traces and metrics (`highhx runs`) |
 | `agent/router.py` | Free routing: the deterministic plan, or the Pro capability with local alternatives |

@@ -136,8 +136,9 @@ _NEW_TAB = re.compile(r"(?:a\s+)?new\s+tab(?:\s+(?:with|at|to|for|on)\s+(?P<wher
 # ---------------------------------------------------------------------- verbs
 @verb(
     "open",
-    ("open", "launch", "go", "visit", "navigate", "browse", "load", "start"),
-    r"(?:open|launch|go\s+to|visit|navigate\s+to|browse\s+to|load|start)\s+(?:up\s+)?(?P<target>.+)",
+    ("open", "launch", "go", "visit", "navigate", "browse", "load", "start", "take", "head"),
+    r"(?:open|launch|go\s+(?:back\s+)?to|take\s+me\s+(?:back\s+)?to|head\s+(?:back\s+)?to|visit|navigate\s+to|browse\s+to|load|start)"
+    r"\s+(?:up\s+)?(?P<target>.+)",
 )
 def _open(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step] | Unknown | None:
     registry = _registry(ctx)
@@ -393,7 +394,7 @@ def _refresh(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[S
     return [_step("browser.refresh", {}, "reload the page")]
 
 
-@verb("close tab", ("close",), r"close\s+(?:the\s+|this\s+|current\s+)*tab")
+@verb("close tab", ("close",), r"close\s+(?:the\s+|this\s+|that\s+|current\s+)*tab")
 def _close_tab(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step]:
     return [_step("browser.close_tab", {}, "close the tab")]
 

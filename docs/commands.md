@@ -217,6 +217,14 @@ Targets are selectors: `Search`, `button:Search`, `textbox="Email"`, `link:Docs#
 |---|---|
 | `--headless` | Run the HighhX browser without a window (default: visible). |
 
+#### `highhx computer at`
+
+What is at X,Y — application, role, name and bounds (read-only).
+
+```
+highhx computer at [OPTIONS] X,Y
+```
+
 #### `highhx computer browser`
 
 The HighhX browser uses its own profile (never your personal one) and a DevTools
@@ -240,15 +248,62 @@ highhx computer browser stop [OPTIONS]
 
 #### `highhx computer click`
 
-Click the control SELECTOR (e.g. `button:Search`). Sensitive controls ask first.
+Click the control SELECTOR (e.g. `button:Search`) — or, on the desktop, at a point
+(`--at 640,400`) or on text found on screen (`--text Save`). Sensitive controls, and every
+click at a point, ask first.
 
 ```
-highhx computer click [OPTIONS] SELECTOR
+highhx computer click [OPTIONS] [SELECTOR]
 ```
 
 | Option | Description |
 |---|---|
+| `--at` | Desktop: click at this point (desktop points). |
+| `--text` | Desktop: click this text on screen (accessibility, then OCR). |
+| `--right` | With --at/--text: the right button. |
+| `--double` | With --at/--text: a double click. |
 | `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+
+#### `highhx computer clipboard`
+
+Print the clipboard's text, or replace it with --set TEXT (read back to check). Asks first:
+the clipboard often holds private data.
+
+```
+highhx computer clipboard [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--set` | Replace the clipboard with TEXT. |
+
+#### `highhx computer drag`
+
+Press at X1,Y1, move to X2,Y2 and release (asks first).
+
+```
+highhx computer drag [OPTIONS] X1,Y1 X2,Y2
+```
+
+| Option | Description |
+|---|---|
+| `--right` | With the right button. |
+
+#### `highhx computer menu`
+
+Choose PATH (items separated by >) in APP's menu bar.
+
+```
+highhx computer menu [OPTIONS] APP PATH
+```
+
+#### `highhx computer move`
+
+Move the pointer to X,Y (hovering) and check that it arrived.
+
+```
+highhx computer move [OPTIONS] X,Y
+```
 
 #### `highhx computer observe`
 
@@ -284,6 +339,24 @@ highhx computer press [OPTIONS] {enter|tab|escape|backspace|arrowdown|arrowup|pa
 |---|---|
 | `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
 
+#### `highhx computer protocol`
+
+The automation protocol every engine speaks — operations, arguments, the version that
+introduced each, keys, errors — as JSON. It is also checked in as
+schemas/computer-protocol.json (the source for engines written in other languages).
+
+```
+highhx computer protocol [OPTIONS]
+```
+
+#### `highhx computer quit`
+
+Ask APP to quit (it may ask to save first) and check that it did.
+
+```
+highhx computer quit [OPTIONS] APP
+```
+
 #### `highhx computer run`
 
 Run the steps in FLOW_FILE (open, click, type, press, select, scroll, expect,
@@ -298,16 +371,31 @@ highhx computer run [OPTIONS] FLOW_FILE
 |---|---|
 | `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
 
-#### `highhx computer scroll`
+#### `highhx computer screenshot`
 
-Scroll the page or window.
+Save a screenshot in HighhX's screenshots folder and print its path. macOS needs Screen
+Recording permission for your terminal; HighhX says so instead of saving a blank image.
 
 ```
-highhx computer scroll [OPTIONS] {up|down}
+highhx computer screenshot [OPTIONS]
 ```
 
 | Option | Description |
 |---|---|
+| `--window` | Only this window (ids from `computer windows`). |
+
+#### `highhx computer scroll`
+
+Scroll the page or window (the desktop with real wheel events).
+
+```
+highhx computer scroll [OPTIONS] {up|down|left|right}
+```
+
+| Option | Description |
+|---|---|
+| `--at` | Desktop: scroll the mouse wheel at this point. |
+| `--amount` | Desktop: wheel steps. (default: `3`) |
 | `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
 
 #### `highhx computer select`
@@ -330,6 +418,34 @@ Report native accessibility, browser, OCR and vision availability on this machin
 highhx computer status [OPTIONS]
 ```
 
+#### `highhx computer task`
+
+Work toward a goal in the HighhX browser, step by step:
+
+  TASK → PLAN → OBSERVE → ACTION → RESULT → VERIFY → (RECOVERY) → … → FINAL
+
+The request becomes Task IR (validated JSON): on HighhX Free from the deterministic
+resolver, on HighhX Pro — for tasks nobody programmed — from the AI planner, which then
+discovers the site from its accessibility tree. Each action is a generic primitive
+(navigate, click, type, read, …), checked by the safety policy, executed, verified and
+audited; failures are recovered or replanned, never blindly repeated.
+
+  highhx computer task "open YouTube and play lofi"
+  highhx computer task --ir task.json
+  highhx computer task --schema
+
+```
+highhx computer task [OPTIONS] [REQUEST]...
+```
+
+| Option | Description |
+|---|---|
+| `--ir` | Run this Task IR (JSON or YAML) instead of a request. |
+| `--show-ir` | Print the Task IR before running it. |
+| `--schema` | Print the Task IR JSON Schemas and exit. |
+| `--max-steps` | At most this many actions. |
+| `--timeout` | Give up after this many seconds. |
+
 #### `highhx computer type`
 
 Replace the content of the field SELECTOR with TEXT (or $VAR with --from-env).
@@ -342,6 +458,32 @@ highhx computer type [OPTIONS] SELECTOR [TEXT]
 |---|---|
 | `--from-env` | Type the value of this environment variable (never shown or logged). |
 | `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+
+#### `highhx computer window`
+
+Move and resize APP's front window (or --id WINDOW) to --frame, and check the new frame.
+
+```
+highhx computer window [OPTIONS] APP
+```
+
+| Option | Description |
+|---|---|
+| `--id` | The window id (from `computer windows`) instead of APP. |
+| `--frame` | The new frame in desktop points. |
+
+#### `highhx computer windows`
+
+Windows front to back with their ids and bounds (for `click --at`, `window`, `screenshot --window`).
+
+```
+highhx computer windows [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--app` | Only this application's windows. |
+| `--apps` | List running applications instead. |
 
 ## Account
 

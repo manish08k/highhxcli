@@ -1,0 +1,3 @@
+steps:
+  - {tool: computer_act, args: {source: desktop, action: "window:0,25,720,875", app: Notes}}
+  - {tool: computer_act, args: {source: desktop, action: "window:720,25,720,875", app: Finder}}

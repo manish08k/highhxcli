@@ -28,8 +28,9 @@ SOURCE_OPTION = click.option(
 )
 
 
-def computer_session(app: App, *, headless: bool | None = None) -> ComputerSession:
-    """A session whose actions are the user's own (Actor.USER), gated, confirmed and audited."""
+def computer_session(app: App, *, headless: bool | None = None, agent: bool = False) -> ComputerSession:
+    """A session whose actions are the user's own (Actor.USER), gated, confirmed and audited —
+    or, with ``agent``, proposed by the AI planner (Actor.AGENT: the stricter agent rules apply)."""
     from highhx.agent.ui import TerminalUI
     from highhx.computer.session import ComputerSession
     from highhx.safety.actions import Actor
@@ -45,7 +46,8 @@ def computer_session(app: App, *, headless: bool | None = None) -> ComputerSessi
         assume_yes=app.options.yes,
         audit=AuditLog(app.db, app.redactor) if app.db is not None else None,
     )
-    return ComputerSession(gate, actor=Actor.USER, cancel=app.ctx.cancel, headless=headless)
+    actor = Actor.AGENT if agent else Actor.USER
+    return ComputerSession(gate, actor=actor, cancel=app.ctx.cancel, headless=headless)
 
 
 def render_outcome(app: App, outcome: ActionOutcome) -> int:
@@ -240,12 +242,29 @@ def _act(app: App, source: str, verb: str, selector: str | None, text: str | Non
     return render_outcome(app, outcome)
 
 
-@computer.command("click", short_help="Click a control by role/name.")
-@click.argument("selector")
+@computer.command("click", short_help="Click a control by role/name, or a desktop point.")
+@click.argument("selector", required=False)
+@click.option("--at", "point", metavar="X,Y", help="Desktop: click at this point (desktop points).")
+@click.option("--text", metavar="TEXT", help="Desktop: click this text on screen (accessibility, then OCR).")
+@click.option("--right", is_flag=True, help="With --at/--text: the right button.")
+@click.option("--double", is_flag=True, help="With --at/--text: a double click.")
 @SOURCE_OPTION
 @pass_app
-def computer_click(app: App, selector: str, source: str) -> int:
-    """Click the control SELECTOR (e.g. `button:Search`). Sensitive controls ask first."""
+def computer_click(
+    app: App, selector: str | None, point: str | None, text: str | None, right: bool, double: bool, source: str
+) -> int:
+    """Click the control SELECTOR (e.g. `button:Search`) — or, on the desktop, at a point
+    (`--at 640,400`) or on text found on screen (`--text Save`). Sensitive controls, and every
+    click at a point, ask first."""
+    if point or text:
+        inputs: dict[str, Any] = {"button": "right" if right else "left", "count": 2 if double else 1}
+        if point:
+            inputs["x"], inputs["y"] = _point(point)
+        else:
+            inputs["text"] = text
+        return run_action(app, "computer.click_at", inputs)
+    if selector is None:
+        raise UsageError("Give a SELECTOR (e.g. button:Save), --at X,Y or --text TEXT.")
     return _act(app, source, "click", selector)
 
 
@@ -292,12 +311,175 @@ def computer_press(app: App, key: str, source: str) -> int:
 
 
 @computer.command("scroll", short_help="Scroll up or down.")
-@click.argument("direction", type=click.Choice(["up", "down"]))
+@click.argument("direction", type=click.Choice(["up", "down", "left", "right"]))
+@click.option("--at", "point", metavar="X,Y", help="Desktop: scroll the mouse wheel at this point.")
+@click.option("--amount", type=click.IntRange(1, 20), default=3, show_default=True, help="Desktop: wheel steps.")
 @SOURCE_OPTION
 @pass_app
-def computer_scroll(app: App, direction: str, source: str) -> int:
-    """Scroll the page or window."""
+def computer_scroll(app: App, direction: str, point: str | None, amount: int, source: str) -> int:
+    """Scroll the page or window (the desktop with real wheel events)."""
+    if point or source == "desktop":
+        inputs: dict[str, Any] = {"source": "desktop", "direction": direction, "amount": amount}
+        if point:
+            inputs["x"], inputs["y"] = _point(point)
+        return run_action(app, "computer.scroll", inputs)
+    if direction in ("left", "right"):
+        raise UsageError("The browser scrolls up or down; left and right are desktop scrolling (--source desktop).")
     return _act(app, source, f"scroll:{direction}", None)
+
+
+# ------------------------------------------------ the HighhX Computer Runtime (desktop)
+def _point(text: str) -> tuple[int, int]:
+    try:
+        x, y = (int(v.strip()) for v in text.split(","))
+    except ValueError:
+        raise UsageError(f"{text!r} is not a point: give X,Y (desktop points, e.g. 640,400).") from None
+    return x, y
+
+
+def run_action(app: App, name: str, inputs: dict[str, Any], render: Any = None) -> int:
+    """One computer.* action through the user's action executor (risk, approval, audit, verification)."""
+    result = app.user_actions().run(name, inputs)
+    out = app.output
+
+    def plain() -> None:
+        if render is not None and result.ok:
+            render(result.output)
+        verdict = {True: "verified", False: "NOT verified", None: ""}[result.verified]
+        line = f"{result.summary or result.status}" + (f" ({verdict})" if verdict and result.ok else "")
+        if result.ok:
+            out.success(line)
+        else:
+            out.error(f"{name}: {result.error or result.status}")
+
+    out.emit({"action": name, **result.to_dict()}, plain)
+    return {"ok": 0, "planned": 0, "cancelled": 130, "timeout": 124, "denied": 6, "blocked": 7}.get(result.status, 1)
+
+
+@computer.command("protocol", short_help="Print the computer-operations contract (JSON).")
+@pass_app
+def computer_protocol(app: App) -> int:
+    """The automation protocol every engine speaks — operations, arguments, the version that
+    introduced each, keys, errors — as JSON. It is also checked in as
+    schemas/computer-protocol.json (the source for engines written in other languages)."""
+    import json
+
+    from highhx.automation.engine.protocol import describe
+
+    click.echo(json.dumps(describe(), indent=2, sort_keys=True))
+    return 0
+
+
+@computer.command("screenshot", short_help="Capture the screen or one window to a PNG.")
+@click.option("--window", "window", type=int, metavar="ID", help="Only this window (ids from `computer windows`).")
+@pass_app
+def computer_screenshot(app: App, window: int | None) -> int:
+    """Save a screenshot in HighhX's screenshots folder and print its path. macOS needs Screen
+    Recording permission for your terminal; HighhX says so instead of saving a blank image."""
+    return run_action(app, "computer.screenshot", {"window": window} if window is not None else {})
+
+
+@computer.command("windows", short_help="List windows (or, with --apps, running applications).")
+@click.option("--app", "application", metavar="NAME", help="Only this application's windows.")
+@click.option("--apps", "list_apps", is_flag=True, help="List running applications instead.")
+@pass_app
+def computer_windows(app: App, application: str | None, list_apps: bool) -> int:
+    """Windows front to back with their ids and bounds (for `click --at`, `window`, `screenshot --window`)."""
+    out = app.output
+    if list_apps:
+        return run_action(
+            app,
+            "computer.apps",
+            {},
+            lambda o: out.table(
+                ["application", "pid", "front"],
+                [(a["name"], a["pid"], "yes" if a["frontmost"] else "") for a in o["apps"]],
+            ),
+        )
+    return run_action(
+        app,
+        "computer.windows",
+        {"app": application} if application else {},
+        lambda o: out.table(
+            ["id", "application", "title", "x", "y", "width", "height"],
+            [(w["id"], w["app"], w["title"], w["x"], w["y"], w["width"], w["height"]) for w in o["windows"]],
+        ),
+    )
+
+
+@computer.command("at", short_help="The accessibility element at a desktop point.")
+@click.argument("point", metavar="X,Y")
+@pass_app
+def computer_at(app: App, point: str) -> int:
+    """What is at X,Y — application, role, name and bounds (read-only)."""
+    x, y = _point(point)
+    return run_action(app, "computer.element_at", {"x": x, "y": y})
+
+
+@computer.command("move", short_help="Move the pointer (hover).")
+@click.argument("point", metavar="X,Y")
+@pass_app
+def computer_move(app: App, point: str) -> int:
+    """Move the pointer to X,Y (hovering) and check that it arrived."""
+    x, y = _point(point)
+    return run_action(app, "computer.move", {"x": x, "y": y})
+
+
+@computer.command("drag", short_help="Drag from one desktop point to another.")
+@click.argument("start", metavar="X1,Y1")
+@click.argument("end", metavar="X2,Y2")
+@click.option("--right", is_flag=True, help="With the right button.")
+@pass_app
+def computer_drag(app: App, start: str, end: str, right: bool) -> int:
+    """Press at X1,Y1, move to X2,Y2 and release (asks first)."""
+    (x1, y1), (x2, y2) = _point(start), _point(end)
+    inputs = {"from_x": x1, "from_y": y1, "to_x": x2, "to_y": y2, "button": "right" if right else "left"}
+    return run_action(app, "computer.drag", inputs)
+
+
+@computer.command("menu", short_help='Choose an application menu item, e.g. "File > Save".')
+@click.argument("application", metavar="APP")
+@click.argument("path")
+@pass_app
+def computer_menu(app: App, application: str, path: str) -> int:
+    """Choose PATH (items separated by >) in APP's menu bar."""
+    return run_action(app, "computer.menu", {"app": application, "path": path})
+
+
+@computer.command("window", short_help="Move and resize an application's window.")
+@click.argument("application", metavar="APP", required=False)
+@click.option("--id", "window", type=int, help="The window id (from `computer windows`) instead of APP.")
+@click.option("--frame", required=True, metavar="X,Y,WIDTH,HEIGHT", help="The new frame in desktop points.")
+@pass_app
+def computer_window(app: App, application: str | None, window: int | None, frame: str) -> int:
+    """Move and resize APP's front window (or --id WINDOW) to --frame, and check the new frame."""
+    try:
+        x, y, width, height = (int(v.strip()) for v in frame.split(","))
+    except ValueError:
+        raise UsageError("--frame needs X,Y,WIDTH,HEIGHT, e.g. 0,25,1200,800.") from None
+    target: dict[str, Any] = {"window": window} if window is not None else {"app": application}
+    if window is None and not application:
+        raise UsageError("Give APP or --id WINDOW.")
+    return run_action(app, "computer.window", {**target, "x": x, "y": y, "width": width, "height": height})
+
+
+@computer.command("quit", short_help="Ask an application to quit.")
+@click.argument("application", metavar="APP")
+@pass_app
+def computer_quit(app: App, application: str) -> int:
+    """Ask APP to quit (it may ask to save first) and check that it did."""
+    return run_action(app, "computer.quit", {"app": application})
+
+
+@computer.command("clipboard", short_help="Read the clipboard, or replace it with --set.")
+@click.option("--set", "text", metavar="TEXT", help="Replace the clipboard with TEXT.")
+@pass_app
+def computer_clipboard(app: App, text: str | None) -> int:
+    """Print the clipboard's text, or replace it with --set TEXT (read back to check). Asks first:
+    the clipboard often holds private data."""
+    if text is not None:
+        return run_action(app, "computer.clipboard_write", {"text": text})
+    return run_action(app, "computer.clipboard_read", {}, lambda o: app.output.plain(o.get("text") or ""))
 
 
 @computer.command("run", short_help="Run a deterministic automation flow (YAML).")
@@ -327,6 +509,114 @@ def computer_run(app: App, flow_file: Path, source: str) -> int:
         lambda: (out.success if result.ok else out.error)(f"Flow {flow.name}: {'passed' if result.ok else 'failed'}"),
     )
     return 0 if result.ok else 1
+
+
+@computer.command("task", short_help="Work toward a goal: plan, act, verify, recover (Task IR).")
+@click.argument("request", nargs=-1)
+@click.option(
+    "--ir",
+    "ir_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Run this Task IR (JSON or YAML) instead of a request.",
+)
+@click.option("--show-ir", is_flag=True, help="Print the Task IR before running it.")
+@click.option("--schema", is_flag=True, help="Print the Task IR JSON Schemas and exit.")
+@click.option("--max-steps", type=click.IntRange(1, 200), help="At most this many actions.")
+@click.option("--timeout", type=click.FloatRange(1, 3600), help="Give up after this many seconds.")
+@pass_app
+def computer_task(
+    app: App,
+    request: tuple[str, ...],
+    ir_file: Path | None,
+    show_ir: bool,
+    schema: bool,
+    max_steps: int | None,
+    timeout: float | None,
+) -> int:
+    """Work toward a goal in the HighhX browser, step by step:
+
+    \b
+      TASK → PLAN → OBSERVE → ACTION → RESULT → VERIFY → (RECOVERY) → … → FINAL
+
+    The request becomes Task IR (validated JSON): on HighhX Free from the deterministic
+    resolver, on HighhX Pro — for tasks nobody programmed — from the AI planner, which then
+    discovers the site from its accessibility tree. Each action is a generic primitive
+    (navigate, click, type, read, …), checked by the safety policy, executed, verified and
+    audited; failures are recovered or replanned, never blindly repeated.
+
+    \b
+      highhx computer task "open YouTube and play lofi"
+      highhx computer task --ir task.json
+      highhx computer task --schema
+    """
+    import json
+
+    from highhx.goals import runner
+    from highhx.goals.conditions import check
+    from highhx.goals.executor import GoalExecutor
+    from highhx.goals.ir import json_schemas
+    from highhx.goals.log import TaskLog
+    from highhx.goals.loop import GoalLoop
+    from highhx.goals.planner import Planner, ScriptedPlanner
+    from highhx.goals.state import CANCELLED, COMPLETED, NEEDS_USER
+    from highhx.utils.paths import user_data_dir
+
+    out = app.output
+    if schema:
+        out.emit(json_schemas(), lambda: out.console.print_json(json.dumps(json_schemas())))
+        return 0
+    prepared = runner.prepare(app, " ".join(request), ir_file, app.ctx.cancel)
+    task = runner.with_limits(prepared.task, max_steps=max_steps, timeout=timeout)
+    if show_ir or app.options.dry_run:
+        if not out.json_mode:
+            out.note(f"Task IR ({prepared.source}):")
+            out.console.print_json(json.dumps(task.to_dict()))
+    if app.options.dry_run:
+        out.emit(
+            {"ok": True, "dry_run": True, "source": prepared.source, "task": task.to_dict()},
+            lambda: out.note("Dry run: nothing was executed."),
+        )
+        return 0
+    styles = {True: "ok", False: "fail", None: "dim"}
+
+    def render(entry: Any) -> None:
+        if out.json_mode or out.quiet:
+            return
+        mark = "" if entry.ok is None else ("✓ " if entry.ok else "✗ ")
+        style = (
+            styles[entry.ok]
+            if entry.kind in ("VERIFY", "FINAL", "RESULT")
+            else "bold"
+            if entry.kind in ("TASK", "ACTION")
+            else "dim"
+        )
+        out.console.print(f"[bold]{entry.kind + ':':<10}[/bold][{style}]{mark}{escape(entry.message)}[/{style}]")
+
+    agent = prepared.source == "model" or prepared.replanner is not None
+    session = computer_session(app, headless=_headless(), agent=agent)
+    try:
+        runtime = session.runtime("browser")
+        executor = GoalExecutor(runtime, screenshots=user_data_dir() / "screenshots")
+        planner: Planner = (
+            prepared.replanner
+            if task.dynamic and prepared.replanner is not None
+            else ScriptedPlanner(task, lambda condition, page: check(condition, page, runtime))
+        )
+        log = TaskLog(render, redact=app.redactor.redact)
+        loop = GoalLoop(executor, planner, log, replanner=prepared.replanner, log_dir=user_data_dir() / "tasks")
+        with app.engine.operation("task", task.goal[:60]):
+            state = loop.run(task)
+    finally:
+        session.close()
+    log_file = str(log.file) if log.file is not None else None
+    data = {
+        "ok": state.status == COMPLETED,
+        **state.to_dict(),
+        "log": [e.to_dict() for e in log.entries],
+        "log_file": log_file,
+    }
+    out.emit(data, lambda: out.note(f"log: {log_file}") if log_file else None)
+    return {COMPLETED: 0, NEEDS_USER: 2, CANCELLED: 130}.get(state.status, 1)
 
 
 @computer.group("browser", short_help="Start or stop the HighhX-controlled browser.")

@@ -1,0 +1,4 @@
+steps:
+  - {tool: computer_act, args: {source: desktop, action: clipboard_write, text: hello world}}
+  - {tool: computer_act, args: {source: desktop, action: "click_at:390,320"}}
+  - {tool: computer_act, args: {source: desktop, action: "hotkey:cmd+v"}}

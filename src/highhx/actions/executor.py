@@ -36,8 +36,8 @@ from highhx.safety.actions import ActionDescriptor, ActionKind, Actor
 from highhx.safety.gate import ActionGate, ApprovalMode, GatePrompter
 
 if TYPE_CHECKING:
-    from highhx.automation.engine.bridge import AutomationBridge
     from highhx.commands import App
+    from highhx.computer.driver import HighhXDriver
     from highhx.computer.session import ComputerSession
 
 
@@ -161,13 +161,13 @@ class ActionExecutor:
             self._computer = ComputerSession(self.gate, actor=self.actor, tool="actions")
         return self._computer
 
-    def automation(self, cancel: CancellationToken | None = None) -> AutomationBridge:
-        """The automation bridge (desktop UI actions) — the computer session's, so HighhX Free's
-        actions and HighhX Pro's agent tools share one engine: C#/.NET when installed, else Python."""
+    def driver(self, cancel: CancellationToken | None = None) -> HighhXDriver:
+        """The HighhX Computer API for desktop actions — the computer session's, so HighhX Free's
+        actions and HighhX Pro's agent tools share one runtime and one engine."""
         session = self.computer()
         if cancel is not None:
             session.cancel = cancel
-        return session.automation()
+        return session.driver()
 
     def close(self) -> None:
         if self._computer is not None:

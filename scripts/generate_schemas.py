@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from highhx.automation.engine.protocol import describe as computer_protocol
 from highhx.config.validation import CONFIG_SCHEMA
 from highhx.plugins.manifest import MANIFEST_SCHEMA
 from highhx.workflows.schema import workflow_json_schema
@@ -30,6 +31,9 @@ def documents() -> dict[str, dict[str, object]]:
             "title": "HighhX plugin manifest (highhx-plugin.yaml)",
             **MANIFEST_SCHEMA.json_schema(),
         },
+        # the computer-operations contract every automation engine speaks (not a JSON Schema: the
+        # operation table itself — `highhx computer protocol` prints the same)
+        "computer-protocol.json": computer_protocol(),
     }
 
 

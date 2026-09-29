@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from highhx.cloud.account import Account, CloudAccount
     from highhx.commands import App
     from highhx.decision.deterministic import Decision
+    from highhx.language.grammar import Unknown
     from highhx.observability.runs import RunTrace
     from highhx.voice.mode import VoiceMode
 
@@ -286,6 +287,10 @@ class AgentREPL:
         record = session.record if session is not None else None
         self.session_id = session_id or (record.id if record is not None else f"s-{new_id()[:12]}")
         self._resolver_context: ResolverContext | None = None
+        from highhx.language.references import ConversationMemory
+
+        self.memory = ConversationMemory()
+        """What this conversation acted on: what "it", "that tab" and "the second one" refer to."""
 
     # ---------------------------------------------------------------- state
     @property
@@ -669,8 +674,7 @@ class AgentREPL:
         self.trace(decision).finish()
         self.events.emit(ev.INTENT_UNRESOLVED, text=text, capability=str(planned.capability))
         if planned.unknown is not None:
-            self.ui.unknown_action(planned.unknown.reason, planned.unknown.suggestions)
-            self.last_summary = planned.unknown.reason
+            self.clarify(decision, planned.unknown)
             return
         ent = self.entitlements
         if ent.connection == Connection.CACHED and ent.tier == "Pro":
@@ -688,8 +692,30 @@ class AgentREPL:
         from highhx.decision.deterministic import DeterministicDecider
 
         return DeterministicDecider(
-            self.resolver_context(), catalog=self.actions.catalog, risk_of=self._risk_of()
+            self.resolver_context(), catalog=self.actions.catalog, risk_of=self._risk_of(), memory=self.memory
         ).decide(text)
+
+    def clarify(self, decision: Decision, unknown: Unknown) -> None:
+        """Nothing ran: say what is unclear. A question with candidates waits for the answer
+        ("the second one", "2"), which completes the request."""
+        from highhx.language.hxir import AMBIGUOUS, MISSING
+
+        hxir = decision.hxir
+        self.last_summary = unknown.reason
+        if hxir is not None and hxir.status == AMBIGUOUS and hxir.ambiguities:
+            ambiguity = hxir.ambiguities[0]
+            self.memory.ask(hxir.request, ambiguity.template, ambiguity.candidates)
+            self.ui.unknown_action(
+                unknown.reason,
+                unknown.suggestions,
+                title="Which one do you mean?",
+                footer="Nothing ran. Answer with a number or e.g. “the second one”.",
+            )
+            return
+        if hxir is not None and hxir.status == MISSING:
+            self.ui.unknown_action(unknown.reason, unknown.suggestions, title="I need more information")
+            return
+        self.ui.unknown_action(unknown.reason, unknown.suggestions)
 
     def trace(self, decision: Decision) -> RunTrace:
         from highhx.observability.runs import RunTrace
@@ -762,9 +788,13 @@ class AgentREPL:
             )
         assert decision.plan is not None
         trace = self.trace(decision)
+        outputs: dict[str, dict[str, Any]] = {}
 
         def execute(step: PlanStep) -> ActionResult | None:
-            return self.run_action(step.catalog_action, dict(step.params), label=step.description)
+            result = self.run_action(step.catalog_action, dict(step.params), label=step.description)
+            if result is not None and result.ok:
+                outputs[step.id] = dict(result.output)
+            return result
 
         def verified(done: StepOutcome) -> None:
             if done.check is not None and done.action_ok:
@@ -773,6 +803,7 @@ class AgentREPL:
         root = self.app.root if self.app is not None else None
         outcome = PlanRunner(execute, root=root, on_verified=verified, trace=trace).run(decision.plan)
         steps = list(resolution.steps)
+        self.remember(resolution, decision, outcome.steps, outputs)
         failed = outcome.failed_step
         if len(outcome.steps) > 1 or (failed is not None and failed.check is not None and failed.status == "failed"):
             done = sum(1 for s in outcome.steps if s.ok)
@@ -791,6 +822,24 @@ class AgentREPL:
             return False
         self.retryable = None
         return True
+
+    def remember(
+        self, resolution: Resolution, decision: Decision, done: list[Any], outputs: dict[str, dict[str, Any]]
+    ) -> None:
+        """What the succeeded steps acted on becomes this conversation's context (names and paths only)."""
+        from highhx.language.references import entities_of_step
+
+        entities: list[Any] = []
+        results: list[Any] | None = None
+        for step, finished in zip(resolution.steps, done, strict=False):
+            if not finished.ok:
+                break
+            found, listed = entities_of_step(step, outputs.get(finished.step.id))
+            entities += found
+            results = listed if listed is not None else results
+        request = decision.hxir.request if decision.hxir is not None else resolution.text
+        ran = tuple(s.action for s, finished in zip(resolution.steps, done, strict=False) if finished.ok)
+        self.memory.record(request, entities, results, ran)
 
     def _risk_of(self) -> Any:
         from highhx.plans.planner import catalog_risk
@@ -1049,6 +1098,7 @@ class AgentREPL:
         if self.ui.console.is_terminal:
             self.ui.console.clear()
             self.show_banner()
+        self.memory.clear()
         if self.session is not None:
             self.session.clear()
             self.ui.notice("info", "Conversation cleared. Project memory and settings are kept.")

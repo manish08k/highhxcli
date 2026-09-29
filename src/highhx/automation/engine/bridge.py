@@ -62,35 +62,61 @@ class Engine(Protocol):
     def close(self) -> None: ...
 
 
+def engine_protocol(engine: Engine) -> int:
+    """The protocol version an engine speaks (engines that do not say speak the current one)."""
+    return int(getattr(engine, "protocol", PROTOCOL_VERSION))
+
+
 def is_terminal(app: str) -> bool:
     low = app.lower()
     return any(name in low for name in TERMINAL_APPS)
 
 
 class AutomationBridge:
-    """Validated, guarded calls into one automation engine."""
+    """Validated, guarded calls into one automation engine.
 
-    def __init__(self, engine: Engine) -> None:
+    ``fallback`` serves operations newer than ``engine`` speaks (an installed .NET engine at
+    protocol 1 keeps doing what it can; screenshots, windows, pointer input … go to the
+    built-in engine). Without a fallback such an operation is a structured ``unsupported``."""
+
+    def __init__(self, engine: Engine, fallback: Engine | None = None) -> None:
         self.engine = engine
+        self.fallback = fallback
 
     @property
     def name(self) -> str:
         return self.engine.name
 
+    def engine_for(self, op: str, args: dict[str, Any]) -> Engine:
+        needed = OPS[op].needs(args)
+        if needed <= engine_protocol(self.engine):
+            return self.engine
+        if self.fallback is not None and needed <= engine_protocol(self.fallback):
+            return self.fallback
+        raise EngineError(
+            "unsupported",
+            f"{op} needs automation protocol {needed}; the {self.engine.name} engine speaks "
+            f"{engine_protocol(self.engine)}.",
+            hint=f"Rebuild the .NET engine from this HighhX version, or use the built-in engine ({ENGINE_ENV}=python).",
+        )
+
     def call(self, op: str, **args: Any) -> dict[str, Any]:
         clean = validate(op, args)
-        if OPS[op].keyboard:
-            front = str(self.engine.call("frontmost", {}).get("app") or "")
-            if is_terminal(front):
+        engine = self.engine_for(op, clean)
+        if OPS[op].keyboard or op == "menu":  # a menu can paste into a terminal just as keys can
+            target = str(clean.get("app") or self.engine.call("frontmost", {}).get("app") or "")
+            if is_terminal(target):
                 raise EngineError(
                     "refused",
-                    f"{front} is a terminal: HighhX never types or presses keys into a terminal. "
+                    f"{target} is a terminal: HighhX never types or presses keys into a terminal. "
                     "Run shell commands with !command so they are classified and approved.",
                 )
-        return self.engine.call(op, clean)
+        return engine.call(op, clean)
 
     def close(self) -> None:
         self.engine.close()
+        if self.fallback is not None:
+            self.fallback.close()
 
 
 # ------------------------------------------------------------------ selection
@@ -129,7 +155,7 @@ def open_bridge(runner: Runner, *, cancel: CancellationToken | None = None) -> A
     from highhx.automation.engine.dotnet_engine import DotnetEngine
 
     try:
-        return AutomationBridge(DotnetEngine(binary, cancel=cancel))
+        return AutomationBridge(DotnetEngine(binary, cancel=cancel), fallback=PythonEngine(runner, cancel=cancel))
     except EngineError:
         if choice != "auto":
             raise
@@ -148,4 +174,11 @@ def engine_status(runner: Runner) -> dict[str, Any]:
         status = {"ok": False, "detail": exc.message}
     finally:
         bridge.close()
-    return {"engine": bridge.name, "protocol": PROTOCOL_VERSION, "binary": str(engine_binary() or ""), **status}
+    return {
+        "engine": bridge.name,
+        "protocol": PROTOCOL_VERSION,
+        "engine_protocol": engine_protocol(bridge.engine),
+        "fallback": bridge.fallback.name if bridge.fallback is not None else None,
+        "binary": str(engine_binary() or ""),
+        **status,
+    }

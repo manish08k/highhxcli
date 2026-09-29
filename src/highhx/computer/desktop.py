@@ -22,6 +22,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from highhx.computer.model import Observation, UIElement
 from highhx.computer.providers import Capability
@@ -159,9 +160,11 @@ function run(argv) {
     const role = roles[r]; if (!role) continue;
     const get = f => { try { const v = el[f](); return v === null || v === undefined ? '' : String(v); } catch (e) { return ''; } };
     const secure = r === 'AXSecureTextField';
+    let bounds = null;
+    try { const p = el.position(), z = el.size(); bounds = [p[0], p[1], z[0], z[1]]; } catch (e) {}
     out.push({index: i, role, name: get('name') || get('description') || get('title'),
               value: secure ? '' : get('value').slice(0, 300), enabled: get('enabled') !== 'false',
-              focused: get('focused') === 'true', secure});
+              focused: get('focused') === 'true', secure, bounds});
   }
   return JSON.stringify({app: proc.name(), title, elements: out});
 }
@@ -181,6 +184,17 @@ function run(argv) {
 """
 
 _KEYS = {"enter": 36, "tab": 48, "escape": 53, "backspace": 51, "arrowdown": 125, "arrowup": 126, "space": 49}
+
+
+def parse_bounds(value: Any) -> tuple[int, int, int, int] | None:
+    """[x, y, width, height] from an engine or script, in desktop points (None when absent or malformed)."""
+    if not isinstance(value, list | tuple) or len(value) != 4:
+        return None
+    try:
+        x, y, width, height = (round(float(v)) for v in value)
+    except (TypeError, ValueError):
+        return None
+    return (x, y, width, height) if width > 0 and height > 0 else None
 
 
 class MacAccessibility:
@@ -217,7 +231,10 @@ class MacAccessibility:
     def capability(self) -> Capability:
         if sys.platform != "darwin":
             return Capability(
-                self.name, False, _NATIVE_UNSUPPORTED.get(_platform_key(), "not supported on this platform")
+                self.name,
+                False,
+                "macOS Accessibility exists only on macOS; here the built-in engine's platform backend "
+                "provides the accessibility tree (see `highhx computer status`)",
             )
         try:
             self.observe()
@@ -254,6 +271,7 @@ class MacAccessibility:
                     enabled=bool(item.get("enabled", True)),
                     focused=bool(item.get("focused")),
                     attributes={"type": "password"} if item.get("secure") else {},
+                    bounds=parse_bounds(item.get("bounds")),
                     source="ax",
                 )
             )
@@ -298,12 +316,6 @@ class AccessibilityPermissionError(IntegrationError):
         )
 
 
-_NATIVE_UNSUPPORTED = {
-    "linux": "native UI automation (AT-SPI) is not implemented; browser automation is available",
-    "win32": "native UI automation (UI Automation) is not implemented; browser automation is available",
-}
-
-
 class TesseractOCR:
     """Local OCR of the screen (macOS ``screencapture`` / Linux ``import`` + ``tesseract``)."""
 
@@ -344,11 +356,15 @@ class TesseractOCR:
                     f"Could not capture the screen: {err.strip()[:200] or f'exit code {code}'}",
                     hint="On macOS, allow your terminal in System Settings → Privacy & Security → Screen Recording.",
                 )
-            code, tsv, err = run_cancellable(
-                ["tesseract", str(image), "-", "tsv"], timeout=120, cancel=cancel, what="OCR"
-            )
-            if code != 0:
-                raise IntegrationError(f"tesseract failed: {err.strip()[:200] or f'exit code {code}'}")
+            return self.read_image(image, cancel=cancel)
+
+    def read_image(self, image: Path, *, cancel: CancellationToken | None = None) -> Observation:
+        """Text lines of an existing image, with their bounds in the image's pixels."""
+        if not shutil.which("tesseract"):
+            raise ToolNotFoundError("tesseract", purpose="read text from an image")
+        code, tsv, err = run_cancellable(["tesseract", str(image), "-", "tsv"], timeout=120, cancel=cancel, what="OCR")
+        if code != 0:
+            raise IntegrationError(f"tesseract failed: {err.strip()[:200] or f'exit code {code}'}")
         return parse_tesseract_tsv(tsv)
 
 

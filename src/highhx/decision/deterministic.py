@@ -28,9 +28,13 @@ from highhx.plans.planner import RiskOf, build_plan, catalog_risk
 from highhx.plans.schema import ActionPlan
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from highhx.actions.catalog import Catalog
     from highhx.actions.resolver import Resolution
     from highhx.cloud.capabilities import Capability
+    from highhx.language.hxir import HXIR, Entity
+    from highhx.language.references import ConversationMemory
 
 LOCAL, UNKNOWN, PRO = "local", "unknown", "pro"
 
@@ -52,6 +56,9 @@ class Decision:
     capability: Capability | None = None
     reason: str = ""
     rule: str = ""
+    hxir: HXIR | None = None
+    """What the request means, as data (:mod:`highhx.language.hxir`): entities, references,
+    constraints, ambiguities — also when nothing can run."""
 
     @property
     def supported(self) -> bool:
@@ -84,6 +91,7 @@ class Decision:
             ),
             "capability": str(self.capability) if self.capability else None,
             "reason": self.reason,
+            "hxir": self.hxir.to_dict() if self.hxir else None,
         }
 
 
@@ -132,34 +140,46 @@ class DeterministicDecider:
         *,
         catalog: Catalog | None = None,
         risk_of: RiskOf | None = None,
+        memory: ConversationMemory | None = None,
+        now: datetime | None = None,
     ) -> None:
         from highhx.actions.catalog import default_catalog
 
         self.context = context or ResolverContext()
         self.catalog = catalog or default_catalog()
         self.risk_of = risk_of or catalog_risk(self.catalog)
+        self.memory = memory
+        """This conversation (the interactive session): what "it" and "the second one" refer to."""
+        self.now = now
 
     def decide(self, request: str) -> Decision:
+        from highhx.language.understand import from_resolution, understand
+
         normalized = normalise(request)
         clauses = tuple(split_clauses(normalized, VERB_WORDS | RULE_WORDS)) if normalized else ()
         resolution, unknown = _plan(request, self.context) if normalized else (None, None)
-        if resolution is not None:
-            plan = build_plan(normalized, list(resolution.steps), self.catalog, self.risk_of)
-            return Decision(
-                request,
-                normalized,
-                LOCAL,
-                clauses,
-                intent=plan.intent,
-                target=plan.target,
-                entities=entities_of(resolution),
-                plan=plan,
-                resolution=resolution,
-                rule=resolution.rule,
+        if resolution is not None:  # the grammar alone: exactly as it always resolved
+            return self._local(
+                request, normalized, clauses, resolution, from_resolution(normalized, list(resolution.steps))
             )
         from highhx.agent.router import required_capability
         from highhx.cloud.capabilities import Capability
+        from highhx.language.hxir import OPEN_ENDED, RESOLVED
 
+        understood = (
+            understand(request, self.context, self.memory, catalog=self.catalog, now=self.now) if normalized else None
+        )
+        hxir = understood.hxir if understood is not None else None
+        if understood is not None and hxir is not None and hxir.status == RESOLVED:
+            from highhx.actions.resolver import Resolution
+            from highhx.language.hxir import to_steps
+
+            steps = tuple(to_steps(hxir, self.catalog))  # validated against the catalog again
+            resolved = Resolution(steps, hxir.request, "understand")
+            parts = tuple(c.text for c in hxir.clauses)
+            return self._local(request, normalized, parts, resolved, hxir)
+        if understood is not None and hxir is not None and hxir.status != OPEN_ENDED:
+            unknown = understood.unknown or as_unknown(hxir)
         if unknown is not None:
             return Decision(
                 request,
@@ -169,8 +189,45 @@ class DeterministicDecider:
                 unknown=unknown,
                 capability=Capability.AI_AGENT,
                 reason=unknown.reason,
+                hxir=hxir,
             )
         capability, reason = required_capability(normalized or request)
         if len(clauses) > MAX_CLAUSES:
             reason = f"More than {MAX_CLAUSES} steps in one request. {reason}"
-        return Decision(request, normalized, PRO, clauses, capability=capability, reason=reason)
+        return Decision(request, normalized, PRO, clauses, capability=capability, reason=reason, hxir=hxir)
+
+    def _local(
+        self, request: str, normalized: str, clauses: tuple[str, ...], resolution: Resolution, hxir: HXIR
+    ) -> Decision:
+        plan = build_plan(normalized, list(resolution.steps), self.catalog, self.risk_of)
+        return Decision(
+            request,
+            normalized,
+            LOCAL,
+            clauses,
+            intent=plan.intent,
+            target=plan.target,
+            entities=entities_of(resolution),
+            plan=plan,
+            resolution=resolution,
+            rule=resolution.rule,
+            hxir=hxir,
+        )
+
+
+def as_unknown(hxir: HXIR) -> Unknown:
+    """An HXIR that cannot run, as the explanation every caller already shows (nothing runs)."""
+    clause = next((c.text for c in hxir.clauses if c.status != "resolved"), hxir.request)
+    if hxir.ambiguities:
+        candidates = hxir.ambiguities[0].candidates
+        numbered = tuple(f"{i}. {c.shown}{_detail(c)}" for i, c in enumerate(candidates, 1))
+        return Unknown(clause, f"{hxir.reason} {hxir.question}".strip(), numbered)
+    return Unknown(clause, hxir.question or hxir.reason or "HighhX could not resolve this request.", ())
+
+
+def _detail(candidate: Entity) -> str:
+    """What helps the person choose: when a file changed, or why a weaker match was offered."""
+    modified = dict(candidate.attributes).get("modified")
+    if modified:
+        return f"  (modified {modified.replace('T', ' ')[:16]})"
+    return f"  ({candidate.evidence})" if candidate.evidence and candidate.confidence != "high" else ""

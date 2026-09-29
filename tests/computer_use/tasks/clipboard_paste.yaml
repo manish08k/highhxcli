@@ -1,0 +1,5 @@
+id: clipboard_paste
+instruction: Put "hello world" on the clipboard and paste it into the note's body.
+success:
+  - clipboard: {equals: hello world}
+  - field_value: {app: Notes, name: Body, equals: hello world}

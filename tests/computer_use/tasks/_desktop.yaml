@@ -1,0 +1,17 @@
+# The starting desktop shared by the tasks (each task may override parts of it).
+front: Notes
+apps:
+  Notes:
+    running: true
+    saved: false
+    window: {id: 11, pid: 110, app: Notes, title: Untitled, x: 0, y: 25, width: 800, height: 600}
+    menus: {File: [New, Save, Close], Edit: [Copy, Paste]}
+    elements:
+      - {role: textbox, name: Title, bounds: [40, 80, 400, 24]}
+      - {role: textbox, name: Body, bounds: [40, 120, 700, 400]}
+      - {role: button, name: Increment, bounds: [460, 80, 90, 24]}
+      - {role: checkbox, name: Pinned, bounds: [560, 80, 80, 24]}
+  Finder:
+    running: true
+    window: {id: 12, pid: 120, app: Finder, title: Documents, x: 820, y: 25, width: 600, height: 400}
+    elements: []

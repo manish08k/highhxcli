@@ -1,0 +1,567 @@
+{
+  "version": 2,
+  "ops": {
+    "status": {
+      "description": "Engine name, version, platform and whether Accessibility is granted.",
+      "since": 1,
+      "keyboard": false,
+      "args": {}
+    },
+    "frontmost": {
+      "description": "The frontmost application and its focused window title.",
+      "since": 1,
+      "keyboard": false,
+      "args": {}
+    },
+    "launch": {
+      "description": "Launch (or bring up) an application.",
+      "since": 1,
+      "keyboard": false,
+      "args": {
+        "app": {
+          "type": "app",
+          "required": true,
+          "since": 1
+        }
+      }
+    },
+    "focus": {
+      "description": "Bring a running application to the front.",
+      "since": 1,
+      "keyboard": false,
+      "args": {
+        "app": {
+          "type": "app",
+          "required": true,
+          "since": 1
+        }
+      }
+    },
+    "running": {
+      "description": "Whether an application is running.",
+      "since": 1,
+      "keyboard": false,
+      "args": {
+        "app": {
+          "type": "app",
+          "required": true,
+          "since": 1
+        }
+      }
+    },
+    "open_url": {
+      "description": "Open an http(s) URL in an application (default browser when none).",
+      "since": 1,
+      "keyboard": false,
+      "args": {
+        "url": {
+          "type": "url",
+          "required": true,
+          "since": 1
+        },
+        "app": {
+          "type": "app",
+          "required": false,
+          "since": 1
+        }
+      }
+    },
+    "click": {
+      "description": "Press the UI element with this accessible name (and role) \u2014 never raw coordinates.",
+      "since": 1,
+      "keyboard": false,
+      "args": {
+        "name": {
+          "type": "str",
+          "required": true,
+          "since": 1
+        },
+        "role": {
+          "type": "enum",
+          "required": false,
+          "since": 1,
+          "choices": [
+            "any",
+            "button",
+            "checkbox",
+            "field",
+            "link",
+            "menuitem",
+            "tab",
+            "textbox"
+          ]
+        },
+        "app": {
+          "type": "app",
+          "required": false,
+          "since": 1
+        }
+      }
+    },
+    "type": {
+      "description": "Type text.",
+      "since": 1,
+      "keyboard": true,
+      "args": {
+        "text": {
+          "type": "str",
+          "required": true,
+          "since": 1
+        },
+        "app": {
+          "type": "app",
+          "required": false,
+          "since": 2
+        }
+      }
+    },
+    "key": {
+      "description": "Press one key.",
+      "since": 1,
+      "keyboard": true,
+      "args": {
+        "key": {
+          "type": "key",
+          "required": true,
+          "since": 1
+        },
+        "app": {
+          "type": "app",
+          "required": false,
+          "since": 2
+        }
+      }
+    },
+    "hotkey": {
+      "description": "Press a key combination.",
+      "since": 1,
+      "keyboard": true,
+      "args": {
+        "modifiers": {
+          "type": "modifiers",
+          "required": true,
+          "since": 1
+        },
+        "key": {
+          "type": "key",
+          "required": true,
+          "since": 1
+        },
+        "app": {
+          "type": "app",
+          "required": false,
+          "since": 2
+        }
+      }
+    },
+    "scroll": {
+      "description": "Scroll the frontmost window (version 2: with the mouse wheel, at a point when given).",
+      "since": 1,
+      "keyboard": false,
+      "args": {
+        "direction": {
+          "type": "enum",
+          "required": true,
+          "since": 1,
+          "choices": [
+            "down",
+            "left",
+            "right",
+            "up"
+          ]
+        },
+        "amount": {
+          "type": "int",
+          "required": false,
+          "since": 1
+        },
+        "x": {
+          "type": "coord",
+          "required": false,
+          "since": 2
+        },
+        "y": {
+          "type": "coord",
+          "required": false,
+          "since": 2
+        }
+      }
+    },
+    "wait": {
+      "description": "Wait (at most 10 s).",
+      "since": 1,
+      "keyboard": false,
+      "args": {
+        "ms": {
+          "type": "int",
+          "required": true,
+          "since": 1
+        }
+      }
+    },
+    "inspect": {
+      "description": "Windows and UI elements (role, name, value) of an application.",
+      "since": 1,
+      "keyboard": false,
+      "args": {
+        "app": {
+          "type": "app",
+          "required": false,
+          "since": 1
+        },
+        "limit": {
+          "type": "int",
+          "required": false,
+          "since": 1
+        }
+      }
+    },
+    "verify": {
+      "description": "Check UI state: frontmost / running application, a window, or an element.",
+      "since": 1,
+      "keyboard": false,
+      "args": {
+        "check": {
+          "type": "enum",
+          "required": true,
+          "since": 1,
+          "choices": [
+            "element",
+            "frontmost",
+            "running",
+            "window"
+          ]
+        },
+        "app": {
+          "type": "app",
+          "required": false,
+          "since": 1
+        },
+        "name": {
+          "type": "str",
+          "required": false,
+          "since": 1
+        },
+        "role": {
+          "type": "enum",
+          "required": false,
+          "since": 1,
+          "choices": [
+            "any",
+            "button",
+            "checkbox",
+            "field",
+            "link",
+            "menuitem",
+            "tab",
+            "textbox"
+          ]
+        }
+      }
+    },
+    "capabilities": {
+      "description": "What this platform and engine can do, and why not.",
+      "since": 2,
+      "keyboard": false,
+      "args": {}
+    },
+    "screen": {
+      "description": "The main display: size in points and the pixel scale factor.",
+      "since": 2,
+      "keyboard": false,
+      "args": {}
+    },
+    "screenshot": {
+      "description": "Capture the screen (or one window) to a PNG in HighhX's screenshots folder.",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "path": {
+          "type": "png",
+          "required": true,
+          "since": 2
+        },
+        "window": {
+          "type": "int",
+          "required": false,
+          "since": 2
+        }
+      }
+    },
+    "apps": {
+      "description": "Running applications with a user interface (name, pid, frontmost).",
+      "since": 2,
+      "keyboard": false,
+      "args": {}
+    },
+    "windows": {
+      "description": "Top-level windows front to back: id, application, pid, title, bounds.",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "app": {
+          "type": "app",
+          "required": false,
+          "since": 2
+        }
+      }
+    },
+    "window_frame": {
+      "description": "Move and resize one window.",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "window": {
+          "type": "int",
+          "required": true,
+          "since": 2
+        },
+        "x": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "y": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "width": {
+          "type": "int",
+          "required": true,
+          "since": 2
+        },
+        "height": {
+          "type": "int",
+          "required": true,
+          "since": 2
+        }
+      }
+    },
+    "quit": {
+      "description": "Ask an application to quit (it may ask to save).",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "app": {
+          "type": "app",
+          "required": true,
+          "since": 2
+        }
+      }
+    },
+    "click_at": {
+      "description": "Click at a desktop point (right/middle, double/triple); to `app` in the background when given.",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "x": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "y": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "button": {
+          "type": "enum",
+          "required": false,
+          "since": 2,
+          "choices": [
+            "left",
+            "middle",
+            "right"
+          ]
+        },
+        "count": {
+          "type": "int",
+          "required": false,
+          "since": 2
+        },
+        "app": {
+          "type": "app",
+          "required": false,
+          "since": 2
+        }
+      }
+    },
+    "move": {
+      "description": "Move the pointer.",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "x": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "y": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        }
+      }
+    },
+    "cursor": {
+      "description": "Where the pointer is.",
+      "since": 2,
+      "keyboard": false,
+      "args": {}
+    },
+    "drag": {
+      "description": "Press at one point, move to another, release.",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "from_x": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "from_y": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "to_x": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "to_y": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "button": {
+          "type": "enum",
+          "required": false,
+          "since": 2,
+          "choices": [
+            "left",
+            "middle",
+            "right"
+          ]
+        },
+        "duration_ms": {
+          "type": "int",
+          "required": false,
+          "since": 2
+        }
+      }
+    },
+    "element_at": {
+      "description": "The accessibility element at a point: application, role, name, bounds.",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "x": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "y": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        }
+      }
+    },
+    "menu": {
+      "description": "Choose an application menu item by its path, e.g. [\"File\", \"Save\"].",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "app": {
+          "type": "app",
+          "required": true,
+          "since": 2
+        },
+        "path": {
+          "type": "strs",
+          "required": true,
+          "since": 2
+        }
+      }
+    },
+    "clipboard_read": {
+      "description": "The clipboard's plain text.",
+      "since": 2,
+      "keyboard": false,
+      "args": {}
+    },
+    "clipboard_write": {
+      "description": "Replace the clipboard with plain text.",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "text": {
+          "type": "str",
+          "required": true,
+          "since": 2
+        }
+      }
+    }
+  },
+  "keys": [
+    "arrowdown",
+    "arrowleft",
+    "arrowright",
+    "arrowup",
+    "backspace",
+    "delete",
+    "down",
+    "end",
+    "enter",
+    "esc",
+    "escape",
+    "home",
+    "left",
+    "pagedown",
+    "pageup",
+    "return",
+    "right",
+    "space",
+    "tab",
+    "up"
+  ],
+  "modifiers": [
+    "command",
+    "control",
+    "option",
+    "shift"
+  ],
+  "buttons": [
+    "left",
+    "middle",
+    "right"
+  ],
+  "features": [
+    "accessibility",
+    "screenshot",
+    "window_screenshot",
+    "pointer",
+    "keyboard",
+    "background_input",
+    "windows",
+    "window_frame",
+    "applications",
+    "menus",
+    "clipboard",
+    "element_at"
+  ],
+  "errors": [
+    "accessibility_denied",
+    "failed",
+    "invalid_request",
+    "not_found",
+    "refused",
+    "screen_recording_denied",
+    "timeout",
+    "unknown_op",
+    "unsupported",
+    "unsupported_platform"
+  ]
+}

@@ -1,0 +1,5 @@
+id: quit_after_saving
+instruction: Quit Notes; if it wants to save first, save it.
+success:
+  - saved: {app: Notes}
+  - running: {app: Notes, is: false}

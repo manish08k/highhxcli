@@ -27,19 +27,19 @@ through one `ActionExecutor`. Code: `src/highhx/actions/`.
 `highhx actions list [category]`, `highhx actions show NAME` and `/tools` print the catalog;
 `highhx actions plan NAME key=value …` rates an action without running it.
 
-## The catalog (85 actions)
+## The catalog (99 actions)
 
 | Category | Actions |
 |---|---|
 | project | detect, init, status, check, test, fix, build, run (dev), start, stop |
-| filesystem | read, write, copy, move, delete, search |
+| filesystem | read, write, copy, move, delete, search, find (by kind, name words and date — metadata only) |
 | git | status, diff, log, branch, checkout, commit, tag, push, pull, revert |
 | package | install, update, audit, outdated |
 | docker | build, run, stop, logs |
 | database | connect, migrate, backup, restore |
 | service | start, stop, restart, logs |
 | browser | open (navigate), search, play, find, click, double_click, hover, drag, fill (type), press, upload, download, wait, extract (read), screenshot, back, forward, refresh (reload), new_tab, close_tab, switch_tab, tabs |
-| computer | launch |
+| computer | launch, focus, type, press, hotkey, click, scroll, observe, screenshot, windows, apps, element_at, click_at, move, drag, menu, window, quit, clipboard_read, clipboard_write |
 | deployment | deploy, rollback, status, logs |
 | security | scan, doctor, diagnose |
 | workflow | run, resume, cancel |

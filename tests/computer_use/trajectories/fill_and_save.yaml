@@ -1,0 +1,4 @@
+steps:
+  - {tool: computer_observe, args: {source: desktop}}
+  - {tool: computer_act, args: {source: desktop, action: "type:a1", text: Plan}}
+  - {tool: computer_act, args: {source: desktop, action: "menu:File > Save", app: Notes}}

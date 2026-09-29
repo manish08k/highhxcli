@@ -330,18 +330,25 @@ class TerminalUI:
             )
         )
 
-    def unknown_action(self, reason: str, suggestions: Sequence[str]) -> None:
+    def unknown_action(
+        self,
+        reason: str,
+        suggestions: Sequence[str],
+        *,
+        title: str = "I don't know this action yet",
+        footer: str = "Nothing ran. /tools lists what HighhX can do; /pro covers open-ended requests.",
+    ) -> None:
         """A request HighhX recognised only partly: say exactly what it did not know. Nothing ran."""
         self._pause()
         body = f"[bold]{escape(reason)}[/bold]"
         if suggestions:
             body += "\n" + "\n".join(f"[dim]→ {escape(s)}[/dim]" for s in suggestions)
-        body += "\n[dim]Nothing ran. /tools lists what HighhX can do; /pro covers open-ended requests.[/dim]"
+        body += f"\n[dim]{escape(footer)}[/dim]"
         self.console.print()
         self.console.print(
             Panel(
                 body,
-                title="[warn]I don't know this action yet[/warn]",
+                title=f"[warn]{escape(title)}[/warn]",
                 title_align="left",
                 border_style="yellow",
                 box=ROUNDED,

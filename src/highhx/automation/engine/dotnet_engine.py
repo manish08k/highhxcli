@@ -1,8 +1,10 @@
 """Client for the C#/.NET automation engine (``engine/dotnet``): a long-running subprocess that
 speaks the bridge protocol as JSON lines on stdin/stdout.
 
-The engine is started once per session, answers a ``status`` handshake (protocol version must
-match) and is stopped when the session ends. Each request has a deadline; a hung or crashed
+The engine is started once per session and answers a ``status`` handshake, sent at the oldest
+supported protocol version; after it HighhX speaks the version the engine reports (from
+``MIN_ENGINE_PROTOCOL`` to ``PROTOCOL_VERSION``; newer operations go to the built-in engine).
+It is stopped when the session ends. Each request has a deadline; a hung or crashed
 engine is killed and reported, never waited on forever.
 """
 
@@ -17,7 +19,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from highhx.automation.engine.bridge import EngineError, accessibility_denied
-from highhx.automation.engine.protocol import PROTOCOL_VERSION, request
+from highhx.automation.engine.protocol import MIN_ENGINE_PROTOCOL, PROTOCOL_VERSION, request
 from highhx.execution.cancellation import CancellationToken
 
 REQUEST_TIMEOUT = 30.0
@@ -31,6 +33,8 @@ class DotnetEngine:
         self.binary = binary
         self.cancel = cancel
         self._next = 0
+        self.protocol = MIN_ENGINE_PROTOCOL
+        """The version requests are sent at: the oldest for the handshake, then the engine's own."""
         self._lines: queue.Queue[str | None] = queue.Queue()
         try:
             self._process = subprocess.Popen(  # nosec B603 - fixed argv
@@ -51,11 +55,13 @@ class DotnetEngine:
         except EngineError:
             self.close()
             raise
-        if int(status.get("protocol") or 0) != PROTOCOL_VERSION:
+        self.protocol = int(status.get("protocol") or 0)
+        if not MIN_ENGINE_PROTOCOL <= self.protocol <= PROTOCOL_VERSION:
             self.close()
             raise EngineError(
                 "failed",
-                f"The .NET automation engine speaks protocol {status.get('protocol')}, HighhX needs {PROTOCOL_VERSION}.",
+                f"The .NET automation engine speaks protocol {status.get('protocol')}, HighhX needs "
+                f"{MIN_ENGINE_PROTOCOL}-{PROTOCOL_VERSION}.",
                 hint="Rebuild the engine from this HighhX version's engine/dotnet.",
             )
         self.version = str(status.get("version") or "")
@@ -69,7 +75,7 @@ class DotnetEngine:
         if self._process.poll() is not None or self._process.stdin is None:
             raise EngineError("failed", "The .NET automation engine is not running.")
         self._next += 1
-        message = request(op, args, self._next)
+        message = request(op, args, self._next, version=self.protocol)
         try:
             self._process.stdin.write(json.dumps(message) + "\n")
             self._process.stdin.flush()

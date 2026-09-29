@@ -1,0 +1,5 @@
+steps:
+  - {tool: computer_observe, args: {source: desktop}}
+  - {tool: computer_act, args: {source: desktop, action: "double_click_at:505,92"}}
+  - {tool: computer_act, args: {source: desktop, action: "click_at:505,92"}}
+  - {tool: computer_act, args: {source: desktop, action: "click_text:Pinned"}}

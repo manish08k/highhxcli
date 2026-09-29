@@ -34,6 +34,7 @@ HighhX Pro keeps all of this and adds **JEv / advanced reasoning** for open-ende
 | Project & files | `open my project` · `open the readme` · `open hello.py` · `show my files` · `list files in src` · `create a folder called test` · `create a file called hello.py` |
 | Developer | `run the tests` · `show git status` · `check git changes` · `run python hello.py` · `deploy staging` · `stop the backend` |
 | Workflows | any of the above joined by *and*, *then*, *and then*, *after that*, `,` — e.g. `open YouTube, then play lofi and after that press space` |
+| Files & context | `find my PDF` · `show me the latest report` · `find the architecture document from yesterday and open it` · `open my repository on GitHub` · `open it` · `the second one` · `no, I meant GitHub` — see [UNDERSTANDING.md](UNDERSTANDING.md) |
 
 Anything else gets a clear answer instead of a guess:
 
@@ -71,6 +72,11 @@ It is built from separate, testable parts:
 | `actions/resolver.py` | the developer rules (tests, git, deploy, services, workflows …) |
 | `decision/deterministic.py`, `decision/risk.py` | the decision, and risk classes |
 | `plans/planner.py`, `plans/schema.py` | the JSON plan, its schema and validation |
+
+When this grammar does not resolve a request, a second deterministic stage
+(`language/understand.py`) resolves references ("open it", "the second one"), corrections,
+project files and the project's repository, and turns every request into HXIR — or asks when
+something is unclear. See [UNDERSTANDING.md](UNDERSTANDING.md).
 
 No similarity matching, no model, no network: the same request in the same project always
 gives the same decision. `highhx do --plan "…"` shows it; add `--json` for the full decision.

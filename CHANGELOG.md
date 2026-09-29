@@ -6,6 +6,76 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Goal tasks: `highhx computer task`.** A goal runs as a loop — observe the page, choose one
+  generic action, execute it through the computer runtime (safety policy, confirmation, audit),
+  verify the expected result, recover or replan — until the goal's success conditions hold or
+  a well-defined failure. Logged as TASK / PLAN / OBSERVE / ACTION / RESULT / VERIFY /
+  RECOVERY / FINAL, and to `<data dir>/tasks/<task id>.jsonl`.
+- **Task IR**: goals as validated JSON (closed schemas; `--schema` prints them) with generic
+  browser primitives, element targets discovered from the page (ids, role and name, attribute
+  filters), `expect` conditions, success and failure conditions, `if` branches and bounded
+  `repeat` loops. No primitive runs code or commands.
+- HighhX Free builds Task IR from the deterministic resolver (site data from the target
+  registry, no per-site code); `--ir FILE` runs Task IR for any site. HighhX Pro's AI planner
+  writes Task IR for requests nobody programmed and chooses each action from the page's
+  accessibility tree; it also takes over when a deterministic plan fails.
+
+- **Understanding requests as data (HXIR).** When the deterministic grammar does not resolve a
+  request, a second deterministic stage turns it into HXIR v1 — goal, clauses, entities with
+  evidence, constraints, references, ambiguities — with a closed, versioned schema. Only a
+  resolved HXIR runs, and only as catalog actions re-validated against the catalog; everything
+  that resolved before resolves exactly as before. See `docs/UNDERSTANDING.md`.
+- **References and conversation context** in the interactive session: `open it`, `close that
+  tab`, `the second one`, `the file I just opened`, `go back there`, `run the tests here`, and
+  corrections (`no, I meant GitHub`). A reference resolves only from what the session actually
+  did; with several candidates HighhX asks *Which one do you mean?* and the answer completes
+  the request. Nothing is guessed.
+- **Project files by description**: `find my PDF`, `show me the latest report`, `open the
+  architecture document from yesterday` — a new safe action, `filesystem.find` (names and dates
+  only, confined to the project, secret files skipped, verified). Files outside the project
+  (e.g. Downloads) are reported as outside the confinement policy, not searched.
+- **Constraints**: time windows, ordering, ordinals, file kinds, and execution constraints
+  (`don't open anything`, `without changing anything`), which are enforced — a contradicting
+  plan does not run.
+- More phrasings: `can u …`, `… pls`, `take me to …`, `go back to …`, `close that tab`,
+  `open my HighhX project`, `open my repository on GitHub`, `start the browser` (asks when
+  several browsers are installed).
+
+- **The HighhX Computer Runtime.** Native desktop observation and control on macOS, Windows and
+  Linux, through one Python API (`from highhx.computer import HighhXDriver`) and the automation
+  protocol version 2: screenshots, applications, windows (list, move, resize), the accessibility
+  tree with element bounds, the element at a point, clicks at points (right, double, triple, and
+  best-effort background delivery), drags, wheel scrolling at a point, menus, quitting
+  applications and the clipboard. Each platform reports per feature what it supports and why not
+  (`highhx computer status`). Design informed by Cua (MIT); no Cua code or dependency.
+- 13 `computer.*` actions (`observe`, `screenshot`, `windows`, `apps`, `element_at`, `click_at`,
+  `move`, `drag`, `menu`, `window`, `quit`, `clipboard_read`, `clipboard_write`) with verification
+  where the effect is observable; clicks at points, drags, menus, quitting and the clipboard
+  always ask. CLI: `highhx computer screenshot | windows | at | move | drag | menu | window | quit
+  | clipboard | protocol`, `click --at/--text`, `scroll --at`.
+- HighhX Pro's agent can use them through `computer_act` (e.g. `click_at:640,400`,
+  `menu:File > Save`), as the agent, with the same approvals; desktop observations include
+  element positions.
+- Optional perception: `click --text` finds text by accessibility, then OCR (tesseract).
+- The computer-operations contract is exported as `schemas/computer-protocol.json`.
+
+### Changed
+
+- The HighhX browser reports a failed or timed-out page load as `NavigationError` (a kind of
+  `IntegrationError`), so callers can tell "the site answered with an error" from "the browser
+  connection failed".
+- `switch to the browser` no longer resolves to `git checkout browser` (say `switch to branch
+  browser` for the branch).
+- Clauses joined by `, and` (`…, and open the first one`) are split like `and`.
+- The automation protocol is version 2. An installed .NET engine (protocol 1) keeps working;
+  newer operations run on the built-in engine. Desktop scrolling now uses real wheel events.
+- Desktop automation is no longer refused on Windows and Linux: their backends do what the
+  platform allows and say what it does not.
+- Ambiguity and missing-information panels in the session say *Which one do you mean?* /
+  *I need more information* instead of *I don't know this action yet*.
+
 ## [0.6.4] - 2026-09-29
 
 `open <website>` in HighhX Free: the right tab, every time — and the project's own repository page.

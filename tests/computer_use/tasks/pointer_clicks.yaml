@@ -1,0 +1,5 @@
+id: pointer_clicks
+instruction: Press Increment three times and pin the note, clicking on the screen.
+success:
+  - pressed: {app: Notes, name: Increment, times: 3}
+  - checked: {app: Notes, name: Pinned, is: true}

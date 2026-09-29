@@ -1,0 +1,5 @@
+id: fill_and_save
+instruction: Title the note "Plan" and save it.
+success:
+  - field_value: {app: Notes, name: Title, equals: Plan}
+  - saved: {app: Notes}

@@ -1057,9 +1057,7 @@ class ChromeBrowser:
                     continue
                 elif error:
                     self._note(BrowserState.NAVIGATION_FAILED, "navigation_failed", f"{url}: {error}")
-                    raise IntegrationError(
-                        f"Could not open {url}: {error}", hint=_network_hint(error), details=problems
-                    )
+                    raise NavigationError(f"Could not open {url}: {error}", hint=_network_hint(error), details=problems)
                 self.wait_ready(cancel=cancel)
                 break
             except OperationCancelledError:
@@ -1069,7 +1067,7 @@ class ChromeBrowser:
                 # the connection is fine; the site is not answering. Retrying would only wait again.
                 self._note(BrowserState.NAVIGATION_FAILED, "site_timeout", f"{url} did not respond")
                 self._abandon_load(cancel)
-                raise IntegrationError(
+                raise NavigationError(
                     f"Could not open {url}: the site did not respond within {NAVIGATE_TIMEOUT:.0f}s.",
                     hint="The site may be down or very slow; HighhX stopped loading it. Try again later.",
                 ) from None
@@ -1519,6 +1517,10 @@ class ChromeBrowser:
 
 class ElementNotFoundError(IntegrationError):
     """The element from the last observation is gone (the UI changed)."""
+
+
+class NavigationError(IntegrationError):
+    """The site answered with an error (or never answered): the browser is fine; retrying now will not help."""
 
 
 def is_sign_in_window(url: str) -> bool:

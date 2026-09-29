@@ -1,0 +1,4 @@
+steps:
+  - {tool: computer_act, args: {source: desktop, action: quit, app: Notes}}         # refused: unsaved
+  - {tool: computer_act, args: {source: desktop, action: "menu:File > Save", app: Notes}}
+  - {tool: computer_act, args: {source: desktop, action: quit, app: Notes}}

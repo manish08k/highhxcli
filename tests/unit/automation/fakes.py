@@ -4,6 +4,7 @@ verification without touching the desktop or a browser."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -12,6 +13,14 @@ from highhx.actions.executor import ActionExecutor
 from highhx.actions.handlers import computer
 from highhx.actions.spec import ActionResult
 from highhx.automation.engine.bridge import AutomationBridge, EngineError
+from highhx.automation.engine.protocol import FEATURES
+from highhx.computer.driver import HighhXDriver
+
+PNG_1X1 = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d49444154789c6300010000050001"
+    "0d0a2db40000000049454e44ae426082"
+)
 
 
 class FakeEngine:
@@ -28,6 +37,21 @@ class FakeEngine:
         self.focus_fails = False
         self.title = "Untitled"
         self.clicks_change_ui = True
+        # version 2: a small desktop
+        self.pointer = (0, 0)
+        self.clipboard = ""
+        self.min_width = 0
+        """Windows refuse to be narrower than this (to test an unverified frame)."""
+        self.refuse_quit: set[str] = set()
+        self.menus = {"File": ["Save", "Close"], "Edit": ["Copy", "Paste"]}
+        self.chosen: list[list[str]] = []
+        self.windows = [
+            {"id": 7, "pid": 70, "app": "Notes", "title": "Untitled", "x": 0, "y": 25, "width": 800, "height": 600}
+        ]
+        self.elements = [
+            {"role": "button", "name": "Save", "bounds": [100, 100, 80, 30]},
+            {"role": "button", "name": "Delete", "bounds": [200, 100, 80, 30]},
+        ]
 
     def call(self, op: str, args: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((op, args))
@@ -53,11 +77,79 @@ class FakeEngine:
         if op == "click" and self.clicks_change_ui:
             self.title = f"after {args['name']}"
         if op == "inspect":
+            return {"app": self.front, "title": self.title, "elements": [dict(e) for e in self.elements]}
+        return self.version_2(op, args)
+
+    def _at(self, x: int, y: int) -> dict[str, Any] | None:
+        for element in self.elements:
+            ex, ey, width, height = element["bounds"]
+            if ex <= x < ex + width and ey <= y < ey + height:
+                return {**element, "app": self.front, "pid": 70}
+        return None
+
+    def version_2(self, op: str, args: dict[str, Any]) -> dict[str, Any]:
+        if op == "capabilities":
+            return {"platform": "fake", "features": {f: {"available": True, "detail": "fake"} for f in FEATURES}}
+        if op == "screen":
+            return {"width": 1440, "height": 900, "x": 0, "y": 0, "scale": 2.0}
+        if op == "screenshot":
+            Path(args["path"]).write_bytes(PNG_1X1)
+            return {"path": args["path"], "width": 1, "height": 1, "scale": 2.0, "window": args.get("window")}
+        if op == "apps":
             return {
-                "app": self.front,
-                "title": self.title,
-                "elements": [{"role": "button", "name": "Save"}, {"role": "button", "name": "Delete"}],
+                "apps": [
+                    {"name": a, "pid": 70, "bundle_id": "", "frontmost": a == self.front} for a in sorted(self.running)
+                ]
             }
+        if op == "windows":
+            return {"windows": [w for w in self.windows if not args.get("app") or w["app"] == args["app"]]}
+        if op == "window_frame":
+            window = next((w for w in self.windows if w["id"] == args["window"]), None)
+            if window is None:
+                raise EngineError("not_found", "no such window")
+            window.update(x=args["x"], y=args["y"], width=max(args["width"], self.min_width), height=args["height"])
+            return {
+                "window": window["id"],
+                "app": window["app"],
+                "frame": [window[k] for k in ("x", "y", "width", "height")],
+            }
+        if op == "quit":
+            if args["app"] not in self.running:
+                raise EngineError("not_found", f"{args['app']} is not running")
+            if args["app"] in self.refuse_quit:
+                return {
+                    "app": args["app"],
+                    "quit": False,
+                    "detail": f"{args['app']} is still running (it may be asking to save)",
+                }
+            self.running.discard(args["app"])
+            return {"app": args["app"], "quit": True, "detail": ""}
+        if op == "cursor":
+            return {"x": self.pointer[0], "y": self.pointer[1]}
+        if op in ("move", "click_at"):
+            self.pointer = (args["x"], args["y"])
+            if op == "click_at":
+                return {**args, "element": self._at(args["x"], args["y"])}
+            return {"x": args["x"], "y": args["y"]}
+        if op == "drag":
+            self.pointer = (args["to_x"], args["to_y"])
+            return {"from": [args["from_x"], args["from_y"]], "to": [args["to_x"], args["to_y"]]}
+        if op == "element_at":
+            found = self._at(args["x"], args["y"])
+            if found is None:
+                raise EngineError("not_found", "no element there")
+            return found
+        if op == "menu":
+            items = self.menus.get(args["path"][0], [])
+            if len(args["path"]) != 2 or args["path"][1] not in items:
+                raise EngineError("not_found", f"{args['app']} has no menu item {args['path'][-1]!r}")
+            self.chosen.append(list(args["path"]))
+            return {"app": args["app"], "path": args["path"]}
+        if op == "clipboard_read":
+            return {"text": self.clipboard, "has_text": bool(self.clipboard)}
+        if op == "clipboard_write":
+            self.clipboard = args["text"]
+            return {"characters": len(args["text"])}
         return {"op": op, **args}
 
     def sent(self, *ops: str) -> list[tuple[str, dict[str, Any]]]:
@@ -70,8 +162,8 @@ class FakeEngine:
 @pytest.fixture
 def engine(monkeypatch: pytest.MonkeyPatch) -> FakeEngine:
     fake = FakeEngine()
-    bridge = AutomationBridge(fake)
-    monkeypatch.setattr(ActionExecutor, "automation", lambda self, cancel=None: bridge)
+    driver = HighhXDriver(AutomationBridge(fake))  # the real driver and bridge over a recording engine
+    monkeypatch.setattr(ActionExecutor, "driver", lambda self, cancel=None: driver)
     return fake
 
 

@@ -25,6 +25,7 @@ from highhx.language.parser import normalise
 if TYPE_CHECKING:
     from highhx.commands import App
     from highhx.language.targets import TargetRegistry
+    from highhx.project.index import ProjectFileIndex
 
 COMMON_ENVIRONMENTS = ("dev", "development", "test", "staging", "stage", "qa", "preview", "production", "prod")
 SERVICE_WORDS = ("server", "backend", "frontend", "api", "web", "app", "worker", "db", "database", "services")
@@ -71,6 +72,7 @@ class ResolverContext:
     workflows: tuple[str, ...] = ()
     _targets: TargetRegistry | None = field(default=None, repr=False, compare=False)
     _repositories: tuple[str, ...] | None = field(default=None, repr=False, compare=False)
+    _files: ProjectFileIndex | None = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_app(cls, app: App) -> ResolverContext:
@@ -145,6 +147,14 @@ class ResolverContext:
         if self._repositories is None:
             self._repositories = repository_urls(self.root) if self.root is not None else ()
         return self._repositories
+
+    def files(self) -> ProjectFileIndex:
+        """The project's files (names and dates; built on first use, never at startup)."""
+        if self._files is None:
+            from highhx.project.index import ProjectFileIndex
+
+            self._files = ProjectFileIndex(self.root or Path())
+        return self._files
 
     def workflow(self, word: str) -> str | None:
         word = word.strip().lower()
@@ -284,8 +294,10 @@ def _branch(m: MatchLike, _ctx: ResolverContext) -> Step:
 
 def _checkout(m: MatchLike, ctx: ResolverContext) -> Step | None:
     said_branch = "branch" in m.group(0).lower() or m.group(0).lower().startswith(("checkout", "check out"))
-    if not said_branch and ctx.targets().app(m.group("ref")) is not None:
-        return None  # "switch to slack": the application (say "switch to branch slack" for git)
+    if not said_branch and (ctx.targets().app(m.group("ref")) is not None or m.group("ref").lower() == "browser"):
+        return (
+            None  # "switch to slack" / "switch to the browser": an application (say "switch to branch slack" for git)
+        )
     return Step("git.checkout", {"ref": m.group("ref")}, f"switch to {m.group('ref')}")
 
 

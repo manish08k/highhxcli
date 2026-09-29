@@ -79,6 +79,74 @@ steps:
 tests`, `highhx do open chrome and search for Adele`, `highhx do open localhost:3000`.
 Requests that need understanding are refused with a pointer to `highhx agent`.
 
+## Goal tasks (Task IR)
+
+`highhx computer task` works toward a goal instead of running a fixed list: it observes the
+page, chooses the next generic action, executes it through the runtime above (safety policy,
+confirmation, audit), verifies the expected result, and recovers or replans when a step
+fails. Every run is logged as `TASK`, `PLAN`, `OBSERVE`, `ACTION`, `RESULT`, `VERIFY`,
+`RECOVERY` and `FINAL`, and written to `<data dir>/tasks/<task id>.jsonl`.
+
+```bash
+highhx computer task "open YouTube and play adhento gani"    # Free: from the deterministic resolver
+highhx computer task --ir contact.json                       # any site, from Task IR you write
+highhx --dry-run computer task "open github"                 # show the Task IR, run nothing
+highhx computer task --schema                                # the JSON Schemas
+```
+
+A task is structured JSON, validated before anything runs:
+
+```json
+{
+  "goal": "Find the shop's contact email",
+  "context": {"start_url": "https://books.example"},
+  "constraints": {"max_steps": 20, "timeout": 120, "stay_on_site": true},
+  "steps": [
+    {"action": "browser.navigate", "value": "https://books.example", "reason": "open the site"},
+    {"if": {"element": "button:Accept cookies"},
+     "then": [{"action": "browser.click", "target": "button:Accept cookies", "reason": "dismiss the banner"}]},
+    {"action": "browser.click", "target": "link:Contact", "reason": "contact details live there",
+     "expect": {"url_contains": "/contact"}},
+    {"action": "browser.read", "value": "[\\w.+-]+@[\\w-]+\\.[\\w.]+", "reason": "extract the address"}
+  ],
+  "success_conditions": [{"text_matches": "@"}],
+  "failure_conditions": [{"text": "Access denied"}],
+  "allow_replanning": true
+}
+```
+
+- **Primitives** (generic, never per site): `browser.navigate`, `observe`, `find`, `click`,
+  `type`, `read`, `scroll`, `select`, `press`, `wait`, `new_tab`, `close_tab`, `switch_tab`,
+  `back`, `forward`, `upload`, `download`, `screenshot`, `verify`, `recover` — plus the planner
+  decisions `task.done`, `task.fail`, `task.ask_user`. There is no primitive that runs code or
+  commands, and the schemas are closed: an unknown field or action is an error.
+- **Targets** are discovered from the page: an element id from the last observation (`e12`), a
+  role and name (`button:Search`, `textbox="Email"`, `link#2`), attribute filters
+  (`link[href*=/watch]#1`).
+- **Conditions** (`expect`, success and failure conditions, `if`, `repeat … until`):
+  `url_contains`, `title_contains`, `text`, `text_matches`, `element`, `absent`,
+  `media_playing`, `download_completed`.
+- **Control flow**: `{"if": condition, "then": [...], "else": [...]}` and
+  `{"repeat": {"steps": [...], "until": condition, "max": n}}` (at most 25 iterations, nested at
+  most 3 deep).
+
+**Who plans.** On HighhX Free the steps come from you (`--ir`) or from the deterministic
+resolver — the target registry supplies a site's address, search URL and what a result link
+looks like; there is no per-site code, and a site that is not in the registry is just a URL.
+On HighhX Pro, a request nobody programmed ("open LeetCode and solve one problem") is turned
+into Task IR by the AI planner, which then proposes one validated action at a time from the
+page's accessibility tree (page text is passed as untrusted data). Pro also takes over when a
+deterministic plan fails (`allow_replanning`). The planner's actions run as the **agent**: it
+cannot type passwords or payment details, and sending, submitting, buying or deleting asks you.
+
+**Recovery, never blind repetition.** After a failure HighhX observes the page again, then:
+waits for a slow element; scrolls to reveal a missing one and retries once (nothing happened
+the first time); retries only actions that cannot happen twice (navigate, read, scroll …) after
+a lost connection; never repeats a click, keystroke or submission whose outcome is unknown; and
+otherwise hands the problem to the planner. An action that failed on a page is never proposed
+again on that same page. Limits end every task: `max_steps`, `max_failures`, `timeout`,
+per-action timeouts, a repeat cap per action and a no-progress detector. Ctrl+C cancels.
+
 ## Reliability
 
 - A browser command is sent **once**. If the connection drops or the browser crashes after a
@@ -104,3 +172,14 @@ Requests that need understanding are refused with a pointer to `highhx agent`.
 Sensitive actions (including pressing Enter in a form, which submits it) ask for
 confirmation. In scripts and CI, `--yes` confirms **your own** deterministic actions; the
 agent's sensitive actions always need a person.
+
+## Native desktop control (the HighhX Computer Runtime)
+
+Beyond the browser, HighhX observes and operates desktop applications on macOS, Windows and
+Linux: the accessibility tree with element positions, windows and applications, screenshots,
+clicks at points (double, right, in the background), drags, wheel scrolling, menus, window
+geometry and the clipboard — `highhx computer windows`, `click --at X,Y`, `menu APP "File > Save"`
+… and, for HighhX Pro's agent, the same operations through `computer_act`. Every one is
+classified, approved and audited; input never reaches a terminal. What each platform supports,
+what has been tested where, and how it relates to Cua: [COMPUTER_RUNTIME.md](COMPUTER_RUNTIME.md).
+

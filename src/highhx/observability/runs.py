@@ -59,6 +59,8 @@ def redacted_decision(decision: Decision, redactor: Redactor | None) -> dict[str
             data["unknown"]["clause"] = redactor.redact(data["unknown"]["clause"])
             data["unknown"]["reason"] = redactor.redact(data["unknown"]["reason"])
         data["reason"] = redactor.redact(data["reason"])
+        if decision.hxir is not None:
+            data["hxir"] = decision.hxir.to_dict(scrub=redactor.redact)
     if data.get("plan"):
         data["plan"]["request"] = data["normalized"]
         for step in data["plan"]["steps"]:

@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import json
 import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from highhx.computer.browser import ChromeBrowser
-from highhx.computer.desktop import MacAccessibility, TesseractOCR, app_installed, launch_command, resolve_app
+from highhx.computer.desktop import TesseractOCR, app_installed, launch_command, resolve_app
 from highhx.computer.model import Observation
 from highhx.computer.providers import Capability, ComputerUseProvider
 from highhx.computer.runtime import ActionOutcome, ComputerRuntime
-from highhx.core.errors import NotFoundError, UsageError
+from highhx.core.errors import IntegrationError, NotFoundError, UsageError
 from highhx.execution.cancellation import CancellationToken
 from highhx.execution.command import CommandSpec, join_command
 from highhx.safety.actions import ActionDescriptor, ActionKind, Actor, attrs
@@ -21,7 +20,7 @@ from highhx.safety.gate import ActionGate
 from highhx.utils.paths import user_data_dir
 
 if TYPE_CHECKING:
-    from highhx.automation.engine.bridge import AutomationBridge
+    from highhx.computer.driver import HighhXDriver
 
 SOURCES = ("browser", "desktop")
 """Sources that can be observed *and* acted on."""
@@ -49,14 +48,15 @@ class ComputerSession:
         self._browser: ChromeBrowser | None = None
         self._runtimes: dict[str, ComputerRuntime] = {}
         self._desktop_app: str | None = None
-        self._automation: AutomationBridge | None = None
+        self._driver: HighhXDriver | None = None
 
-    def automation(self) -> AutomationBridge:
-        """The automation bridge for desktop operations — one per session, shared by HighhX
-        Free's actions and HighhX Pro's agent tools: the C#/.NET engine when installed, else
-        the Python engine (see :mod:`highhx.automation.engine`)."""
-        if self._automation is None:
+    def driver(self) -> HighhXDriver:
+        """The HighhX Computer API for desktop operations — one per session, shared by HighhX Free's
+        actions and HighhX Pro's agent tools, on the C#/.NET engine when installed (its newer
+        operations on the built-in engine) or the built-in engine (see :mod:`highhx.automation.engine`)."""
+        if self._driver is None:
             from highhx.automation.engine.bridge import open_bridge
+            from highhx.computer.driver import HighhXDriver
 
             engine = self.gate.engine
 
@@ -75,8 +75,8 @@ class ComputerSession:
                 code = 0 if result.ok else (result.exit_code or 1)
                 return code, result.stdout or "", result.stderr or result.error or ""
 
-            self._automation = open_bridge(runner)
-        return self._automation
+            self._driver = HighhXDriver(open_bridge(runner, cancel=self.cancel))
+        return self._driver
 
     # ------------------------------------------------------------- providers
     @property
@@ -88,15 +88,10 @@ class ComputerSession:
     def provider(self, source: str) -> ComputerUseProvider:
         if source == "browser":
             return self.browser
-        if source == "desktop":
-            if sys.platform != "darwin":
-                raise UsageError(
-                    "Native desktop automation is only implemented on macOS.",
-                    hint="Use browser automation (`--source browser`) on this platform.",
-                )
+        if source == "desktop":  # every platform: what it cannot do, its backend says (never faked)
             from highhx.automation.engine.provider import BridgeDesktopProvider
 
-            return BridgeDesktopProvider(self.automation(), self._desktop_app)
+            return BridgeDesktopProvider(self.driver(), self._desktop_app)
         raise UsageError(f"Unknown source {source!r} (expected: {', '.join(SOURCES)})")
 
     def runtime(self, source: str = "browser") -> ComputerRuntime:
@@ -111,8 +106,9 @@ class ComputerSession:
         return TesseractOCR().read_screen(cancel=self.cancel)
 
     def capabilities(self) -> list[Capability]:
+        desktop = [Capability(f.name, f.available, f.detail) for f in self.driver().capabilities().values()]
         return [
-            MacAccessibility().capability(),
+            *desktop,
             self.browser.capability(),
             TesseractOCR().capability(),
             Capability("vision", False, "no vision provider is bundled; structured perception is used instead"),
@@ -158,22 +154,24 @@ class ComputerSession:
         return ActionOutcome(f"launch:{app}", ok, running, action.summary, None, problems)
 
     def _is_running(self, app: str, timeout: float = 10.0) -> bool | None:
-        """Verify the launch. macOS answers without Accessibility permission; elsewhere unknown."""
+        """Verify the launch through the computer runtime. On macOS the application name is the
+        process name; elsewhere a friendly name ("Google Chrome") need not match one, so: unknown."""
         if sys.platform != "darwin":
             return None
-        engine = self.gate.engine
-        script = f"Application({json.dumps(app)}).running()"
+        driver = self.driver()
         deadline = time.monotonic() + timeout
         while True:
-            result = engine.capture(CommandSpec(["osascript", "-l", "JavaScript", "-e", script], timeout=10))
-            if result.ok and result.stdout.strip() == "true":
-                return True
+            try:
+                if driver.running(app):
+                    return True
+            except IntegrationError:
+                return None  # the runtime could not tell (e.g. no such application): not a failed launch
             if time.monotonic() >= deadline or self.cancel.wait(0.3):
                 return False
 
     def close(self) -> None:
-        if self._automation is not None:
-            self._automation.close()
-            self._automation = None
+        if self._driver is not None:
+            self._driver.end_session()
+            self._driver = None
         if self._browser is not None:
             self._browser.close()

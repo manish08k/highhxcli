@@ -51,6 +51,7 @@ ACTIONS: dict[str, ActionInfo] = {
     "filesystem.create": ActionInfo("create", "filesystem", "file_exists"),
     "filesystem.write": ActionInfo("write", "filesystem", "file_exists"),
     "filesystem.read": ActionInfo("read", "filesystem", "command_captured"),
+    "filesystem.find": ActionInfo("find", "filesystem", "files_found"),
     "shell.run": ActionInfo("run", "shell", "process_exit"),
     "project.test": ActionInfo("test", "project", "process_exit"),
     "project.build": ActionInfo("build", "project", "process_exit"),

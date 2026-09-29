@@ -156,6 +156,18 @@ def listing(e: Evidence) -> Check:
     return Check(VERIFIED, f"{len(e.output.get('entries') or [])} item(s)")
 
 
+@strategy("files_found", "Every file the search returned exists.")
+def files_found(e: Evidence) -> Check:
+    if not e.ok:
+        return Check(FAILED, e.error or "the search failed")
+    files = [str(f.get("path", "")) for f in e.output.get("files") or []]
+    if e.root is not None:
+        gone = [f for f in files if not (e.root / f).is_file()]
+        if gone:
+            return Check(FAILED, f"{gone[0]} no longer exists")
+    return Check(VERIFIED, f"{len(files)} file(s)" if files else "no matching files")
+
+
 @strategy("element_clicked", "The UI changed as expected after the click.")
 def element_clicked(e: Evidence) -> Check:
     return _from_action(e, "the click took effect")

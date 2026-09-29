@@ -12,18 +12,20 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-CONJUNCTION = re.compile(r"\s*(?:,?\s*and\s+then|,?\s*after\s+that,?|,?\s*then|\s+and|;|,)\s+", re.I)
+CONJUNCTION = re.compile(r"\s*(?:,?\s*and\s+then|,?\s*after\s+that,?|,?\s*then|,?\s*\band|;|,)\s+", re.I)
 POLITE = re.compile(
-    r"^(?:please\s+|pls\s+|can\s+you\s+|could\s+you\s+|would\s+you\s+|hey\s+|ok\s+|highhx,?\s+|i\s+want\s+to\s+|let'?s\s+|go\s+ahead\s+and\s+)+",
+    r"^(?:please\s+|pls\s+|plz\s+|(?:can|could|would|will)\s+(?:you|u)\s+(?:please\s+)?|hey\s+|ok\s+|okay\s+|highhx,?\s+"
+    r"|i\s+want\s+to\s+|i'?d\s+like\s+(?:you\s+)?to\s+|i\s+need\s+(?:you\s+)?to\s+|let'?s\s+|go\s+ahead\s+and\s+)+",
     re.I,
 )
+TRAILING = re.compile(r"(?:[,\s]+(?:please|pls|plz|thanks|thank\s+you|thx))+$", re.I)
 
 
 def normalise(text: str) -> str:
     """Trim politeness, trailing punctuation and extra spaces (the meaning is unchanged)."""
     text = " ".join(text.strip().split())
-    text = POLITE.sub("", text)
-    return text.rstrip(".!?").strip()
+    text = POLITE.sub("", text).rstrip(".!?").strip()
+    return TRAILING.sub("", text).rstrip(".!?,").strip()
 
 
 def split_clauses(text: str, verbs: Iterable[str]) -> list[str]:

@@ -1,0 +1,5 @@
+id: arrange_windows
+instruction: Put Notes on the left half of the screen and Finder on the right half.
+success:
+  - window: {app: Notes, frame: [0, 25, 720, 875]}
+  - window: {app: Finder, frame: [720, 25, 720, 875]}

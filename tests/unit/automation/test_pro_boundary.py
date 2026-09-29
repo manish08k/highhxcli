@@ -20,6 +20,7 @@ from highhx.agent.repl import AgentREPL
 from highhx.automation.engine.bridge import AutomationBridge
 from highhx.cloud import capabilities
 from highhx.cloud.capabilities import Capability
+from highhx.computer.driver import HighhXDriver
 from highhx.computer.session import ComputerSession
 from highhx.core.errors import PlanRequiredError
 from highhx.decision.advanced import ADVANCED_REASONING, advanced_reasoning_available, require_advanced_reasoning
@@ -119,8 +120,8 @@ def test_pro_agent_desktop_actions_run_through_the_common_bridge(
     agent_project: Path, make_session: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakeEngine()
-    bridge = AutomationBridge(fake)
-    monkeypatch.setattr(ComputerSession, "automation", lambda self: bridge)
+    driver = HighhXDriver(AutomationBridge(fake))
+    monkeypatch.setattr(ComputerSession, "driver", lambda self: driver)
     monkeypatch.setattr(sys, "platform", "darwin")
     steps = [
         reply("", [("computer_observe", {"source": "desktop"})]),
@@ -142,8 +143,8 @@ def test_free_actions_and_pro_tools_share_one_bridge_per_session(monkeypatch: py
     session = ComputerSession(type("Gate", (), {"engine": engine})(), actor=Actor.AGENT)  # type: ignore[arg-type]
     monkeypatch.setattr(sys, "platform", "darwin")
     provider = session.provider("desktop")
-    assert provider.bridge is session.automation()  # type: ignore[attr-defined]
-    assert session.automation().name == "python"  # no .NET engine installed here → the Python engine
+    assert provider.driver is session.driver()  # type: ignore[attr-defined]
+    assert session.driver().name == "python"  # no .NET engine installed here → the built-in engine
     session.close()
 
 

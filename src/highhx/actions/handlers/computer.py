@@ -19,8 +19,6 @@ from highhx.actions.spec import ActionContext, ActionResult, Inputs
 from highhx.agent.permissions import relative_to_root
 from highhx.agent.tools.base import ToolError
 from highhx.agent.tools.files import FileChange
-from highhx.automation.engine.bridge import AutomationBridge, EngineError
-from highhx.automation.engine.protocol import MODIFIERS, ProtocolError
 from highhx.core.errors import IntegrationError
 from highhx.execution.command import CommandSpec
 from highhx.language.targets import DEFAULT_SEARCH, Site, default_registry, user_targets_file
@@ -116,27 +114,6 @@ def _run(ctx: ActionContext, argv: list[str], *, action: str, policy: str, captu
     return result.stdout if capture else ""
 
 
-def bridge(ctx: ActionContext) -> AutomationBridge:
-    """The automation bridge for desktop UI operations (see :mod:`highhx.automation.engine`)."""
-    return ctx.executor.automation(ctx.cancel)
-
-
-def _call(ctx: ActionContext, op: str, **args: Any) -> dict[str, Any]:
-    """One bridge operation; a refusal (a terminal is frontmost) is the action's error, not a crash."""
-    try:
-        return bridge(ctx).call(op, **args)
-    except ProtocolError as exc:
-        raise ToolError(str(exc)) from None
-    except EngineError as exc:
-        if exc.code == "refused":
-            raise ToolError(exc.message) from None
-        raise
-
-
-def frontmost_app(ctx: ActionContext) -> str:
-    return str(_call(ctx, "frontmost").get("app") or "")
-
-
 # ---------------------------------------------------------------- browser
 def _app_for(name: str | None) -> Any:
     if not name:
@@ -151,7 +128,9 @@ def _app_for(name: str | None) -> Any:
 def _open_url_with(ctx: ActionContext, url: str, app: Any) -> ActionResult:
     """Open ``url`` in a browser HighhX cannot drive (Safari, Firefox): the OS opens it there.
     HighhX cannot see that page, so the result is honest about it: opened, not verified."""
-    _call(ctx, "open_url", url=url, app=app.platform_name)
+    from highhx.actions.handlers.desktop import run
+
+    run(ctx, lambda d: d.open_url(url, app=app.platform_name))
     return ActionResult(
         True,
         output={"url": url, "app": app.name},
@@ -305,107 +284,6 @@ def browser_find(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     ][:50]
     return ActionResult(
         True, output={"url": observation.url, "matches": found}, summary=f"{len(found)} match(es) for {text!r}"
-    )
-
-
-# --------------------------------------------------------------- computer
-def computer_focus(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    """Bring an application to the front — launching it first when it is not running — and
-    verify that it is frontmost."""
-    app = _app_for(str(inputs["app"]))
-    if app is None:
-        raise ToolError("no application given")
-    name = app.platform_name
-    launched = False
-    if not _call(ctx, "running", app=name).get("running"):
-        launched = bool(_call(ctx, "launch", app=name).get("running"))
-        if not launched:
-            return ActionResult(False, output={"app": app.name}, error=f"{app.name} did not start", verified=False)
-    focused = _call(ctx, "focus", app=name)
-    ok = bool(focused.get("frontmost"))
-    session = ctx.computer()
-    session._desktop_app = name
-    session._runtimes.pop("desktop", None)
-    actual = str(focused.get("actual") or "")
-    return ActionResult(
-        ok,
-        output={"app": app.name, "frontmost": ok, "launched": launched, "engine": bridge(ctx).name},
-        summary=f"{'opened and ' if launched else ''}switched to {app.name}",
-        verified=ok,
-        error="" if ok else f"{app.name} is not in front ({actual or 'another application'} is)",
-    )
-
-
-def computer_type(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    text = str(inputs["text"])
-    app = frontmost_app(ctx)
-    _call(ctx, "type", text=text)
-    return ActionResult(
-        True, output={"app": app, "characters": len(text)}, summary=f"typed {len(text)} character(s) into {app}"
-    )
-
-
-def parse_keys(combo: str) -> tuple[list[str], str]:
-    parts = [p.strip().lower() for p in combo.replace(" ", "+").split("+") if p.strip()]
-    if not parts:
-        raise ToolError("no key given")
-    modifiers, key = parts[:-1], parts[-1]
-    unknown = [m for m in modifiers if m not in MODIFIERS]
-    if unknown:
-        raise ToolError(f"unknown modifier(s): {', '.join(unknown)} (use cmd, ctrl, alt/option, shift)")
-    return modifiers, key
-
-
-def computer_press(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    key = str(inputs["key"]).lower()
-    app = frontmost_app(ctx)
-    _call(ctx, "key", key=key)
-    return ActionResult(True, output={"app": app, "key": key}, summary=f"pressed {key} in {app}")
-
-
-def computer_hotkey(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    modifiers, key = parse_keys(str(inputs["keys"]))
-    if not modifiers:
-        return computer_press(ctx, {"key": key})
-    app = frontmost_app(ctx)
-    _call(ctx, "hotkey", modifiers=modifiers, key=key)
-    combo = "+".join([*modifiers, key])
-    return ActionResult(True, output={"app": app, "keys": combo}, summary=f"pressed {combo} in {app}")
-
-
-def computer_click(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    return _desktop_step(ctx, {"click": str(inputs["target"])}, float(inputs.get("timeout") or 10))
-
-
-def computer_scroll(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    direction = str(inputs.get("direction") or "down")
-    if str(inputs.get("source") or "browser") == "browser":
-        return _flow_step(ctx, {"scroll": direction})
-    app = frontmost_app(ctx)
-    _call(ctx, "scroll", direction=direction, amount=int(inputs.get("amount") or 3))
-    return ActionResult(True, output={"app": app, "direction": direction}, summary=f"scrolled {direction} in {app}")
-
-
-def _desktop_step(ctx: ActionContext, step: dict[str, Any], timeout: float = 10.0) -> ActionResult:
-    """One step through the computer runtime over the bridge: element resolution, the per-element
-    safety check, the action, and re-observation to verify it."""
-    from highhx.automation.engine.provider import BridgeDesktopProvider
-    from highhx.computer.flows import Flow, FlowRunner
-    from highhx.computer.runtime import ComputerRuntime
-
-    session = ctx.computer()
-    provider = BridgeDesktopProvider(bridge(ctx), session._desktop_app)
-    runtime = ComputerRuntime(provider, session.gate, actor=session.actor, tool=session.tool, cancel=ctx.cancel)
-    result = FlowRunner(runtime, launch=session.launch).run(Flow("action", [step], timeout))
-    entry: dict[str, Any] = result.steps[0] if result.steps else {"ok": False, "error": "nothing ran"}
-    detail = str(entry.get("error") or "; ".join(str(p) for p in entry.get("problems") or []))
-    verified = entry.get("verified")
-    return ActionResult(
-        bool(result.ok),
-        output={"step": entry},
-        summary=str(entry.get("action", "")),
-        verified=verified if isinstance(verified, bool) else None,
-        error="" if result.ok else detail,
     )
 
 

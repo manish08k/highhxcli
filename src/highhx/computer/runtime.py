@@ -45,7 +45,14 @@ class InvalidActionError(ValidationError):
     """The requested action is not one of the valid candidates for the current UI."""
 
 
-EXTENDED_VERBS = {"hover": "click", "double_click": "click", "download": "click", "drag": "click", "upload": "type"}
+EXTENDED_VERBS = {
+    "hover": "click",
+    "double_click": "click",
+    "right_click": "click",
+    "download": "click",
+    "drag": "click",
+    "upload": "type",
+}
 """Actions on an element that are valid wherever its base action is (not offered to the AI agent
 as candidates, so its choices stay compact; deterministic requests and flows use them)."""
 

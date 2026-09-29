@@ -150,8 +150,10 @@ FAKE_DOTNET = textwrap.dedent(
     for line in sys.stdin:
         req = json.loads(line)
         op, args = req["op"], req["args"]
-        if op == "status":
+        if op == "status":  # the handshake: answered at any version
             out = {"ok": True, "result": {"engine": "dotnet", "protocol": protocol, "version": "1.0.0", "ok": True}}
+        elif req["v"] != protocol:  # like the C# engine: every other request at its own version
+            out = {"ok": False, "error": {"code": "invalid_request", "message": f"protocol version {protocol} expected"}}
         elif op == "focus":
             out = {"ok": False, "error": {"code": "accessibility_denied", "message": "not trusted"}}
         elif op == "launch":
@@ -198,8 +200,29 @@ def test_dotnet_client_speaks_the_protocol(tmp_path: Path) -> None:
 def test_dotnet_client_refuses_another_protocol_version(tmp_path: Path) -> None:
     from highhx.automation.engine.dotnet_engine import DotnetEngine
 
-    with pytest.raises(EngineError, match="protocol 2"):
-        DotnetEngine(_fake_engine(tmp_path, protocol=2))
+    for version in (0, 3):  # older than HighhX still speaks, or newer than it knows
+        with pytest.raises(EngineError, match=f"protocol {version}"):
+            DotnetEngine(_fake_engine(tmp_path, protocol=version))
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="uses a POSIX shell script as the engine")
+def test_a_protocol_1_engine_keeps_working_and_newer_ops_go_to_the_built_in_engine(tmp_path: Path) -> None:
+    from highhx.automation.engine.dotnet_engine import DotnetEngine
+
+    engine = DotnetEngine(_fake_engine(tmp_path, protocol=1))
+    fallback = FakeEngine()
+    try:
+        assert engine.protocol == 1
+        bridge = AutomationBridge(engine, fallback=fallback)
+        assert bridge.call("scroll", direction="down")["echo"] == "scroll"  # version 1: the .NET engine
+        bridge.call("screen")  # version 2: the built-in engine
+        bridge.call("scroll", direction="down", x=10, y=20)  # a version-2 argument: the built-in engine
+        assert [op for op, _ in fallback.calls] == ["screen", "scroll"]
+        with pytest.raises(EngineError) as unsupported:
+            AutomationBridge(engine).call("screen")  # nothing newer to fall back to: said, not faked
+        assert unsupported.value.code == "unsupported" and "protocol 2" in unsupported.value.message
+    finally:
+        engine.close()
 
 
 # ------------------------------------------------------------ C# conformance
@@ -212,8 +235,9 @@ def _csharp_list(source: str, name: str) -> set[str]:
 def test_the_csharp_engine_mirrors_the_protocol() -> None:
     source = (CSHARP / "Protocol.cs").read_text(encoding="utf-8")
     assert "public const int Version = 1;" in source
-    assert _csharp_list(source, "Ops") == set(OPS)
-    assert _csharp_list(source, "KeyboardOps") == {name for name, op in OPS.items() if op.keyboard}
+    version_1 = {name for name, op in OPS.items() if op.since == 1}  # the version the C# engine declares
+    assert _csharp_list(source, "Ops") == version_1
+    assert _csharp_list(source, "KeyboardOps") == {name for name in version_1 if OPS[name].keyboard}
     assert _csharp_list(source, "Modifiers") == set(MODIFIERS.values())
     assert _csharp_list(source, "Roles") == set(ROLES)
     assert _csharp_list(source, "TerminalApps") == set(bridge_module.TERMINAL_APPS)
