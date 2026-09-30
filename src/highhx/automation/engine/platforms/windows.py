@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from highhx.automation.engine.bridge import EngineError
-from highhx.automation.engine.platforms import Backend, feature, png_size
+from highhx.automation.engine.platforms import BOUNDS_TOLERANCE, Backend, feature, png_size
 
 VK = {
     "enter": 0x0D,
@@ -306,17 +306,34 @@ switch ($Mode) {
     Emit @{ app = $name; title = [string]$root.Current.Name; elements = $out }
   }
   'click' {
+    # $B name, $C role, $D index among exact matches ('' = none), $E observed bounds 'x,y,w,h' ('' = none)
     $root = RootOf $A
     $all = @($root.FindAll($Scope, $Any) | Where-Object { $C -eq '' -or $C -eq 'any' -or (RoleOf $_) -eq $C })
-    $match = @($all | Where-Object { $_.Current.Name -eq $B })
-    if ($match.Count -eq 0) { $match = @($all | Where-Object { $_.Current.Name.IndexOf($B, [StringComparison]::OrdinalIgnoreCase) -ge 0 }) }
-    if ($match.Count -eq 0) { Emit @{ error = 'not_found' }; exit 0 }
-    if ($match.Count -gt 1 -and -not ($match[0].Current.Name -eq $B)) {
-      Emit @{ error = 'ambiguous'; names = @($match | Select-Object -First 5 | ForEach-Object { $_.Current.Name }) }; exit 0
+    $exact = @($all | Where-Object { $_.Current.Name -eq $B })
+    if ($D -ne '') {
+      if ([int]$D -ge $exact.Count) { Emit @{ error = 'stale'; count = $exact.Count }; exit 0 }
+      $el = $exact[[int]$D]
+    } elseif ($exact.Count -gt 1) {
+      Emit @{ error = 'ambiguous'; names = @($exact | Select-Object -First 5 | ForEach-Object { $_.Current.Name }) }; exit 0
+    } elseif ($exact.Count -eq 1) {
+      $el = $exact[0]
+    } else {
+      $match = @($all | Where-Object { $_.Current.Name.IndexOf($B, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+      if ($match.Count -eq 0) { Emit @{ error = 'not_found' }; exit 0 }
+      if ($match.Count -gt 1) {
+        Emit @{ error = 'ambiguous'; names = @($match | Select-Object -First 5 | ForEach-Object { $_.Current.Name }) }; exit 0
+      }
+      $el = $match[0]
     }
-    $el = $match[0]
+    $described = Describe $el
+    if ($E -ne '' -and $described.bounds) {
+      $want = @($E.Split(',') | ForEach-Object { [int]$_ })
+      for ($i = 0; $i -lt 4; $i++) {
+        if ([Math]::Abs($described.bounds[$i] - $want[$i]) -gt @@TOLERANCE@@) { Emit @{ error = 'moved'; element = $described }; exit 0 }
+      }
+    }
     $pressed = Press $el
-    Emit @{ element = (Describe $el); pressed = $pressed }
+    Emit @{ element = $described; pressed = $pressed }
   }
   'at' {
     $el = $UIA::FromPoint((New-Object System.Windows.Point([double]$A, [double]$B)))
@@ -351,7 +368,7 @@ switch ($Mode) {
   'clipboard-write' { Set-Clipboard -Value $A; Emit @{ ok = $true } }
   default { Emit @{ error = 'unknown_mode' } }
 }
-"""
+""".replace("@@TOLERANCE@@", str(BOUNDS_TOLERANCE))
 
 
 def uia_script() -> Path:
@@ -649,13 +666,31 @@ class WindowsBackend(Backend):
         data = self.uia("tree", app or "", str(limit), what="Read the accessibility tree")
         return {"app": data.get("app") or "", "title": data.get("title") or "", "elements": data.get("elements") or []}
 
-    def op_click(self, name: str, role: str | None = None, app: str | None = None) -> dict[str, Any]:
-        data = self.uia("click", app or "", name, role or "", what=f"Click {name}")
-        if data.get("error") == "not_found":
-            raise EngineError("not_found", f"No {role or 'element'} named {name!r}.")
-        if data.get("error") == "ambiguous":
+    def op_click(
+        self,
+        name: str,
+        role: str | None = None,
+        app: str | None = None,
+        index: int | None = None,
+        bounds: list[int] | None = None,
+    ) -> dict[str, Any]:
+        observed = ",".join(str(v) for v in bounds) if bounds else ""
+        data = self.uia(
+            "click", app or "", name, role or "", "" if index is None else str(index), observed, what=f"Click {name}"
+        )
+        label = f"{role or 'element'} named {name!r}"
+        error = data.get("error")
+        if error == "not_found":
+            raise EngineError("not_found", f"No {label}.")
+        if error == "ambiguous":
             names = ", ".join(repr(n) for n in data.get("names") or [])
-            raise EngineError("not_found", f"{name!r} matches several elements ({names}); use the exact name.")
+            raise EngineError("ambiguous_target", f"{name!r} matches several elements ({names}); say which one.")
+        if error in ("stale", "moved"):
+            raise EngineError(
+                "stale_target",
+                f"The {label} that was observed is gone or has moved; the UI changed.",
+                hint="Observe again and choose the element from the new observation.",
+            )
         element = data.get("element") or {}
         if not data.get("pressed"):
             bounds = element.get("bounds")

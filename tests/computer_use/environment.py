@@ -9,6 +9,7 @@ import copy
 from typing import Any
 
 from highhx.automation.engine.bridge import EngineError
+from highhx.automation.engine.platforms import choose_element
 from highhx.automation.engine.protocol import FEATURES
 
 
@@ -102,8 +103,18 @@ class SimulatedDesktop:
         ]
         return {"app": app or self.front, "title": target["window"]["title"], "elements": elements}
 
-    def op_click(self, name: str, role: str | None = None, app: str | None = None) -> dict[str, Any]:
-        element = self.element(name, app)
+    def op_click(
+        self,
+        name: str,
+        role: str | None = None,
+        app: str | None = None,
+        index: int | None = None,
+        bounds: list[int] | None = None,
+    ) -> dict[str, Any]:
+        elements = self.app(app)["elements"]
+        element = choose_element(
+            [(e, e["role"], e["name"], e["bounds"]) for e in elements], name, role, index=index, bounds=bounds
+        )
         self._activate(element)
         return {"app": app or self.front, "role": element["role"], "name": element["name"]}
 

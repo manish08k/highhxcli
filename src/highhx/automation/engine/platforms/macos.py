@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from highhx.automation.engine.bridge import EngineError, accessibility_denied
-from highhx.automation.engine.platforms import Backend, feature, png_size
+from highhx.automation.engine.platforms import Backend, choose_element, feature, png_size
 from highhx.automation.engine.protocol import KEY_CODES
 
 _DENIED_MARKERS = ("assistive access", "-25211", "not allowed to send keystrokes")
@@ -465,25 +465,23 @@ class MacBackend(Backend):
             ],
         }
 
-    def _find(self, observation: Any, name: str, role: str | None) -> Any:
-        wanted = name.lower()
-        candidates = [e for e in observation.elements if role in (None, "any") or e.role == role]
-        exact = [e for e in candidates if (e.name or "").lower() == wanted]
-        if exact:
-            return exact[0]
-        partial = [e for e in candidates if wanted in (e.name or "").lower()]
-        if len(partial) == 1:
-            return partial[0]
-        if len(partial) > 1:
-            names = ", ".join(repr(e.name) for e in partial[:5])
-            raise EngineError("not_found", f"{name!r} matches several elements ({names}); use the exact name.")
-        return None
-
-    def op_click(self, name: str, role: str | None = None, app: str | None = None) -> dict[str, Any]:
+    def op_click(
+        self,
+        name: str,
+        role: str | None = None,
+        app: str | None = None,
+        index: int | None = None,
+        bounds: list[int] | None = None,
+    ) -> dict[str, Any]:
         provider, observation = self._observe(app)
-        element = self._find(observation, name, role)
-        if element is None:
-            raise EngineError("not_found", f"No {role or 'element'} named {name!r} in {observation.application}.")
+        element = choose_element(
+            [(e, e.role, e.name or "", e.bounds) for e in observation.elements],
+            name,
+            role,
+            index=index,
+            bounds=bounds,
+            where=observation.application,
+        )
         provider.click(element.id, cancel=self.cancel)
         return {"app": observation.application, "role": element.role, "name": element.name}
 
@@ -509,5 +507,8 @@ class MacBackend(Backend):
         if not name:
             raise EngineError("invalid_request", "verify element needs name")
         _provider, observation = self._observe(app)
-        found = self._find(observation, name, role)
-        return {"ok": found is not None, "detail": f"{name!r} {'found' if found else 'not found'}"}
+        wanted = name.lower()
+        found = any(
+            wanted in (e.name or "").lower() for e in observation.elements if role in (None, "any") or e.role == role
+        )
+        return {"ok": found, "detail": f"{name!r} {'found' if found else 'not found'}"}

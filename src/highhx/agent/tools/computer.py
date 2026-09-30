@@ -24,6 +24,7 @@ from typing import Any
 from highhx.agent.tools.base import Tool, ToolContext, ToolError, ToolResult, truncate
 from highhx.approvals.risk import RiskLevel
 from highhx.cloud.plans import AGENT_COMPUTER_USE
+from highhx.computer.guidance import COMPUTER_USE_GUIDANCE
 from highhx.computer.model import candidates
 from highhx.computer.runtime import ActionOutcome, ComputerRuntime
 from highhx.computer.session import OBSERVE_SOURCES, SOURCES
@@ -187,17 +188,23 @@ class ComputerActTool(Tool):
     feature = AGENT_COMPUTER_USE
     mutating = True
     risk = RiskLevel.NORMAL
-    description = """
+    description = (
+        """
 Perform ONE action from the valid action ids returned by computer_observe (for example
-click:e12, type:e4 with text, press:enter, scroll:down, select:e7 with text). Ids from an
-older observation may be stale — observe again if the UI changed. Sensitive controls
+click:e12, type:e4 with text, press:enter, scroll:down, select:e7 with text). Sensitive controls
 (submit, pay, delete, send, install …) require the user's confirmation; you may not type
 passwords or payment details. The result says whether the action was verified.
+
+"""
+        + COMPUTER_USE_GUIDANCE
+        + """
 
 With source "desktop" you may also use a direct operation (clicks, drags, keys, menus, quitting
 and the clipboard always ask the user first; moving the pointer, windows and screenshots follow
 the approval mode):
-""" + "\n".join(f"  {v}" for v in DESKTOP_OPERATIONS.values())
+"""
+        + "\n".join(f"  {v}" for v in DESKTOP_OPERATIONS.values())
+    )
     schema = Obj(
         {
             "action": Prop(Str(min_length=1), required=True, description="An action id such as click:e12."),

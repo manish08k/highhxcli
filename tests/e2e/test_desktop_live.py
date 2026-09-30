@@ -160,3 +160,38 @@ def test_window_geometry_and_the_clipboard(fixture_app: tuple[Any, Any]) -> None
         assert driver.clipboard_read() == "highhx-e2e"
     finally:
         driver.clipboard_write(original or " ")
+
+
+def test_same_named_controls_are_targeted_exactly(fixture_app: tuple[Any, Any]) -> None:
+    from highhx.automation.engine.bridge import EngineError
+    from highhx.automation.engine.provider import BridgeDesktopProvider
+
+    driver, state = fixture_app
+    before = state()["adds"]
+    provider = BridgeDesktopProvider(driver, APP)
+    adds = [e for e in provider.observe().elements if e.name == "Add"]
+    assert len(adds) == 2 and adds[0].bounds != adds[1].bounds
+    provider.click(adds[1].id)  # the second "Add", as observed
+    assert state(lambda s: s["adds"] == [before[0], before[1] + 1])["adds"] == [before[0], before[1] + 1]
+    for kwargs, code in (({}, "ambiguous_target"), ({"index": 0, "bounds": (1, 1, 5, 5)}, "stale_target")):
+        with pytest.raises(EngineError) as info:
+            driver.press_element("Add", role="button", app=APP, **kwargs)
+        assert info.value.code == code
+    time.sleep(0.5)
+    assert state()["adds"] == [before[0], before[1] + 1]  # the refusals pressed nothing
+
+
+def test_verify_state_against_a_real_window(fixture_app: tuple[Any, Any]) -> None:
+    driver, _state = fixture_app
+    window = driver.windows(APP)[0]
+    frame = {"x": window.x, "y": window.y, "width": window.width, "height": window.height}
+    check = driver.verify_state(
+        window.id,
+        [
+            {"window": {"bounds": frame}},
+            {"element": {"selector": {"role": "button", "label_contains": "Increment"}, "enabled": True}},
+        ],
+    )
+    assert check.ok, check.to_dict()
+    moved = driver.verify_state(window.id, [{"window": {"bounds": {**frame, "x": window.x + 50}}}], timeout_ms=0)
+    assert moved.status == "unsatisfied"

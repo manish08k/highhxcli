@@ -67,7 +67,7 @@
       }
     },
     "click": {
-      "description": "Press the UI element with this accessible name (and role) \u2014 never raw coordinates.",
+      "description": "Press the UI element with this accessible name (and role) \u2014 never raw coordinates. Version 2: `index` picks one of several elements with exactly that name (in tree order; without it several are `ambiguous_target`), and `bounds` \u2014 where it was observed \u2014 makes an element that is gone or has moved a `stale_target` instead of a press on something else.",
       "since": 1,
       "keyboard": false,
       "args": {
@@ -95,6 +95,16 @@
           "type": "app",
           "required": false,
           "since": 1
+        },
+        "index": {
+          "type": "int",
+          "required": false,
+          "since": 2
+        },
+        "bounds": {
+          "type": "rect",
+          "required": false,
+          "since": 2
         }
       }
     },
@@ -554,11 +564,13 @@
   ],
   "errors": [
     "accessibility_denied",
+    "ambiguous_target",
     "failed",
     "invalid_request",
     "not_found",
     "refused",
     "screen_recording_denied",
+    "stale_target",
     "timeout",
     "unknown_op",
     "unsupported",

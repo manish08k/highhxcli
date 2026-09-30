@@ -8,6 +8,33 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **MCP: `highhx computer mcp`.** The desktop tools (observe, screenshot, windows, apps,
+  element_at, verify, launch, focus, click, click_at, move, drag, scroll, type, press, hotkey,
+  menu, window, quit, clipboard) for MCP clients over stdio, with their JSON schemas and
+  structured results. Every call is a `computer.*` action through the existing executor and
+  gate (audited with source `mcp`); permission is fixed at launch — `--mode read-only`,
+  `--allow TOOL` (a bounded set), `--yes` (the person pre-approves non-critical actions).
+- **Checked observation: `computer.verify` / `highhx computer verify` / `driver.verify_state`.**
+  Up to eight predicates about one exact window (exists, frame, an element's existence, value,
+  enabled, selected), each satisfied / unsatisfied / unknown — unknown is never success —
+  sampled until they hold stably or a timeout passes.
+- One computer-use guidance text for the Pro agent's `computer_act` and MCP clients (semantic
+  targets before coordinates, observe → act once → verify, no blind retries).
+
+### Fixed
+
+- **A desktop press could reach a different control with the same name.** The runtime bound the
+  approved element, but engines re-found it by name and took the first match (macOS, Windows,
+  Linux). `click` now carries the observed occurrence and bounds: several matches without one
+  are `ambiguous_target`, a vanished or moved element is `stale_target`, and nothing is pressed.
+- **macOS saw two same-named controls as one.** System Events' `entireContents()` specifiers
+  are by name, so the second "Add" button was observed with the first one's position and every
+  press went to the first. The tree is now walked by position — and about 2.8× faster (property
+  values are fetched per container, never in bulk next to a password field).
+- **A perception click could land after its window moved.** A point found by accessibility or
+  OCR is bound to its window as the screen was read, and refused if that window moved, closed
+  or was covered before the click.
+
 - **Goal tasks: `highhx computer task`.** A goal runs as a loop — observe the page, choose one
   generic action, execute it through the computer runtime (safety policy, confirmation, audit),
   verify the expected result, recover or replan — until the goal's success conditions hold or

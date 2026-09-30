@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from highhx.automation.engine.bridge import EngineError
-from highhx.automation.engine.platforms import Backend, feature, png_size
+from highhx.automation.engine.platforms import Backend, choose_element, feature, png_size
 
 XDOTOOL_KEYS = {
     "enter": "Return",
@@ -474,38 +474,44 @@ class LinuxBackend(Backend):
                     queue.append(child)
         return found
 
-    def op_inspect(self, app: str | None = None, limit: int = 100) -> dict[str, Any]:
-        api = self._tree("Reading the accessibility tree")
-        root = self._app_node(api, app)
+    def _elements(self, api: Any, root: Any, limit: int) -> list[tuple[Any, dict[str, Any]]]:
+        """The nodes ``inspect`` reports, in its order — so ``click``'s ``index`` means the same element."""
         elements = []
         for node in self._walk(root, limit):
             item = self._describe(api, node)
             if item["role"] in ATSPI_ROLES.values() and item["role"] != "window":
-                elements.append(item)
+                elements.append((node, item))
             if len(elements) >= limit:
                 break
-        return {"app": root.get_name() or "", "title": "", "elements": elements}
+        return elements
 
-    def op_click(self, name: str, role: str | None = None, app: str | None = None) -> dict[str, Any]:
+    def op_inspect(self, app: str | None = None, limit: int = 100) -> dict[str, Any]:
+        api = self._tree("Reading the accessibility tree")
+        root = self._app_node(api, app)
+        return {
+            "app": root.get_name() or "",
+            "title": "",
+            "elements": [i for _n, i in self._elements(api, root, limit)],
+        }
+
+    def op_click(
+        self,
+        name: str,
+        role: str | None = None,
+        app: str | None = None,
+        index: int | None = None,
+        bounds: list[int] | None = None,
+    ) -> dict[str, Any]:
         api = self._tree("Clicking an element")
         root = self._app_node(api, app)
-        wanted = name.lower()
-        matches = []
-        for node in self._walk(root, 300):
-            item = self._describe(api, node)
-            if role not in (None, "any") and item["role"] != role:
-                continue
-            if item["name"].lower() == wanted:
-                matches = [(node, item)]
-                break
-            if wanted in item["name"].lower():
-                matches.append((node, item))
-        if not matches:
-            raise EngineError("not_found", f"No {role or 'element'} named {name!r} in {root.get_name()}.")
-        if len(matches) > 1:
-            names = ", ".join(repr(m[1]["name"]) for m in matches[:5])
-            raise EngineError("not_found", f"{name!r} matches several elements ({names}); use the exact name.")
-        node, item = matches[0]
+        node, item = choose_element(
+            [((n, i), i["role"], i["name"], i["bounds"]) for n, i in self._elements(api, root, 300)],
+            name,
+            role,
+            index=index,
+            bounds=bounds,
+            where=root.get_name() or "",
+        )
         if node.get_n_actions() > 0:
             node.do_action(0)
         elif item["bounds"]:

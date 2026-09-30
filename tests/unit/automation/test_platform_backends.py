@@ -367,7 +367,7 @@ def test_windows_ui_automation_runs_a_fixed_script_with_literal_arguments(
         "-File",
         str(tmp_path / "highhx-uia.ps1"),
     ]
-    assert argv[7:] == ["click", "notepad", "Save'; Remove-Item C:\\ -Recurse #", ""]  # data, never code (-File)
+    assert argv[7:] == ["click", "notepad", "Save'; Remove-Item C:\\ -Recurse #", "", "", ""]  # data, never code
 
 
 def test_windows_window_listing_and_frames() -> None:

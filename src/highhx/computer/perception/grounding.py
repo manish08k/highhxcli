@@ -7,6 +7,10 @@ scale factor (2.0 on Retina) to become desktop *points*, the space every input o
 
 Matching is exact before partial, case-insensitive; several equally good matches are an error
 listing them, never a guess.
+
+A grounded point is bound to the window under it when it was found (its id and frame — Cua binds
+a pixel click to the capture it came from). :func:`still_there` checks that binding right before
+the click: a window that moved, closed or was covered in the meantime makes the point stale.
 """
 
 from __future__ import annotations
@@ -19,7 +23,10 @@ from highhx.computer.model import UIElement
 from highhx.core.errors import HighhXError
 
 if TYPE_CHECKING:
-    from highhx.computer.driver import HighhXDriver
+    from highhx.computer.driver import HighhXDriver, Window
+
+FRAME_SLACK = 4
+"""Points a bound window may have shifted and still hold the grounded point where it was found."""
 
 
 class GroundingError(HighhXError):
@@ -34,9 +41,57 @@ class Grounded:
     """accessibility | ocr"""
     text: str
     bounds: tuple[int, int, int, int]
+    window: Window | None = None
+    """The window under ``point`` when it was grounded (None when windows cannot be listed)."""
 
     def to_dict(self) -> dict[str, Any]:
-        return {"point": list(self.point), "source": self.source, "text": self.text, "bounds": list(self.bounds)}
+        return {
+            "point": list(self.point),
+            "source": self.source,
+            "text": self.text,
+            "bounds": list(self.bounds),
+            "window": self.window.id if self.window else None,
+        }
+
+
+def window_at(windows: list[Window], point: tuple[int, int]) -> Window | None:
+    """The frontmost window containing ``point`` (``windows`` is front to back)."""
+    x, y = point
+    return next((w for w in windows if w.x <= x < w.x + w.width and w.y <= y < w.y + w.height), None)
+
+
+def _windows(driver: HighhXDriver) -> list[Window] | None:
+    try:
+        return driver.windows()
+    except EngineError:
+        return None  # windows cannot be listed here: the point stays unbound (reported as window None)
+
+
+def _bind(found: Grounded, windows: list[Window] | None) -> Grounded:
+    window = window_at(windows, found.point) if windows is not None else None
+    return Grounded(found.point, found.source, found.text, found.bounds, window)
+
+
+def still_there(driver: HighhXDriver, found: Grounded) -> str | None:
+    """Why ``found`` may no longer point at what was grounded — or None when its window is still
+    the frontmost one at the point, where it was."""
+    if found.window is None:
+        return None
+    was = found.window
+    windows = driver.windows()
+    now = window_at(windows, found.point)
+    name = was.app or "the window"
+    if now is not None and now.id != was.id:
+        return f"{name} is covered by {now.app or 'another window'} at {list(found.point)}"
+    current = next((w for w in windows if w.id == was.id), None)
+    if current is None:
+        return f"{name} closed after {found.text!r} was found"
+    frames = zip(
+        (current.x, current.y, current.width, current.height), (was.x, was.y, was.width, was.height), strict=True
+    )
+    if max(abs(a - b) for a, b in frames) > FRAME_SLACK:
+        return f"{name} moved or resized after {found.text!r} was found"
+    return None
 
 
 def best(elements: list[UIElement], text: str) -> UIElement | None:
@@ -69,13 +124,14 @@ def ground(driver: HighhXDriver, text: str, *, app: str | None = None, ocr: bool
     except EngineError as exc:
         reasons.append(f"accessibility: {exc.message}")
     if element is not None and element.bounds is not None:
-        return Grounded(_center(element.bounds), "accessibility", element.name, element.bounds)
+        found = Grounded(_center(element.bounds), "accessibility", element.name, element.bounds)
+        return _bind(found, _windows(driver))
     if not reasons:
         reasons.append("accessibility: no element with that name")
     if ocr:
-        found = _ocr(driver, text, reasons)
-        if found is not None:
-            return found
+        read = _ocr(driver, text, reasons)
+        if read is not None:
+            return read
     raise GroundingError(f"{text!r} is not on the screen ({'; '.join(reasons)}).")
 
 
@@ -92,6 +148,7 @@ def _ocr(driver: HighhXDriver, text: str, reasons: list[str]) -> Grounded | None
     except EngineError as exc:
         reasons.append(f"ocr: {exc.message}")
         return None
+    windows = _windows(driver)  # the desktop as captured: the point is bound to it, not to later state
     try:
         line = best(reader.read_image(shot.path).elements, text)
     finally:
@@ -102,4 +159,4 @@ def _ocr(driver: HighhXDriver, text: str, reasons: list[str]) -> Grounded | None
     scale = shot.scale or 1.0
     x, y, width, height = line.bounds
     bounds = (round(x / scale), round(y / scale), round(width / scale), round(height / scale))
-    return Grounded(_center(line.bounds, scale), "ocr", line.name, bounds)
+    return _bind(Grounded(_center(line.bounds, scale), "ocr", line.name, bounds), windows)

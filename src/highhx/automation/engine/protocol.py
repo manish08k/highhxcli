@@ -84,6 +84,8 @@ ERROR_CODES = frozenset(
         "screen_recording_denied",
         "not_found",
         "refused",
+        "stale_target",
+        "ambiguous_target",
         "timeout",
         "failed",
     }
@@ -116,7 +118,7 @@ class ProtocolError(ValueError):
 @dataclass(frozen=True)
 class Arg:
     kind: str
-    """str, int, coord, strs, url, app, key, modifiers, enum, png"""
+    """str, int, coord, rect, strs, url, app, key, modifiers, enum, png"""
     required: bool = False
     max_len: int = 200
     low: int = 0
@@ -127,6 +129,12 @@ class Arg:
     def check(self, name: str, value: Any) -> Any:
         if self.kind == "coord":
             return Arg("int", low=-COORDINATE_LIMIT, high=COORDINATE_LIMIT).check(name, value)
+        if self.kind == "rect":
+            if not isinstance(value, list) or len(value) != 4:
+                raise ProtocolError(f"{name} must be [x, y, width, height]")
+            corner = [Arg("coord").check(f"{name}[{i}]", v) for i, v in enumerate(value[:2])]
+            size = [Arg("int", high=COORDINATE_LIMIT).check(f"{name}[{i}]", v) for i, v in enumerate(value[2:], 2)]
+            return corner + size
         if self.kind == "strs":
             if not isinstance(value, list) or not 1 <= len(value) <= 8:
                 raise ProtocolError(f"{name} must list 1 to 8 names")
@@ -216,8 +224,17 @@ OPS: dict[str, Op] = {
         ),
         Op(
             "click",
-            {"name": Arg("str", required=True), "role": Arg("enum", choices=ROLES), "app": Arg("app")},
-            description="Press the UI element with this accessible name (and role) — never raw coordinates.",
+            {
+                "name": Arg("str", required=True),
+                "role": Arg("enum", choices=ROLES),
+                "app": Arg("app"),
+                "index": Arg("int", high=299, since=2),
+                "bounds": Arg("rect", since=2),
+            },
+            description="Press the UI element with this accessible name (and role) — never raw coordinates. "
+            "Version 2: `index` picks one of several elements with exactly that name (in tree order; without "
+            "it several are `ambiguous_target`), and `bounds` — where it was observed — makes an element that "
+            "is gone or has moved a `stale_target` instead of a press on something else.",
         ),
         Op(
             "type",

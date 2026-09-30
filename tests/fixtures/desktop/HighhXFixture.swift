@@ -8,6 +8,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let statePath: String
     var window: NSWindow!
     var count = 0
+    var adds = [0, 0]
     let label = NSTextField(labelWithString: "Count: 0")
     let name = NSTextField(string: "")
     let agree = NSButton(checkboxWithTitle: "Agree", target: nil, action: nil)
@@ -18,7 +19,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     func write() {
         let state: [String: Any] = [
-            "count": count, "name": name.stringValue, "agree": agree.state == .on,
+            "count": count, "adds": adds, "name": name.stringValue, "agree": agree.state == .on,
             "volume": Int(volume.doubleValue), "scrolled": Int(scroll.contentView.bounds.origin.y),
             "frame": [Int(window.frame.origin.x), Int(window.frame.origin.y),
                       Int(window.frame.size.width), Int(window.frame.size.height)],
@@ -29,13 +30,16 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     }
 
     @objc func increment() { count += 1; label.stringValue = "Count: \(count)"; write() }
+    // Two buttons with the same accessible name: only exact targeting tells them apart.
+    @objc func addFirst() { adds[0] += 1; write() }
+    @objc func addSecond() { adds[1] += 1; write() }
     @objc func changed() { write() }
     @objc func reset() { count = 0; label.stringValue = "Count: 0"; write() }
     func controlTextDidChange(_ notification: Notification) { write() }
     @objc func scrolled() { write() }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 480, height: 360),
+        window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 480, height: 400),
                           styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "HighhX Fixture"
         let button = NSButton(title: "Increment", target: self, action: #selector(increment))
@@ -53,7 +57,10 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         scroll.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled),
                                                name: NSView.boundsDidChangeNotification, object: scroll.contentView)
-        let stack = NSStackView(views: [label, button, name, agree, volume, scroll])
+        let pair = NSStackView(views: [NSButton(title: "Add", target: self, action: #selector(addFirst)),
+                                       NSButton(title: "Add", target: self, action: #selector(addSecond))])
+        pair.orientation = .horizontal
+        let stack = NSStackView(views: [label, button, name, agree, volume, scroll, pair])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)

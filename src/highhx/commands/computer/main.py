@@ -463,6 +463,78 @@ def computer_window(app: App, application: str | None, window: int | None, frame
     return run_action(app, "computer.window", {**target, "x": x, "y": y, "width": width, "height": height})
 
 
+@computer.command("verify", short_help="Check a window and its elements (satisfied / unsatisfied / unknown).")
+@click.argument("application", metavar="APP", required=False)
+@click.option("--id", "window", type=int, help="The window id (from `computer windows`) instead of APP.")
+@click.option("--frame", metavar="X,Y,WIDTH,HEIGHT", help="The window has this frame (4 points of slack).")
+@click.option("--element", "label", metavar="TEXT", help="An element whose name contains TEXT exists …")
+@click.option("--role", help="… with this role (button, textbox, checkbox …).")
+@click.option("--value", help="… and holds exactly this value.")
+@click.option(
+    "--expect",
+    "raw",
+    multiple=True,
+    metavar="JSON",
+    help="A predicate as JSON (repeatable; see docs/COMPUTER_RUNTIME.md).",
+)
+@click.option(
+    "--timeout-ms",
+    type=click.IntRange(0, 10_000),
+    default=5000,
+    show_default=True,
+    help="Keep sampling until the predicates hold or this passes (0: one sample).",
+)
+@click.option("--stable", type=click.IntRange(1, 5), default=2, show_default=True, help="Consecutive samples.")
+@pass_app
+def computer_verify(
+    app: App,
+    application: str | None,
+    window: int | None,
+    frame: str | None,
+    label: str | None,
+    role: str | None,
+    value: str | None,
+    raw: tuple[str, ...],
+    timeout_ms: int,
+    stable: int,
+) -> int:
+    """Verify APP's front window (or --id WINDOW) from fresh state: it exists, --frame, an
+    --element with --role/--value, or any --expect predicate. Exits 0 only when every predicate is
+    satisfied; an unknown (unobservable) predicate is not success."""
+    import json
+
+    if window is None and not application:
+        raise UsageError("Give APP or --id WINDOW.")
+    expect: list[dict[str, Any]] = [{"window": {"exists": True}}]
+    if frame:
+        try:
+            x, y, width, height = (int(v.strip()) for v in frame.split(","))
+        except ValueError:
+            raise UsageError("--frame needs X,Y,WIDTH,HEIGHT, e.g. 0,25,1200,800.") from None
+        expect = [{"window": {"bounds": {"x": x, "y": y, "width": width, "height": height}}}]
+    if label or role:
+        selector = {k: v for k, v in (("label_contains", label), ("role", role)) if v}
+        element: dict[str, Any] = {"selector": selector, "exists": True}
+        if value is not None:
+            element["value_equals"] = value
+        expect.append({"element": element})
+    elif value is not None:
+        raise UsageError("--value needs --element (and/or --role).")
+    for text in raw:
+        try:
+            expect.append(json.loads(text))
+        except ValueError:
+            raise UsageError(f"--expect is not JSON: {text!r}") from None
+    target: dict[str, Any] = {"window": window} if window is not None else {"app": application}
+    inputs = {**target, "expect": expect, "timeout_ms": timeout_ms, "stable_samples": stable}
+
+    def render(output: dict[str, Any]) -> None:
+        for p in output.get("predicates") or []:
+            app.output.plain(f"  #{p['index']} {p['status']}: {p['detail']}")
+
+    return run_action(app, "computer.verify", inputs, render)
+
+
 @computer.command("quit", short_help="Ask an application to quit.")
 @click.argument("application", metavar="APP")
 @pass_app
@@ -480,6 +552,50 @@ def computer_clipboard(app: App, text: str | None) -> int:
     if text is not None:
         return run_action(app, "computer.clipboard_write", {"text": text})
     return run_action(app, "computer.clipboard_read", {}, lambda o: app.output.plain(o.get("text") or ""))
+
+
+@computer.command("mcp", short_help="Serve the desktop tools to an MCP client over stdio.")
+@click.option(
+    "--mode",
+    type=click.Choice(["ask", "read-only", "auto-edit"]),
+    default="ask",
+    show_default=True,
+    help="read-only: observation tools only. ask/auto-edit: the approval rules of `highhx computer`.",
+)
+@click.option("--allow", multiple=True, metavar="TOOL", help="Offer only these tools (repeatable): a bounded set.")
+@pass_app
+def computer_mcp(app: App, mode: str, allow: tuple[str, ...]) -> int:
+    """Speak MCP (JSON-RPC over stdin/stdout) so an MCP client can observe and operate this
+    computer through HighhX: every tool is a computer.* action — classified, approved, audited
+    (source "mcp") and verified. Nobody can be asked over stdio, so an action that needs a
+    confirmation is refused unless you start the server with --yes (`highhx --yes computer mcp`),
+    which pre-approves non-critical actions as your own --yes does. Register it with, e.g.:
+    claude mcp add highhx-computer -- highhx computer mcp"""
+    import sys
+
+    from highhx import __version__
+    from highhx.actions.catalog import catalog_for
+    from highhx.actions.executor import ActionExecutor
+    from highhx.agent.ui import TerminalUI
+    from highhx.computer.mcp import McpServer
+    from highhx.safety.actions import Actor
+    from highhx.safety.audit import AuditLog
+    from highhx.safety.gate import ActionGate, ApprovalMode
+
+    gate = ActionGate(
+        app.engine,
+        TerminalUI(app.output.err_console, app.output.symbols, interactive=False),
+        source="mcp",
+        mode=ApprovalMode(mode),
+        assume_yes=app.options.yes,
+        audit=AuditLog(app.db, app.redactor) if app.db is not None else None,
+    )
+    executor = ActionExecutor(app, gate, actor=Actor.USER, catalog=catalog_for(app))
+    try:
+        server = McpServer(executor, read_only=mode == "read-only", allow=allow, version=__version__)
+        return server.serve(sys.stdin, sys.stdout)
+    finally:
+        executor.close()
 
 
 @computer.command("run", short_help="Run a deterministic automation flow (YAML).")

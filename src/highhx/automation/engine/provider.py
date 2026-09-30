@@ -4,7 +4,8 @@ The computer runtime (:mod:`highhx.computer.runtime`) resolves elements, classif
 (a "Delete" or "Send" button asks), acts and re-observes to verify. With this provider it
 does all of that through :class:`~highhx.computer.driver.HighhXDriver` — so desktop actions
 keep the runtime's per-element safety, and the engine only performs the operation. Presses go
-to the element by name (semantic targeting); double clicks, right clicks, hovering and dragging
+to the element by name, bound to the observed occurrence and position (semantic targeting with
+stale-target detection); double clicks, right clicks, hovering and dragging
 use the element's accessibility bounds (and refuse when the element reports none).
 """
 
@@ -56,10 +57,25 @@ class BridgeDesktopProvider:
         x, y, width, height = element.bounds
         return x + width // 2, y + height // 2
 
+    def _occurrence(self, element: UIElement, role: str) -> int:
+        """Which of the same-named elements ``element`` is, counted as the engine counts them."""
+        wanted = element.name.lower()
+        same = [e.id for e in self._last.values() if e.name.lower() == wanted and role in ("any", e.role)]
+        return same.index(element.id)
+
     def click(self, element_id: str, *, cancel: CancellationToken | None = None) -> None:
+        """Press exactly the observed element: its occurrence among same-named elements and its
+        observed bounds go with the name, so a changed UI is a ``stale_target``, not a press on
+        another control that happens to share the name."""
         element = self._element(element_id)
         role = element.role if element.role in ROLES else "any"
-        self.driver.press_element(element.name, role=role, app=self.application)
+        self.driver.press_element(
+            element.name,
+            role=role,
+            app=self.application,
+            index=self._occurrence(element, role),
+            bounds=element.bounds,
+        )
 
     def double_click(self, element_id: str, *, cancel: CancellationToken | None = None) -> None:
         self.driver.double_click(*self._center(element_id))

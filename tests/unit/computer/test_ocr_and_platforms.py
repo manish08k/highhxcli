@@ -131,3 +131,35 @@ def test_desktop_automation_is_available_everywhere_and_honest_about_prerequisit
     session = ComputerSession(SimpleNamespace(engine=engine), actor=Actor.USER)  # type: ignore[arg-type]
     assert session.provider("desktop").name == "accessibility"  # no longer refused here
     session.close()
+
+
+def test_macos_elements_are_addressed_by_position_and_rechecked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two controls with one name are two paths; a press re-checks the name at its path first."""
+    import json
+
+    from highhx.computer import desktop as desktop_module
+    from highhx.computer.browser import ElementNotFoundError
+
+    assert ".entireContents()" not in desktop_module._AX_OBSERVE  # its specifiers are by name
+    observed = {
+        "app": "Dialogs",
+        "elements": [
+            {"index": "6", "role": "button", "name": "Add", "bounds": [215, 635, 50, 26]},
+            {"index": "7", "role": "button", "name": "Add", "bounds": [271, 635, 50, 26]},
+        ],
+    }
+    calls: list[tuple[str, ...]] = []
+    answer = {"act": "ok"}
+
+    def osascript(self: MacAccessibility, script: str, *args: str, cancel: object = None) -> str:
+        calls.append(args)
+        return json.dumps(observed) if script == desktop_module._AX_OBSERVE else answer["act"]
+
+    monkeypatch.setattr(MacAccessibility, "_osascript", osascript)
+    provider = MacAccessibility("Dialogs")
+    second = provider.observe().elements[1]
+    provider.click(second.id)
+    assert calls[-1] == ("Dialogs", "7", "press", "", "Add")  # the path, and the name to find there
+    answer["act"] = "stale"  # the UI changed: another element (or none) is at that path now
+    with pytest.raises(ElementNotFoundError, match="no longer where it was observed"):
+        provider.type_text(second.id, "x")

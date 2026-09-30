@@ -150,32 +150,59 @@ function run(argv) {
                  AXCheckBox: 'checkbox', AXRadioButton: 'radio', AXPopUpButton: 'combobox', AXComboBox: 'combobox',
                  AXMenuItem: 'menuitem', AXMenuButton: 'button', AXLink: 'link', AXTabGroup: 'tab', AXSlider: 'slider',
                  AXSearchField: 'searchbox', AXStaticText: 'text', AXHeading: 'heading'};
+  // Controls whose children are never acted on: not descended into (fewer Apple events).
+  const leaves = {AXStaticText: 1, AXTextField: 1, AXSecureTextField: 1, AXCheckBox: 1, AXRadioButton: 1,
+                  AXSlider: 1, AXImage: 1, AXButton: 1, AXPopUpButton: 1, AXMenuButton: 1, AXValueIndicator: 1};
   let title = '';
-  let items = [];
-  try { const w = proc.windows[0]; title = w.name() || ''; items = w.entireContents(); }
+  let win;
+  try { win = proc.windows[0]; title = win.name() || ''; }
   catch (e) { return JSON.stringify({app: proc.name(), title, error: String(e)}); }
-  for (let i = 0; i < items.length && out.length < 400; i++) {
-    const el = items[i];
-    let r = ''; try { r = el.role(); } catch (e) { continue; }
-    const role = roles[r]; if (!role) continue;
-    const get = f => { try { const v = el[f](); return v === null || v === undefined ? '' : String(v); } catch (e) { return ''; } };
-    const secure = r === 'AXSecureTextField';
-    let bounds = null;
-    try { const p = el.position(), z = el.size(); bounds = [p[0], p[1], z[0], z[1]]; } catch (e) {}
-    out.push({index: i, role, name: get('name') || get('description') || get('title'),
-              value: secure ? '' : get('value').slice(0, 300), enabled: get('enabled') !== 'false',
-              focused: get('focused') === 'true', secure, bounds});
-  }
+  // Depth-first, by position: each element's path ("5.0.2") names exactly one element. (The
+  // specifiers entireContents() returns are by *name*, so two controls called "Add" were the
+  // same element — the first one.)
+  let visited = 0;
+  const walk = (node, path, depth) => {
+    let kids, all;
+    try { kids = node.uiElements; all = kids.role(); } catch (e) { return; }  // every child's role: one event
+    // Each property of every child in one event when the platform allows it, else child by child.
+    // A secure field's value is never read, not even in bulk: then values are read child by child.
+    const cache = all.indexOf('AXSecureTextField') >= 0 ? {value: null} : {};
+    const bulk = f => { if (!(f in cache)) { try { cache[f] = kids[f](); } catch (e) { cache[f] = null; } } return cache[f]; };
+    for (let i = 0; i < all.length && out.length < 400 && visited < 4000; i++) {
+      const el = kids[i];
+      const at = path === '' ? String(i) : path + '.' + i;
+      visited++;
+      const r = all[i] || '';
+      const role = roles[r];
+      if (role) {
+        const raw = f => { const b = bulk(f); if (b) return b[i]; try { return el[f](); } catch (e) { return null; } };
+        const get = f => { const v = raw(f); return v === null || v === undefined ? '' : String(v); };
+        const secure = r === 'AXSecureTextField';
+        let bounds = null;
+        const p = raw('position'), z = raw('size');
+        if (p && z) bounds = [p[0], p[1], z[0], z[1]];
+        out.push({index: at, role, name: get('name') || get('description') || get('title'),
+                  value: secure ? '' : get('value').slice(0, 300), enabled: get('enabled') !== 'false',
+                  focused: get('focused') === 'true', secure, bounds});
+      }
+      if (!leaves[r] && depth < 24) walk(el, at, depth + 1);
+    }
+  };
+  walk(win, '', 0);
   return JSON.stringify({app: proc.name(), title, elements: out});
 }
 """
 
 _AX_ACT = r"""
 function run(argv) {
-  const [appName, index, action, text] = argv;
+  const [appName, path, action, text, expected] = argv;
   const se = Application('System Events');
   const procs = appName ? se.processes.whose({name: appName}) : se.processes.whose({frontmost: true});
-  const el = procs[0].windows[0].entireContents()[Number(index)];
+  let el = procs[0].windows[0];
+  try { for (const i of path.split('.')) el = el.uiElements[Number(i)]; el.role(); }
+  catch (e) { return 'stale'; }
+  const get = f => { try { const v = el[f](); return v === null || v === undefined ? '' : String(v); } catch (e) { return ''; } };
+  if ((get('name') || get('description') || get('title')) !== expected) return 'stale';  // the UI changed
   if (action === 'press') { el.actions['AXPress'].perform(); }
   else if (action === 'set') { el.focused = true; el.value = text; }
   else if (action === 'focus') { el.focused = true; }
@@ -205,7 +232,8 @@ class MacAccessibility:
     def __init__(self, application: str | None = None, *, timeout: float = 20.0) -> None:
         self.application = resolve_app(application) if application else None
         self.timeout = timeout
-        self._last: dict[str, int] = {}
+        self._last: dict[str, tuple[str, str]] = {}
+        """element id → (its path in the window, its name when observed)"""
 
     def _osascript(self, script: str, *args: str, cancel: CancellationToken | None = None) -> str:
         if sys.platform != "darwin":
@@ -261,7 +289,7 @@ class MacAccessibility:
         self._last = {}
         for n, item in enumerate(data.get("elements") or [], start=1):
             element_id = f"a{n}"
-            self._last[element_id] = int(item["index"])
+            self._last[element_id] = (str(item["index"]), str(item.get("name") or ""))
             elements.append(
                 UIElement(
                     id=element_id,
@@ -283,16 +311,20 @@ class MacAccessibility:
             captured_at=time.time(),
         )
 
-    def _index(self, element_id: str) -> str:
+    def _act(self, element_id: str, action: str, text: str, cancel: CancellationToken | None) -> None:
         if element_id not in self._last:
             raise IntegrationError(f"Element {element_id} is not in the latest observation.")
-        return str(self._last[element_id])
+        from highhx.computer.browser import ElementNotFoundError
+
+        path, name = self._last[element_id]
+        if self._osascript(_AX_ACT, self.application or "", path, action, text, name, cancel=cancel) == "stale":
+            raise ElementNotFoundError(f"{name or element_id!r} is no longer where it was observed; the UI changed.")
 
     def click(self, element_id: str, *, cancel: CancellationToken | None = None) -> None:
-        self._osascript(_AX_ACT, self.application or "", self._index(element_id), "press", "", cancel=cancel)
+        self._act(element_id, "press", "", cancel)
 
     def type_text(self, element_id: str, text: str, *, cancel: CancellationToken | None = None) -> None:
-        self._osascript(_AX_ACT, self.application or "", self._index(element_id), "set", text, cancel=cancel)
+        self._act(element_id, "set", text, cancel)
 
     def press(self, key: str, *, cancel: CancellationToken | None = None) -> None:
         if key not in _KEYS:

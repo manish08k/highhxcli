@@ -10,6 +10,7 @@ agent, approvals, audit and CLI. Its design was informed by [Cua](https://github
 request ─ NLP / HXIR ─ planner ─ plan runner ─ ActionExecutor ──┐   HighhX Free (computer.* actions)
 agent ─ computer_observe / computer_act ─ ActionExecutor ───────┤   HighhX Pro  (actor = agent)
 highhx computer … ─ ActionExecutor ─────────────────────────────┤   the CLI
+highhx computer mcp ─ tools/call ─ ActionExecutor ──────────────┤   MCP clients (stdio)
                                                                 ▼
                                classify · approve · audit · verify (the action's own check)
                                                                 ▼
@@ -30,10 +31,10 @@ replace it.
 ```python
 from highhx.computer import HighhXDriver
 
-with HighhXDriver.create() as driver:            # target="local"; the configured engine
-    state = driver.observe(screenshot=False)      # active app and window, windows, accessibility tree
-    driver.press_element("Save", role="button")   # semantic: by accessible name
-    driver.click(640, 400, count=2)               # at a desktop point (double click)
+with HighhXDriver.create() as driver:  # target="local"; the configured engine
+    state = driver.observe(screenshot=False)  # active app and window, windows, accessibility tree
+    driver.press_element("Save", role="button")  # semantic: by accessible name
+    driver.click(640, 400, count=2)  # at a desktop point (double click)
     driver.type_text("hello")
     driver.hotkey("cmd+s")
     driver.invoke_menu("TextEdit", "File > Save")
@@ -43,8 +44,8 @@ with HighhXDriver.create() as driver:            # target="local"; the configure
 Other methods: `capabilities()`, `screen()`, `screenshot(window=None)`, `apps()`,
 `windows(app)`, `active()`, `get_ui_tree(app)`, `element_at(x, y)`, `cursor()`, `move`,
 `right_click`, `double_click`, `drag`, `scroll(direction, amount, at=)`, `press(key)`,
-`launch`, `focus`, `quit`, `open_url`, `clipboard_read`, `clipboard_write`, `verify`, and the
-session lifecycle — `session`, `list_sessions()`, `get_session(id)`, `end_session()`.
+`launch`, `focus`, `quit`, `open_url`, `clipboard_read`, `clipboard_write`, `verify`,
+`verify_state(window, expect)` (see [Checked observation](#checked-observation)), and the session lifecycle — `session`, `list_sessions()`, `get_session(id)`, `end_session()`.
 
 The API is synchronous, like the rest of HighhX (there is no event loop in HighhX);
 `asyncio.to_thread(driver.click, …)` makes any call awaitable. Coordinates are **desktop
@@ -65,14 +66,14 @@ tables are checked against it for the version it implements.
 
 | version 1 (every engine) | version 2 (the Computer Runtime) |
 |---|---|
-| `status` `frontmost` `launch` `focus` `running` `open_url` `click` (by name) `type` `key` `hotkey` `scroll` `wait` `inspect` `verify` | `capabilities` `screen` `screenshot` `apps` `windows` `window_frame` `quit` `click_at` `move` `cursor` `drag` `element_at` `menu` `clipboard_read` `clipboard_write`; `app` (background delivery) on `type`/`key`/`hotkey`; `x`/`y` on `scroll` |
+| `status` `frontmost` `launch` `focus` `running` `open_url` `click` (by name) `type` `key` `hotkey` `scroll` `wait` `inspect` `verify` | `capabilities` `screen` `screenshot` `apps` `windows` `window_frame` `quit` `click_at` `move` `cursor` `drag` `element_at` `menu` `clipboard_read` `clipboard_write`; `app` (background delivery) on `type`/`key`/`hotkey`; `x`/`y` on `scroll`; `index`/`bounds` (exact targeting) on `click` |
 
 Version negotiation: the .NET engine is sent its handshake at version 1 and then spoken to at
 the version it reports. Operations (or arguments) newer than an engine speaks go to the
 built-in engine; with no newer engine available they fail with the structured error
 `unsupported` — never silently dropped. Error codes: `invalid_request`, `unknown_op`,
 `unsupported`, `unsupported_platform`, `accessibility_denied`, `screen_recording_denied`,
-`not_found`, `refused`, `timeout`, `failed`.
+`not_found`, `refused`, `stale_target`, `ambiguous_target`, `timeout`, `failed`.
 
 ## Platforms
 
@@ -82,7 +83,7 @@ grant. An operation a platform cannot perform is an `unsupported_platform` error
 
 | feature | macOS | Windows | Linux |
 |---|---|---|---|
-| accessibility tree, element presses | System Events / AX (JXA) | UI Automation (PowerShell, fixed script, `-File`) | AT-SPI (PyGObject, when installed) |
+| accessibility tree, element presses | System Events / AX (JXA; elements addressed by position) | UI Automation (PowerShell, fixed script, `-File`) | AT-SPI (PyGObject, when installed) |
 | element at a point | `AXUIElementCopyElementAtPosition` | UIA `FromPoint` | AT-SPI `get_accessible_at_point` |
 | pointer: click / double / right, move, drag | CoreGraphics events | `SendInput` | xdotool (X11) |
 | wheel scrolling (at a point) | `CGEventCreateScrollWheelEvent2` | `SendInput` wheel | xdotool buttons 4–7 |
@@ -118,14 +119,58 @@ Perception ([`computer/perception`](../src/highhx/computer/perception)) is optio
 `ground(driver, "Export PDF")` finds text on screen — the accessibility tree first (exact
 names, then partial; several matches are an error, never a guess), then OCR of a screenshot
 (tesseract, when installed), converting pixels to points with the display scale. It powers
-`computer.click_at` with `text` and `highhx computer click --text`. No model is bundled; a vision
+`computer.click_at` with `text` and `highhx computer click --text`. A grounded point is bound to
+the window under it **as the screen was read** (for OCR: the window list taken with the
+screenshot, not after the slower OCR). Right before the click that window must still be the one
+at the point, unmoved (4 points of slack) — otherwise the click is refused (moved, closed or
+covered) and the text must be found again. This is Cua's capture binding (`capture_id`) for
+HighhX's one-shot captures, which are deleted after use. No model is bundled; a vision
 model can be added through the existing `VisionProvider` protocol.
+
+## Exact targeting
+
+An approved press reaches the element that was observed, or nothing. Engines find an element by
+its accessible name, so the computer runtime sends two more facts with the name (protocol 2):
+`index` — which of the elements with exactly that name it is, in tree order — and `bounds` —
+where it was observed. Every backend applies the same rule
+([`platforms.choose_element`](../src/highhx/automation/engine/platforms/__init__.py)):
+
+- several elements with the name and no `index` → `ambiguous_target` (never the first one);
+- the observed occurrence is gone, or it moved more than 4 points → `stale_target`;
+- partial names are used only when exactly one element matches.
+
+The runtime then observes again and decides anew; a refusal presses nothing. This is Cua's
+snapshot-bound `element_token` in HighhX's form: the runtime already re-observes and rebinds
+the approved element right before acting, and now the engine cannot substitute another control
+that shares its name. On macOS the tree is walked by position (`window.uiElements[5]…`): the
+specifiers System Events' `entireContents()` returns are *by name*, so two buttons called "Add"
+used to be one element — the first — both when observed and when pressed. A press also
+re-checks the name at the element's position before acting.
+
+## Checked observation
+
+`computer.verify` (`driver.verify_state`, `highhx computer verify`, MCP `verify`) evaluates one
+to eight ANDed predicates about one exact window, from fresh state:
+
+```json
+{"window": 4211, "expect": [
+  {"window": {"bounds": {"x": 0, "y": 25, "width": 1200, "height": 800, "tolerance": 4}}},
+  {"element": {"selector": {"role": "button", "label_contains": "Save"}, "enabled": false}},
+  {"element": {"selector": {"label_contains": "Title"}, "value_equals": "Q3 plan"}}
+], "timeout_ms": 5000, "stable_samples": 2}
+```
+
+Each predicate is `satisfied`, `unsatisfied` or `unknown`, and **unknown is never success**: a
+secret field's value, selection state the platform does not report, or an element absent from a
+bounded accessibility walk (absence cannot be proven, so `exists: false` is refused). Samples
+repeat every 200 ms until the predicates hold for `stable_samples` in a row or `timeout_ms`
+passes. Element predicates read the tree of the window's application (trees are per application).
 
 ## Safety and approvals
 
 | action | risk floor | who is asked |
 |---|---|---|
-| `computer.observe` `screenshot` `windows` `apps` `element_at` | low (read) | the agent per approval mode |
+| `computer.observe` `screenshot` `windows` `apps` `element_at` `verify` | low (read) | the agent per approval mode |
 | `computer.move` `window` | low | the agent per approval mode |
 | `computer.click_at` `drag` `menu` `quit` `clipboard_read` `clipboard_write` | medium | always (a person's own `--yes` counts; the agent never pre-approves) |
 | `computer.type` `hotkey` (existing) | medium | always |
@@ -143,13 +188,41 @@ model can be added through the existing `VisionProvider` protocol.
 - Element presses keep the computer runtime's per-element check ("Delete", "Send", "Pay" ask);
   desktop elements also gain double click, right click, hover and drag via their bounds.
 
+## MCP
+
+`highhx computer mcp` serves the desktop tools to MCP clients over stdio (JSON-RPC 2.0; MCP
+`2025-06-18`, also `2025-03-26` and `2024-11-05`): `initialize` (with the
+[guidance](../src/highhx/computer/guidance.py) as `instructions`), `ping`, `tools/list`,
+`tools/call`.
+
+```bash
+claude mcp add highhx-computer -- highhx computer mcp                  # ask: confirmations are refused
+claude mcp add highhx-computer -- highhx --yes computer mcp            # the person pre-approves
+claude mcp add highhx-computer -- highhx computer mcp --mode read-only # observation only
+```
+
+- **Tools** are the `computer.*` desktop actions (`observe`, `screenshot`, `windows`, `apps`,
+  `element_at`, `verify`, `launch`, `focus`, `click`, `click_at`, `move`, `drag`, `scroll`,
+  `type`, `press`, `hotkey`, `menu`, `window`, `quit`, `clipboard_read`, `clipboard_write`), with
+  their catalog JSON schemas and read-only/destructive hints. Results are the action's result as
+  `structuredContent`, a one-line text, and for `screenshot` the PNG as image content;
+  `isError` with `status` `denied`, `blocked`, `failed`, `refused` or `invalid`.
+- **Permission is fixed at launch**, by the person, through the existing action gate — there is
+  no second policy: `--mode read-only` lists only observation tools; `ask` (default) refuses what
+  needs a confirmation (nobody can be asked over stdio); `--yes` pre-approves non-critical
+  actions as the person's own `--yes` does (blocked and critical actions stay refused);
+  `--allow TOOL` (repeatable) offers a bounded set. The actions run as the person's (the server's
+  owner); audit rows carry source `mcp`.
+- One computer session per server process. No HTTP transport: HighhX never listens on a port.
+
 ## CLI
 
 `highhx computer status` (per-feature capabilities) · `observe --source desktop` ·
 `click SELECTOR | --at X,Y | --text TEXT [--right] [--double]` · `scroll DIR [--at X,Y]` ·
 `screenshot [--window ID]` · `windows [--app NAME] [--apps]` · `at X,Y` · `move X,Y` ·
 `drag X1,Y1 X2,Y2` · `menu APP PATH` · `window APP --frame X,Y,W,H` · `quit APP` ·
-`clipboard [--set TEXT]` · `protocol`. See [commands.md](commands.md).
+`clipboard [--set TEXT]` · `verify APP|--id ID [--frame …] [--element …] [--expect JSON]` · `mcp` ·
+`protocol`. See [commands.md](commands.md).
 
 ## Testing
 
@@ -160,24 +233,31 @@ model can be added through the existing `VisionProvider` protocol.
 | `tests/unit/automation/test_platform_backends.py` | macOS / Windows / Linux backends against fakes; real read-only Quartz calls on macOS |
 | `tests/unit/automation/test_computer_runtime_actions.py` | every new action through the executor: risk, approval and denial, verification |
 | `tests/unit/computer/test_driver.py` | the API, sessions, observation, perception |
+| `tests/unit/automation/test_element_targeting.py` | exact targeting: the rule, each backend, the provider end to end |
+| `tests/unit/computer/test_verify_state.py`, `tests/unit/automation/test_verify_action.py` | checked observation: predicates, tri-state, stability, the action and CLI |
+| `tests/unit/computer/test_grounding_binding.py` | perception's capture binding (moved, closed, covered; OCR binds at capture) |
+| `tests/unit/automation/test_mcp_server.py`, `tests/e2e/test_mcp_stdio.py` | MCP: discovery, schemas, results, errors, read-only / bounded / `--yes`, real stdio |
 | `tests/unit/agent/test_computer_act_desktop.py` | the Pro agent's desktop operations, approvals, refusals |
 | `tests/unit/commands/test_computer_commands.py` | the CLI commands |
 | `tests/computer_use/` | task → agent → runtime → simulated desktop → evaluator (a Cua-Bench-style harness; not shipped) |
-| `tests/e2e/test_desktop_live.py` + `tests/fixtures/desktop/HighhXFixture.swift` | real input on macOS (`HIGHHX_TEST_DESKTOP_INPUT=1`) |
+| `tests/e2e/test_desktop_live.py` + `tests/fixtures/desktop/HighhXFixture.swift` | real input on macOS (`HIGHHX_TEST_DESKTOP_INPUT=1`), including two buttons named "Add" and `verify_state` on a real window |
 
 ## Cua mapping
 
-Cua ([trycua/cua](https://github.com/trycua/cua), commit `c3941497`, inspected 2026-09-29) was
-audited component by component. For each: what it does, and what HighhX did with it.
+Cua ([trycua/cua](https://github.com/trycua/cua)) was audited component by component at commit
+`c3941497` (2026-09-29) and re-audited against the current source at `5272e492` (2026-09-30):
+the contract manifest, the live tool registrations, the driver skill pack, the action-support
+ledger, and the perception, MCP, permission and computer-history documents. For each component:
+what it does, and what HighhX did with it.
 
 | Cua component | purpose | HighhX outcome |
 |---|---|---|
-| `libs/cua-driver/contract` (`manifest.json`, 29 tools) | the operation contract | **Reimplemented** as protocol v2: `start/get/list/end_session` → `HighhXDriver` sessions; `get_desktop_state`, `get_screen_size` → `observe`, `screen`; `get_window_state` → `inspect` (+ bounds) and `screenshot --window`; `list_apps`, `list_windows`, `set_window_frame`, `click` (coordinates, count, button, background), `drag`, `scroll` (at a point), `move_cursor`, `get_cursor_position`, `type_text`, `press_key`, `hotkey`, `invoke_menu`, `clipboard_read/write`, `verify_state` → `verify` + each action's own verification; `parse_visual_regions` → `perception.ground` (OCR). Omitted: `get_agent_cursor_state`, `set_agent_cursor_enabled/motion/theme` (an on-screen cursor overlay — cosmetic); `escalate_session`, `get_session_state` (deprecated in Cua itself) |
+| `libs/cua-driver/contract` (`manifest.json`, 29 tools) | the operation contract | **Reimplemented** as protocol v2: `start/get/list/end_session` → `HighhXDriver` sessions; `get_desktop_state`, `get_screen_size` → `observe`, `screen`; `get_window_state` → `inspect` (+ bounds) and `screenshot --window`; `list_apps`, `list_windows`, `set_window_frame`, `click` (coordinates, count, button, background), `drag`, `scroll` (at a point), `move_cursor`, `get_cursor_position`, `type_text`, `press_key`, `hotkey`, `invoke_menu`, `clipboard_read/write`; snapshot-bound `element_token` → `click` with `index`/`bounds` ([exact targeting](#exact-targeting)); `verify_state` → `computer.verify` ([checked observation](#checked-observation)) + each action's own verification; `parse_visual_regions` → `perception.ground` (OCR) with [capture binding](#observation-and-perception). Omitted: `get_agent_cursor_state`, `set_agent_cursor_enabled/motion/theme` (an on-screen cursor overlay — cosmetic); `escalate_session`, `get_session_state` (deprecated in Cua itself) |
 | `rust/crates/cua-driver-core`, `cua-driver`, `cua-driver-sdk` | the driver runtime, sessions, tool dispatch, SDK | **Merged into existing HighhX**: the automation bridge and built-in engine (dispatch), `HighhXDriver` (API, sessions), the action executor (policy, approval, audit) |
 | `rust/crates/platform-macos` | AX, CGEvent input, capture, windows, permissions, apps | **Reimplemented** in `platforms/macos.py` + `platforms/quartz.py` (the same OS APIs via ctypes). Not reimplemented: ScreenCaptureKit capture (HighhX uses `screencapture`), the browser-setup UI, focus-steal prevention, the SkyLight private-API input path |
 | `rust/crates/platform-windows`, `cua-driver-uia` | SendInput, PostMessage, EnumWindows, SetWindowPos, UI Automation | **Reimplemented** in `platforms/windows.py` (UIA through a fixed PowerShell script). Not run on Windows in this build |
 | `rust/crates/platform-linux`, `wayland-helper`, `kwin-target-helper`, `hyprland-plugin` | AT-SPI, XTest, libei / portals, compositor plugins | **Reimplemented for X11 + AT-SPI** in `platforms/linux.py`. **Deferred**: Wayland input (libei, RemoteDesktop portal, compositor plugins) — reported as unavailable |
-| `rust/crates/cua-perception` | offline visual regions with ONNX models | **Concept reimplemented** without models: `computer/perception` (accessibility, then tesseract OCR). ONNX inference is not added (a new native dependency and model artifacts) |
+| `rust/crates/cua-perception` | offline visual text and icon regions with ONNX models, bound to a registered capture | **Concept reimplemented** without models: `computer/perception` (accessibility, then tesseract OCR), with capture binding. Not added: the icon detector — its OmniParser model is **AGPL-3.0-only** — and ONNX inference |
 | `rust/crates/cursor-overlay`, `cursor-theme-cli`, `pip-preview` | a visible agent cursor, themes, picture-in-picture preview | **Omitted**: presentation only |
 | `rust/crates/cua-driver-contract`, `cua-driver-bindgen` | contract types and UniFFI bindings for Python/TypeScript | **Replaced** by the Python contract + its JSON export (one definition) |
 | `rust/crates/cua-driver-testkit`, `cua-driver-e2e`, `libs/cua-driver/tests`, `compat-fixtures`, `libs/cua-driver-fixtures` | test harness, E2E, fixtures | **Reimplemented as HighhX tests**: fakes per platform, the simulated desktop, the AppKit fixture, contract tests |
@@ -185,13 +265,16 @@ audited component by component. For each: what it does, and what HighhX did with
 | `libs/cua-driver/scripts`, `tools`, `docs`, `examples` | build/release scripts, docs, examples | **Not copied** (HighhX's engine needs no build step; its docs are here) |
 | `libs/python/computer`, `computer-server`, `core`, `cua`, `cua-auto`, `cua-cli` | the older computer SDK, a server exposing it over HTTP/WebSocket, CLIs | **Covered by existing HighhX** (session, CLI, runtime); no network server is added — HighhX never exposes computer control on a port |
 | `libs/python/agent`, `libs/typescript/agent` | Cua's agent loop and model adapters | **Existing HighhX agent** (Pro) is used; not duplicated |
-| `libs/python/cua-sandbox`, `cua-sandbox-apps`, `libs/kasm`, `xfce`, `xfce-cua`, `qemu-docker`, `lumier` | sandboxes: Docker / VM images with a desktop and the driver inside | **Deferred**: needs container/VM images HighhX does not ship. `HighhXDriver.create(target=…)` accepts only `local` and says so for anything else |
+| `libs/python/cua-sandbox`, `cua-sandbox-apps`, `libs/kasm`, `xfce`, `xfce-cua`, `qemu-docker`, `lumier` | sandboxes: Docker / VM images with a desktop and the driver inside | **Deferred**: needs container/VM images HighhX does not ship (no Docker on the build machine either). `HighhXDriver.create(target=…)` accepts only `local` and says so for anything else; no provider interface is added until a real provider exists |
 | `libs/fleet`, `libs/python/cua-fleet`, `libs/typescript/fleet`, `libs/python/cua-cloud`, `terraform-provider-fleets` | cloud computer fleets (claim, run, release) | **Deferred**: HighhX has no cloud computer infrastructure or credentials; no pretend provider exists |
 | `libs/lume` | macOS virtual machines (Virtualization.framework, Swift) | **Deferred / optional**: no HighhX feature needs local VMs yet |
 | `libs/cua-bench`, `cua-bench-s1` | benchmark tasks, evaluators, datasets | **Architecture reused for tests** in `tests/computer_use/` (deterministic tasks, recorded trajectories, evaluators); datasets not copied |
 | `libs/cua-s1`, `libs/python/cua-train` | specialist computer-use models and training | **Deferred**: optional models; the HighhX agent stays model-independent. No model weights are included |
 | `libs/python/som` | set-of-marks screen parsing | **Excluded**: licensed **AGPL-3.0**, incompatible with HighhX's MIT licence |
-| `libs/python/mcp-server` | an MCP server | **Not applicable**: HighhX has no MCP surface |
+| `cua-driver mcp` (`mcp_wire`, `mcp_result`, `server`), `libs/python/mcp-server` | computer tools over MCP (stdio; legacy HTTP) with permission modes | **Implemented** as [`highhx computer mcp`](#mcp) over the existing action executor and gate: `standard` → `--mode ask`, `bounded` manifest → `--allow`, `--dangerously-bypass-approvals` → `--yes` (non-critical only). Not added: the loopback HTTP endpoint (HighhX never listens on a port), the MCP skills extension resources |
+| `rust/Skills/cua-driver` (`SKILL.md`, platform guides) | agent instructions: exact target, observe → act once → verify, semantic before pixels, no blind retries | **Integrated** as one [guidance text](../src/highhx/computer/guidance.py) used by the Pro agent's `computer_act` and sent as the MCP `instructions` |
+| Permission modes, capability manifests, `DriverAuthorizationHost` | who may drive the computer, fixed at launch | **Mapped onto the existing action gate** (approval modes, tickets, `--yes`, per-action risk floors); no second policy system |
+| Computer history (`history_status` / `history_query`, encrypted metadata, macOS preview) | a private, metadata-only record of driver actions | **Equivalent**: HighhX's audit log (`highhx audit`) records every computer action's metadata, redacted, locally, for every surface (CLI, agent, MCP). **Deferred**: encryption at rest and deletion (the audit log is append-only by design) |
 | `libs/python/bench-ui`, `libs/typescript/playground`, `cuabot`, `blog`, `docs`, `samples`, `infra`, `clusters`, `nix` | UI, demos, marketing, infrastructure | **Not copied** |
 
 ## Licensing
@@ -215,3 +298,7 @@ audited component by component. For each: what it does, and what HighhX did with
 - Background delivery is best effort on every platform (applications may ignore it).
 - Linux: no Wayland input; AT-SPI needs PyGObject.
 - No sandboxes, cloud computers or VMs; no visible agent cursor; no ONNX perception.
+- Exact targeting is proven on a real macOS desktop; on Windows (the UIA script applies the rule)
+  and Linux it is tested against fakes only.
+- `verify` element predicates read the application's tree, not only the named window's.
+- MCP: stdio only; no MCP skill resources or modern (`2026-07-28`) per-request metadata.

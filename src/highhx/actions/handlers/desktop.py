@@ -25,7 +25,17 @@ if TYPE_CHECKING:
     from highhx.computer.driver import HighhXDriver
 
 T = TypeVar("T")
-EXPLAINED = frozenset({"refused", "unsupported", "unsupported_platform", "not_found", "screen_recording_denied"})
+EXPLAINED = frozenset(
+    {
+        "refused",
+        "unsupported",
+        "unsupported_platform",
+        "not_found",
+        "screen_recording_denied",
+        "stale_target",
+        "ambiguous_target",
+    }
+)
 """Engine errors that are the action's answer (said to the person), not a crash."""
 FRAME_TOLERANCE = 4
 """Points a window may differ from the requested frame (window managers snap and enforce minimums)."""
@@ -162,8 +172,10 @@ def click(ctx: ActionContext, inputs: Inputs) -> ActionResult:
 
 def click_at(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     """A click at a desktop point — or at the text named by ``text``, grounded by perception
-    (accessibility first, OCR as the fallback)."""
+    (accessibility first, OCR as the fallback) and clicked only while the window it was found in
+    is still there, unmoved and uncovered."""
     grounded: dict[str, Any] | None = None
+    found = None
     if inputs.get("text"):
         from highhx.computer.perception import GroundingError, ground
 
@@ -179,6 +191,12 @@ def click_at(ctx: ActionContext, inputs: Inputs) -> ActionResult:
         raise ToolError("give x and y, or the text to click")
     button, count = str(inputs.get("button") or "left"), int(inputs.get("count") or 1)
     target = _target(inputs) if inputs.get("background") else None
+    if found is not None:
+        from highhx.computer.perception import still_there
+
+        stale = run(ctx, lambda d: still_there(d, found))
+        if stale:
+            raise ToolError(f"Not clicking {inputs['text']!r}: {stale}. Find it again.")
     result = run(ctx, lambda d: d.click(x, y, button=button, count=count, app=target))
     hit = result.get("element") or {}
     what = f"{hit.get('role')} {hit.get('name')!r}" if hit.get("name") else f"({x}, {y})"
@@ -279,6 +297,37 @@ def element_at(ctx: ActionContext, inputs: Inputs) -> ActionResult:
         True,
         output={**element.to_dict(), "bounds": list(element.bounds) if element.bounds else None},
         summary=f"{element.label()} at ({x}, {y}) in {element.attributes.get('app') or 'an application'}",
+    )
+
+
+def verify(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """Checked observation of one exact window (by id, or an application's front window)."""
+    if inputs.get("window") is not None:
+        window_id = int(inputs["window"])
+    elif inputs.get("app"):
+        name = _app_name(str(inputs["app"]))
+        found = run(ctx, lambda d: d.windows(name))
+        if not found:
+            raise ToolError(f"{name} has no window on screen.")
+        window_id = found[0].id
+    else:
+        raise ToolError("give the window id or the application")
+    check = run(
+        ctx,
+        lambda d: d.verify_state(
+            window_id,
+            list(inputs["expect"]),
+            timeout_ms=int(inputs.get("timeout_ms", 5000)),
+            stable_samples=int(inputs.get("stable_samples", 2)),
+        ),
+    )
+    failing = [p for p in check.predicates if p.status != "satisfied"]
+    return ActionResult(
+        check.ok,
+        output=check.to_dict(),
+        summary=f"{len(check.predicates) - len(failing)}/{len(check.predicates)} predicate(s) hold: {check.status}",
+        verified=True if check.ok else (None if check.status == "unknown" else False),
+        error="" if check.ok else "; ".join(f"#{p.index} {p.status}: {p.detail}" for p in failing),
     )
 
 

@@ -289,6 +289,24 @@ highhx computer drag [OPTIONS] X1,Y1 X2,Y2
 |---|---|
 | `--right` | With the right button. |
 
+#### `highhx computer mcp`
+
+Speak MCP (JSON-RPC over stdin/stdout) so an MCP client can observe and operate this
+computer through HighhX: every tool is a computer.* action — classified, approved, audited
+(source "mcp") and verified. Nobody can be asked over stdio, so an action that needs a
+confirmation is refused unless you start the server with --yes (`highhx --yes computer mcp`),
+which pre-approves non-critical actions as your own --yes does. Register it with, e.g.:
+claude mcp add highhx-computer -- highhx computer mcp
+
+```
+highhx computer mcp [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--mode` | read-only: observation tools only. ask/auto-edit: the approval rules of `highhx computer`. (default: `ask`) |
+| `--allow` | Offer only these tools (repeatable): a bounded set. |
+
 #### `highhx computer menu`
 
 Choose PATH (items separated by >) in APP's menu bar.
@@ -458,6 +476,27 @@ highhx computer type [OPTIONS] SELECTOR [TEXT]
 |---|---|
 | `--from-env` | Type the value of this environment variable (never shown or logged). |
 | `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
+
+#### `highhx computer verify`
+
+Verify APP's front window (or --id WINDOW) from fresh state: it exists, --frame, an
+--element with --role/--value, or any --expect predicate. Exits 0 only when every predicate is
+satisfied; an unknown (unobservable) predicate is not success.
+
+```
+highhx computer verify [OPTIONS] APP
+```
+
+| Option | Description |
+|---|---|
+| `--id` | The window id (from `computer windows`) instead of APP. |
+| `--frame` | The window has this frame (4 points of slack). |
+| `--element` | An element whose name contains TEXT exists … |
+| `--role` | … with this role (button, textbox, checkbox …). |
+| `--value` | … and holds exactly this value. |
+| `--expect` | A predicate as JSON (repeatable; see docs/COMPUTER_RUNTIME.md). |
+| `--timeout-ms` | Keep sampling until the predicates hold or this passes (0: one sample). (default: `5000`) |
+| `--stable` | Consecutive samples. (default: `2`) |
 
 #### `highhx computer window`
 

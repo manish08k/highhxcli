@@ -20,6 +20,7 @@ NEW = (
     "computer.windows",
     "computer.apps",
     "computer.element_at",
+    "computer.verify",
     "computer.click_at",
     "computer.move",
     "computer.drag",

@@ -32,7 +32,7 @@ import uuid
 import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from highhx.automation.engine.bridge import AutomationBridge, EngineError, Runner, open_bridge
 from highhx.automation.engine.protocol import FEATURES, MODIFIERS
@@ -40,6 +40,9 @@ from highhx.computer.desktop import parse_bounds
 from highhx.computer.model import Observation, UIElement
 from highhx.core.errors import UsageError
 from highhx.execution.cancellation import CancellationToken
+
+if TYPE_CHECKING:
+    from highhx.computer.verify import StateCheck
 
 TARGETS = ("local",)
 """Where a driver can run. Sandboxes, cloud computers and virtual machines are not part of this
@@ -401,6 +404,15 @@ class HighhXDriver:
     ) -> dict[str, Any]:
         return self.call("verify", check=check, app=app, name=name, role=role)
 
+    def verify_state(
+        self, window: int, expect: list[dict[str, Any]], *, timeout_ms: int = 5000, stable_samples: int = 2
+    ) -> StateCheck:
+        """Bounded predicates about one exact window, sampled from fresh state until they hold
+        stably (see :mod:`highhx.computer.verify`); ``unknown`` never counts as success."""
+        from highhx.computer.verify import verify_state
+
+        return verify_state(self, window, expect, timeout_ms=timeout_ms, stable_samples=stable_samples)
+
     def clipboard_read(self) -> str:
         return str(self.call("clipboard_read").get("text") or "")
 
@@ -415,9 +427,22 @@ class HighhXDriver:
     def right_click(self, x: int, y: int, *, app: str | None = None) -> dict[str, Any]:
         return self.click(x, y, button="right", app=app)
 
-    def press_element(self, name: str, *, role: str | None = None, app: str | None = None) -> dict[str, Any]:
-        """Press the element with this accessible name (semantic targeting — no coordinates)."""
-        return self.call("click", name=name, role=role, app=app)
+    def press_element(
+        self,
+        name: str,
+        *,
+        role: str | None = None,
+        app: str | None = None,
+        index: int | None = None,
+        bounds: tuple[int, int, int, int] | None = None,
+    ) -> dict[str, Any]:
+        """Press the element with this accessible name (semantic targeting — no coordinates).
+
+        ``index``: which of several elements with exactly this name (tree order), and ``bounds``:
+        where it was observed. With them the engine presses that element or refuses with
+        ``stale_target`` when it is gone or has moved; several same-named elements and no
+        ``index`` are ``ambiguous_target`` — never a guess."""
+        return self.call("click", name=name, role=role, app=app, index=index, bounds=list(bounds) if bounds else None)
 
     def move(self, x: int, y: int) -> dict[str, Any]:
         return self.call("move", x=x, y=y)

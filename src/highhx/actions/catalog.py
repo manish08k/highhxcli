@@ -26,6 +26,7 @@ from highhx.actions.spec import (
     Inputs,
 )
 from highhx.cloud.plans import AGENT_CODE_CHANGES, AGENT_COMMANDS, AGENT_COMPUTER_USE, AGENT_DEPLOY, AGENT_GIT
+from highhx.computer.verify import MAX_TIMEOUT_MS, PREDICATES
 from highhx.core.errors import HighhXError
 from highhx.execution.retry import RetryPolicy
 from highhx.project.index import KINDS as FILE_KINDS
@@ -1196,6 +1197,31 @@ def _specs() -> list[ActionSpec]:
             timeout=60,
             feature=AGENT_COMPUTER_USE,
             agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+        ),
+        ActionSpec(
+            "computer.verify",
+            "Verify bounded predicates about one exact window — it exists, its frame, an element's "
+            "existence, value, enabled or selected state — sampled from fresh state until they hold "
+            "stably. Each is satisfied, unsatisfied or unknown; unknown is never success. Reads only.",
+            desktop.verify,
+            Obj(
+                {
+                    "window": Prop(Int(minimum=0), description="The exact window id (from computer.windows)."),
+                    "app": Prop(Str(min_length=1), description="Or: this application's front window."),
+                    "expect": Prop(PREDICATES, required=True),
+                    "timeout_ms": Prop(Int(minimum=0, maximum=MAX_TIMEOUT_MS)),
+                    "stable_samples": Prop(Int(minimum=1, maximum=5)),
+                }
+            ),
+            {"status": "satisfied | unsatisfied | unknown", "predicates": "[{index, status, detail}]"},
+            Risk.LOW,
+            ActionKind.READ,
+            (DESKTOP,),
+            idempotent=True,
+            timeout=30,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+            target=lambda i: str(i.get("window") or i.get("app") or ""),
         ),
         ActionSpec(
             "computer.screenshot",

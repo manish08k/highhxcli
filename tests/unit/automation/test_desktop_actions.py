@@ -50,7 +50,9 @@ def test_desktop_clicks_keep_per_element_safety(agent_project: Path, executor_fo
     executor, ui = executor_for(agent_project)
     ui.default_action_answer = False  # decline every sensitive-element confirmation
     saved = executor.run("computer.click", {"target": "button:Save"})
-    assert saved.ok and engine.sent("click") == [("click", {"name": "Save", "role": "button"})]
+    assert saved.ok and engine.sent("click") == [
+        ("click", {"name": "Save", "role": "button", "index": 0, "bounds": [100, 100, 80, 30]})
+    ]
     engine.calls = []
     deleted = executor.run("computer.click", {"target": "button:Delete"})
     assert not deleted.ok and engine.sent("click") == []  # "Delete" asked, was declined, never clicked
@@ -64,3 +66,24 @@ def test_a_click_that_changes_nothing_is_not_reported_as_done(
     result = executor.run("computer.click", {"target": "button:Save"})
     assert engine.sent("click") and not result.ok and result.verified is False
     assert "no visible change" in result.error
+
+
+def test_click_at_text_is_refused_when_its_window_moved_after_grounding(
+    agent_project: Path, executor_for, engine: FakeEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import highhx.computer.perception as perception
+
+    real = perception.ground
+
+    def ground_then_move(driver, text, **kw):  # type: ignore[no-untyped-def]
+        found = real(driver, text, **kw)
+        engine.windows = [{**engine.windows[0], "x": 400}]  # the window moves before the click
+        return found
+
+    monkeypatch.setattr(perception, "ground", ground_then_move)
+    executor, ui = executor_for(agent_project)
+    ui.default_action_answer = True
+    result = executor.run("computer.click_at", {"text": "Save"})
+    assert not result.ok and "moved" in result.error and engine.sent("click_at") == []
+    monkeypatch.setattr(perception, "ground", real)
+    assert executor.run("computer.click_at", {"text": "Save"}).ok  # found again: clicked

@@ -131,7 +131,9 @@ def test_pro_agent_desktop_actions_run_through_the_common_bridge(
     session, _provider, _ui = make_session(agent_project, steps)
     result = session.run_turn("save the document")
     assert result.stopped == "completed"
-    assert fake.sent("inspect") and fake.sent("click") == [("click", {"name": "Save", "role": "button"})]
+    assert fake.sent("inspect") and fake.sent("click") == [
+        ("click", {"name": "Save", "role": "button", "index": 0, "bounds": [100, 100, 80, 30]})
+    ]
 
 
 def test_free_actions_and_pro_tools_share_one_bridge_per_session(monkeypatch: pytest.MonkeyPatch) -> None:

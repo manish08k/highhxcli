@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from highhx.automation.engine.bridge import EngineError, Runner
 from highhx.automation.engine.protocol import FEATURES, PROTOCOL_VERSION
 from highhx.execution.cancellation import CancellationToken
+
+T = TypeVar("T")
 
 
 def png_size(path: Path) -> tuple[int, int]:
@@ -32,6 +35,69 @@ def png_size(path: Path) -> tuple[int, int]:
 
 def feature(available: bool, detail: str) -> dict[str, Any]:
     return {"available": bool(available), "detail": detail}
+
+
+BOUNDS_TOLERANCE = 4
+"""Points an element may have shifted and still be the element the caller observed."""
+
+Candidate = tuple[T, str, str, Sequence[int] | None]
+"""(the platform's handle, role, name, bounds) — in accessibility-tree order."""
+
+
+def choose_element(
+    candidates: Sequence[Candidate[T]],
+    name: str,
+    role: str | None,
+    *,
+    index: int | None = None,
+    bounds: Sequence[int] | None = None,
+    where: str = "",
+) -> T:
+    """The one element a ``click`` means — never a guess.
+
+    Exact names (case-insensitive) win over partial ones. Several exact matches need ``index``
+    (the occurrence the caller observed); without it they are ``ambiguous_target``, as are
+    several partial matches. ``index`` past the end, or ``bounds`` that no longer match, mean
+    the UI changed since it was observed: ``stale_target``, so the caller observes again rather
+    than pressing a different control."""
+    wanted = name.lower()
+    pool = [c for c in candidates if role in (None, "any") or c[1] == role]
+    exact = [c for c in pool if c[2].lower() == wanted]
+    label = f"{role or 'element'} named {name!r}" + (f" in {where}" if where else "")
+    if index is not None:
+        if index >= len(exact):
+            raise EngineError(
+                "stale_target",
+                f"The {label} that was observed is gone ({len(exact)} such element(s) now); the UI changed.",
+                hint="Observe again and choose the element from the new observation.",
+            )
+        chosen = exact[index]
+    elif len(exact) == 1:
+        chosen = exact[0]
+    elif exact:
+        raise EngineError(
+            "ambiguous_target", f"{len(exact)} elements are {label}; say which one (index) instead of guessing."
+        )
+    else:
+        partial = [c for c in pool if wanted in c[2].lower()]
+        if not partial:
+            raise EngineError("not_found", f"No {label}.")
+        if len(partial) > 1:
+            names = ", ".join(repr(c[2]) for c in partial[:5])
+            raise EngineError("ambiguous_target", f"{name!r} matches several elements ({names}); use the exact name.")
+        chosen = partial[0]
+    current = chosen[3]
+    if (
+        bounds is not None
+        and current
+        and any(abs(a - b) > BOUNDS_TOLERANCE for a, b in zip(current, bounds, strict=True))
+    ):
+        raise EngineError(
+            "stale_target",
+            f"The {label} moved from {list(bounds)} to {list(current)} since it was observed.",
+            hint="Observe again and choose the element from the new observation.",
+        )
+    return chosen[0]
 
 
 class Backend:
