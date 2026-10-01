@@ -1083,16 +1083,19 @@ def _specs() -> list[ActionSpec]:
         ),
         ActionSpec(
             "computer.focus",
-            "Bring an application to the front.",
+            "Bring an application to the front — or one exact window by id (from computer.windows).",
             desktop.focus,
-            Obj({"app": Prop(Str(min_length=1), required=True)}),
-            {"app": "focused application"},
+            Obj(
+                {"app": Prop(Str(min_length=1)), "window": Prop(Int(minimum=0))},
+                check=lambda v: [] if (v.get("app") is None) != (v.get("window") is None) else ["give app or window"],
+            ),
+            {"app": "focused application", "window": "focused window", "frontmost": "verified"},
             Risk.LOW,
             ActionKind.APP_LAUNCH,
             (DESKTOP,),
             timeout=30,
             agent=False,
-            target=lambda i: str(i.get("app", "")),
+            target=lambda i: str(i.get("app") or f"window {i.get('window')}"),
         ),
         ActionSpec(
             "computer.type",
@@ -1155,6 +1158,10 @@ def _specs() -> list[ActionSpec]:
             desktop.scroll,
             Obj(
                 {
+                    "capture": Prop(
+                        Str(min_length=1), description="Coordinates are in this screenshot (from computer.screenshot)."
+                    ),
+                    "space": Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."),
                     "direction": Prop(Str(choices=("up", "down", "left", "right"))),
                     "source": Prop(Str(choices=("browser", "desktop"))),
                     "amount": Prop(Int(minimum=1, maximum=20)),
@@ -1207,7 +1214,10 @@ def _specs() -> list[ActionSpec]:
             Obj(
                 {
                     "window": Prop(Int(minimum=0), description="The exact window id (from computer.windows)."),
-                    "app": Prop(Str(min_length=1), description="Or: this application's front window."),
+                    "app": Prop(
+                        Str(min_length=1),
+                        description="Or: this application's front window (neither: the frontmost window).",
+                    ),
                     "expect": Prop(PREDICATES, required=True),
                     "timeout_ms": Prop(Int(minimum=0, maximum=MAX_TIMEOUT_MS)),
                     "stable_samples": Prop(Int(minimum=1, maximum=5)),
@@ -1225,9 +1235,22 @@ def _specs() -> list[ActionSpec]:
         ),
         ActionSpec(
             "computer.screenshot",
-            "Capture the screen (or one window by id) to a PNG in HighhX's screenshots folder.",
+            "Capture the screen — or one window (by id, or an application's front window), or a region "
+            "[x, y, width, height] in desktop points — to a PNG in HighhX's screenshots folder.",
             desktop.screenshot,
-            Obj({"window": Prop(Int(minimum=0))}),
+            Obj(
+                {
+                    "window": Prop(Int(minimum=0)),
+                    "app": Prop(Str(min_length=1)),
+                    "max_size": Prop(Int(minimum=200, maximum=8000), description="Longest side in pixels (for a model)."),
+                    "region": Prop(List(Int(minimum=-100_000, maximum=100_000), min_items=4)),
+                },
+                check=lambda v: (
+                    ["region must be [x, y, width, height]"]
+                    if v.get("region") is not None and len(v["region"]) != 4
+                    else []
+                ),
+            ),
             {"path": "the PNG", "width": "pixels", "height": "pixels", "scale": "pixels per point"},
             Risk.LOW,
             ActionKind.READ,
@@ -1287,6 +1310,10 @@ def _specs() -> list[ActionSpec]:
             desktop.click_at,
             Obj(
                 {
+                    "capture": Prop(
+                        Str(min_length=1), description="Coordinates are in this screenshot (from computer.screenshot)."
+                    ),
+                    "space": Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."),
                     "x": Prop(COORD),
                     "y": Prop(COORD),
                     "text": Prop(Str(min_length=1, check=lambda v: "at most 200 characters" if len(v) > 200 else None)),
@@ -1309,7 +1336,16 @@ def _specs() -> list[ActionSpec]:
             "computer.move",
             "Move the pointer to a desktop point (hover), and verify it is there.",
             desktop.move,
-            Obj({"x": Prop(COORD, required=True), "y": Prop(COORD, required=True)}),
+            Obj(
+                {
+                    "capture": Prop(
+                        Str(min_length=1), description="Coordinates are in this screenshot (from computer.screenshot)."
+                    ),
+                    "space": Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."),
+                    "x": Prop(COORD, required=True),
+                    "y": Prop(COORD, required=True),
+                }
+            ),
             {"cursor": "[x, y] after the move"},
             Risk.LOW,
             ActionKind.UI_CLICK,
@@ -1320,11 +1356,41 @@ def _specs() -> list[ActionSpec]:
             target=lambda i: f"({i.get('x')}, {i.get('y')})",
         ),
         ActionSpec(
+            "computer.mouse_button",
+            "Only press (down) or only release (up) a mouse button at a desktop point — for drags and "
+            "long presses computer.drag cannot express. Release what you press.",
+            desktop.mouse_button,
+            Obj(
+                {
+                    "capture": Prop(
+                        Str(min_length=1), description="Coordinates are in this screenshot (from computer.screenshot)."
+                    ),
+                    "space": Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."),
+                    "action": Prop(Str(choices=("down", "up")), required=True),
+                    "x": Prop(COORD, required=True),
+                    "y": Prop(COORD, required=True),
+                    "button": Prop(Str(choices=("left", "right", "middle"))),
+                }
+            ),
+            {"cursor": "[x, y] after the move"},
+            Risk.MEDIUM,
+            ActionKind.UI_CLICK,
+            (DESKTOP,),
+            timeout=30,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,  # the agent reaches these through computer_act (entitled by tool name)
+            target=lambda i: f"{i.get('action')} at ({i.get('x')}, {i.get('y')})",
+        ),
+        ActionSpec(
             "computer.drag",
             "Press at one desktop point, move to another and release.",
             desktop.drag,
             Obj(
                 {
+                    "capture": Prop(
+                        Str(min_length=1), description="Coordinates are in this screenshot (from computer.screenshot)."
+                    ),
+                    "space": Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."),
                     "from_x": Prop(COORD, required=True),
                     "from_y": Prop(COORD, required=True),
                     "to_x": Prop(COORD, required=True),

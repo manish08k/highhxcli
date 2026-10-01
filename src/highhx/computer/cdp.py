@@ -119,8 +119,8 @@ class CDPConnection:
     """One DevTools WebSocket. Commands for a tab carry its ``session_id``; ``""`` is the
     endpoint itself (the browser, or a page when connected to a page endpoint)."""
 
-    def __init__(self, ws_url: str, *, timeout: float = 30.0, target_id: str = "") -> None:
-        self.ws = WebSocket(ws_url, timeout=timeout)
+    def __init__(self, ws_url: str, *, timeout: float = 30.0, target_id: str = "", allow_remote: bool = False) -> None:
+        self.ws = WebSocket(ws_url, timeout=timeout, **({"allow_remote": True} if allow_remote else {}))
         self.timeout = timeout
         self._ids = itertools.count(1)
         self.sessions: dict[str, PageEvents] = {"": PageEvents(target_id)}

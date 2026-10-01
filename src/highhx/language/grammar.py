@@ -374,6 +374,68 @@ def _scroll(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[St
     return [_step("computer.scroll", {"direction": direction, "source": state.surface}, f"scroll {direction}")]
 
 
+_SCREEN_WORDS = frozenset({"screen", "the screen", "desktop", "the desktop", "whole screen", "entire screen"})
+
+
+@verb(
+    "screenshot",
+    ("screenshot", "capture"),
+    r"(?:(?:take|capture|grab)\s+(?:a\s+)?)?screen\s*shot(?:\s+of\s+(?P<what>.+?))?|capture\s+(?P<screen>(?:the\s+)?screen)",
+)
+def _screenshot(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step] | Unknown:
+    what = (m.group("what") or m.group("screen") or "").strip().lower()
+    page = what in ("page", "the page", "this page", "the tab", "tab", "browser", "the browser")
+    if page or (not what and state.surface == "browser"):  # the page, as HighhX always has by default
+        return [_step("browser.screenshot", {}, "take a screenshot")]
+    if not what or what in _SCREEN_WORDS:
+        if not what and state.surface == "desktop" and state.app is not None:
+            return [
+                _step("computer.screenshot", {"app": state.app.name}, f"screenshot of {state.app.name}", state.app.id)
+            ]
+        return [_step("computer.screenshot", {}, "screenshot of the screen")]
+    raw = (m.group("what") or "").strip()
+    name = re.sub(r"^the\s+|\s+(?:window|app|application)$", "", raw, flags=re.IGNORECASE).strip()
+    app = _app_named(ctx, name)
+    if isinstance(app, Unknown) or app is None:
+        return app or Unknown(m.group(0), "A screenshot of what?", ("take a screenshot of the screen",))
+    return [_step("computer.screenshot", {"app": app.name}, f"screenshot of {app.name}", app.id)]
+
+
+@verb(
+    "verify",
+    ("verify", "confirm", "make"),
+    r"(?:verify|confirm|make\s+sure)\s+(?:that\s+)?(?:the\s+)?(?:(?P<app>[\w .&+'-]+?)\s+)?window"
+    r"(?:\s+(?:is\s+)?(?:open|opened|there|exists|visible|shown))?"
+    r"|(?:verify|confirm|make\s+sure)\s+(?:that\s+)?(?:the\s+)?[\"']?(?P<name>[^\"']+?)[\"']?"
+    r"(?:\s+(?P<role>button|link|tab|checkbox|field|text))?"
+    r"\s+(?:is\s+(?:shown|visible|there|on\s+(?:the\s+)?screen|displayed)|exists|appears|shows)",
+)
+def _verify(m: re.Match[str], ctx: ResolverContext, state: PlanState) -> list[Step] | Unknown:
+    """A check, not an action: the desktop's windows and elements (``computer.verify``) or text on
+    the browser page (``browser.wait``). It fails — and stops the plan — when the state is not
+    there; what cannot be observed is never counted as there."""
+    if m.group("name") is None:  # a window
+        app = _app_named(ctx, m.group("app")) if m.group("app") else state.app
+        if isinstance(app, Unknown):
+            return app
+        if app is None:
+            return Unknown(m.group(0), "Verify which application's window?", ("verify the TextEdit window is open",))
+        expect = [{"window": {"exists": True}}]
+        return [_step("computer.verify", {"app": app.name, "expect": expect}, f"verify {app.name}'s window", app.id)]
+    name = m.group("name").strip()
+    role = {"field": "textbox"}.get(m.group("role") or "", m.group("role") or "")
+    if state.surface == "browser":
+        return [_step("browser.wait", {"text": name}, f"verify {name!r} is on the page", name)]
+    if role:
+        predicate: dict[str, Any] = {"element": {"selector": {"label_contains": name, "role": role}, "exists": True}}
+    else:  # any visible text: accessibility first, OCR of the window when installed
+        predicate = {"text": {"contains": name}}
+    inputs: dict[str, Any] = {"expect": [predicate]}
+    if state.app is not None:
+        inputs["app"] = state.app.name
+    return [_step("computer.verify", inputs, f"verify {name!r} is shown", name)]
+
+
 _ELEMENT = r"(?:the\s+)?[\"']?(?P<name>[^\"']+?)[\"']?(?:\s+(?P<role>button|link|tab|checkbox|menu\s*item|field|item))?"
 
 

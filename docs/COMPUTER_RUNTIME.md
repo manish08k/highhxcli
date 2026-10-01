@@ -42,7 +42,8 @@ with HighhXDriver.create() as driver:  # target="local"; the configured engine
 ```
 
 Other methods: `capabilities()`, `screen()`, `screenshot(window=None)`, `apps()`,
-`windows(app)`, `active()`, `get_ui_tree(app)`, `element_at(x, y)`, `cursor()`, `move`,
+`windows(app)`, `active()`, `get_ui_tree(app)`, `element_at(x, y)`, `cursor()`, `move`, `mouse_down` / `mouse_up`,
+`focus_window(id)`, `screenshot(window=None, region=None)`,
 `right_click`, `double_click`, `drag`, `scroll(direction, amount, at=)`, `press(key)`,
 `launch`, `focus`, `quit`, `open_url`, `clipboard_read`, `clipboard_write`, `verify`,
 `verify_state(window, expect)` (see [Checked observation](#checked-observation)), and the session lifecycle — `session`, `list_sessions()`, `get_session(id)`, `end_session()`.
@@ -66,7 +67,7 @@ tables are checked against it for the version it implements.
 
 | version 1 (every engine) | version 2 (the Computer Runtime) |
 |---|---|
-| `status` `frontmost` `launch` `focus` `running` `open_url` `click` (by name) `type` `key` `hotkey` `scroll` `wait` `inspect` `verify` | `capabilities` `screen` `screenshot` `apps` `windows` `window_frame` `quit` `click_at` `move` `cursor` `drag` `element_at` `menu` `clipboard_read` `clipboard_write`; `app` (background delivery) on `type`/`key`/`hotkey`; `x`/`y` on `scroll`; `index`/`bounds` (exact targeting) on `click` |
+| `status` `frontmost` `launch` `focus` `running` `open_url` `click` (by name) `type` `key` `hotkey` `scroll` `wait` `inspect` `verify` | `capabilities` `screen` `screenshot` `apps` `windows` `window_frame` `window_focus` `quit` `click_at` `move` `mouse_button` `cursor` `drag` `element_at` `menu` `clipboard_read` `clipboard_write`; `region` on `screenshot`; `app` (background delivery) on `type`/`key`/`hotkey`; `x`/`y` on `scroll`; `index`/`bounds` (exact targeting) on `click` |
 
 Version negotiation: the .NET engine is sent its handshake at version 1 and then spoken to at
 the version it reports. Operations (or arguments) newer than an engine speaks go to the
@@ -147,6 +148,13 @@ specifiers System Events' `entireContents()` returns are *by name*, so two butto
 used to be one element — the first — both when observed and when pressed. A press also
 re-checks the name at the element's position before acting.
 
+The tree read is the application's **focused** window (then its main window) — not whichever
+window System Events lists first — and a press re-finds *that* window by title and frame: with
+two documents open, a press can never land in the other one (it is `stale` instead). One exact
+window of a multi-window application is brought to the front with `window_focus`
+(`computer.focus` with `window`, `highhx computer window --id ID --focus`), verified by reading
+the window order back.
+
 ## Checked observation
 
 `computer.verify` (`driver.verify_state`, `highhx computer verify`, MCP `verify`) evaluates one
@@ -202,7 +210,7 @@ claude mcp add highhx-computer -- highhx computer mcp --mode read-only # observa
 ```
 
 - **Tools** are the `computer.*` desktop actions (`observe`, `screenshot`, `windows`, `apps`,
-  `element_at`, `verify`, `launch`, `focus`, `click`, `click_at`, `move`, `drag`, `scroll`,
+  `element_at`, `verify`, `launch`, `focus`, `click`, `click_at`, `move`, `mouse_button`, `drag`, `scroll`,
   `type`, `press`, `hotkey`, `menu`, `window`, `quit`, `clipboard_read`, `clipboard_write`), with
   their catalog JSON schemas and read-only/destructive hints. Results are the action's result as
   `structuredContent`, a one-line text, and for `screenshot` the PNG as image content;
@@ -221,7 +229,8 @@ claude mcp add highhx-computer -- highhx computer mcp --mode read-only # observa
 `click SELECTOR | --at X,Y | --text TEXT [--right] [--double]` · `scroll DIR [--at X,Y]` ·
 `screenshot [--window ID]` · `windows [--app NAME] [--apps]` · `at X,Y` · `move X,Y` ·
 `drag X1,Y1 X2,Y2` · `menu APP PATH` · `window APP --frame X,Y,W,H` · `quit APP` ·
-`clipboard [--set TEXT]` · `verify APP|--id ID [--frame …] [--element …] [--expect JSON]` · `mcp` ·
+`clipboard [--set TEXT]` · `verify [APP|--id ID] [--frame …] [--element …] [--expect JSON]` · `mcp` ·
+`mouse down|up X,Y` · `window --id ID --focus` · `screenshot [--window ID | --app APP | --region X,Y,W,H]` ·
 `protocol`. See [commands.md](commands.md).
 
 ## Testing
@@ -236,6 +245,8 @@ claude mcp add highhx-computer -- highhx computer mcp --mode read-only # observa
 | `tests/unit/automation/test_element_targeting.py` | exact targeting: the rule, each backend, the provider end to end |
 | `tests/unit/computer/test_verify_state.py`, `tests/unit/automation/test_verify_action.py` | checked observation: predicates, tri-state, stability, the action and CLI |
 | `tests/unit/computer/test_grounding_binding.py` | perception's capture binding (moved, closed, covered; OCR binds at capture) |
+| `tests/unit/automation/test_buttons_windows_regions.py` | button down/up, one-window focus, region / application-window screenshots: every backend, the actions, CLI, agent, MCP |
+| `tests/unit/language/test_verify_and_screenshot_verbs.py` | "… and verify …", "take a screenshot of …" in plain language |
 | `tests/unit/automation/test_mcp_server.py`, `tests/e2e/test_mcp_stdio.py` | MCP: discovery, schemas, results, errors, read-only / bounded / `--yes`, real stdio |
 | `tests/unit/agent/test_computer_act_desktop.py` | the Pro agent's desktop operations, approvals, refusals |
 | `tests/unit/commands/test_computer_commands.py` | the CLI commands |

@@ -71,9 +71,9 @@ def test_input_and_sessions(desktop: tuple[HighhXDriver, FakeEngine]) -> None:
         driver.cursor()
 
 
-def test_only_the_local_computer_exists_in_this_build() -> None:
-    for target in ("cloud", "sandbox", "vm"):
-        with pytest.raises(UsageError, match="local computer only"):
+def test_only_local_and_ssh_computers_exist_in_this_build() -> None:
+    for target in ("cloud", "sandbox", "vm", "http://host"):
+        with pytest.raises(UsageError, match="use local or ssh://"):
             HighhXDriver.create(target=target)
 
 

@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
+from highhx.agent.messages import ImageBlock
 from highhx.agent.model.base import ToolSpec
 from highhx.approvals.risk import RiskLevel
 from highhx.utils.validation import Obj
@@ -47,6 +48,9 @@ class ToolResult:
     cancelled, failed, internal."""
     verified: bool | None = None
     """Whether the outcome was checked (file re-read, exit code, UI re-observed …); None = not applicable."""
+    images: list[ImageBlock] = field(default_factory=list)
+    """Images for the model (screenshots, attached pictures): sent after the tool results when the
+    model takes images, otherwise replaced by their labels."""
 
     @classmethod
     def json(cls, data: Any, *, summary: str = "", ok: bool = True) -> ToolResult:

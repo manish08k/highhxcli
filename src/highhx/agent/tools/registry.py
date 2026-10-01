@@ -10,11 +10,14 @@ from highhx.agent.tools.base import Tool
 
 def builtin_tools() -> list[Tool]:
     from highhx.agent.planner import ProposePlanTool, UpdatePlanTool
-    from highhx.agent.tools import commands, computer, devops, files, git, project
+    from highhx.agent.tools import attachments, commands, computer, devops, files, git, project
 
     return [
         # Understand
         project.ProjectOverviewTool(),
+        attachments.AttachmentsListTool(),
+        attachments.AttachmentReadTool(),
+        attachments.AttachmentViewTool(),
         project.ListFilesTool(),
         project.ReadFileTool(),
         project.SearchCodeTool(),

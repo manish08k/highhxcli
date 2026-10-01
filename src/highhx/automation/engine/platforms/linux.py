@@ -45,6 +45,18 @@ XDOTOOL_KEYS = {
     "pagedown": "Next",
     "home": "Home",
     "end": "End",
+    "f1": "F1",
+    "f2": "F2",
+    "f3": "F3",
+    "f4": "F4",
+    "f5": "F5",
+    "f6": "F6",
+    "f7": "F7",
+    "f8": "F8",
+    "f9": "F9",
+    "f10": "F10",
+    "f11": "F11",
+    "f12": "F12",
 }
 """The protocol's named keys as X keysyms (``delete`` is the backspace key, as in the protocol)."""
 XDOTOOL_MODIFIERS = {"command": "super", "control": "ctrl", "option": "alt", "shift": "shift"}
@@ -356,6 +368,20 @@ class LinuxBackend(Backend):
         self.xdo("mousemove", "--sync", str(x), str(y), what="Move the pointer")
         return {"x": x, "y": y}
 
+    def op_mouse_button(self, action: str, x: int, y: int, button: str = "left") -> dict[str, Any]:
+        self.xdo("mousemove", "--sync", str(x), str(y), what="Move the pointer")
+        self.xdo("mousedown" if action == "down" else "mouseup", BUTTON_NUMBERS[button], what="Press the mouse button")
+        return {"action": action, "x": x, "y": y, "button": button}
+
+    def op_window_focus(self, window: int) -> dict[str, Any]:
+        wid = str(window)
+        if wid not in self._window_ids():
+            raise EngineError("not_found", f"There is no visible window {window}.")
+        after = self._window(wid)
+        self.xdo("windowactivate", "--sync", wid, what="Bring the window to the front")
+        active = self.xdo("getactivewindow", what="Find the active window").strip()
+        return {"window": window, "app": after["app"], "frontmost": active == wid}
+
     def op_cursor(self) -> dict[str, Any]:
         values = shell_values(self.xdo("getmouselocation", "--shell", what="Read the pointer"))
         return {"x": int(values.get("X", 0)), "y": int(values.get("Y", 0))}
@@ -380,7 +406,9 @@ class LinuxBackend(Backend):
         width, height = self.xdo("getdisplaygeometry", what="Read the display").split()
         return {"width": int(width), "height": int(height), "x": 0, "y": 0, "scale": 1.0}
 
-    def op_screenshot(self, path: str, window: int | None = None) -> dict[str, Any]:
+    def op_screenshot(
+        self, path: str, window: int | None = None, region: list[int] | None = None, max_size: int | None = None
+    ) -> dict[str, Any]:
         tool = self._capture_tool()
         if tool is None:
             raise EngineError(
@@ -390,17 +418,50 @@ class LinuxBackend(Backend):
             )
         if window is not None and tool != "import":
             raise EngineError("unsupported_platform", "Capturing one window needs ImageMagick's import on X11.")
+        if region is not None and tool == "gnome-screenshot":
+            raise EngineError("unsupported_platform", "Capturing a region needs grim, ImageMagick or scrot.")
+        x, y, w, h = region or (0, 0, 0, 0)
+        crop = {
+            "grim": ["-g", f"{x},{y} {w}x{h}"],
+            "import": ["-crop", f"{w}x{h}+{x}+{y}", "+repage"],
+            "scrot": ["-a", f"{x},{y},{w},{h}"],
+        }.get(tool, [])
         argv = {
-            "grim": ["grim", path],
-            "import": ["import", "-window", str(window) if window is not None else "root", path],
-            "scrot": ["scrot", "--overwrite", path],
+            "grim": ["grim", *(crop if region else []), path],
+            "import": [
+                "import",
+                "-window",
+                str(window) if window is not None else "root",
+                *(crop if region else []),
+                path,
+            ],
+            "scrot": ["scrot", "--overwrite", *(crop if region else []), path],
             "gnome-screenshot": ["gnome-screenshot", "-f", path],
         }[tool]
         self.run(argv, "Capture the screen")
         if not Path(path).is_file():
             raise EngineError("failed", "The screen capture produced no file.")
         width, height = png_size(Path(path))
-        return {"path": path, "width": width, "height": height, "scale": 1.0, "window": window}
+        if window is not None:
+            frame = self._window(str(window))
+            origin, points_wide = (frame["x"], frame["y"]), width
+        elif region is not None:
+            origin, points_wide = (region[0], region[1]), region[2]
+        else:
+            origin, points_wide = (0, 0), width
+        resize = shutil.which("magick") or shutil.which("convert")
+        if max_size and max(width, height) > max_size and resize:
+            self.run([resize, path, "-resize", f"{max_size}x{max_size}>", path], "Scale the screenshot")
+            width, height = png_size(Path(path))
+        return {
+            "path": path,
+            "width": width,
+            "height": height,
+            "scale": width / points_wide if points_wide else 1.0,
+            "origin": list(origin),
+            "window": window,
+            "region": region,
+        }
 
     def op_clipboard_read(self) -> dict[str, Any]:
         argv = (

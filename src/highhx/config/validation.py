@@ -273,6 +273,48 @@ CONFIG_SCHEMA = Obj(
                 description="HighhX Pro agent settings for this project",
             )
         ),
+        "computer": Prop(
+            Obj(
+                {
+                    "vision": Prop(
+                        Obj(
+                            {
+                                "provider": Prop(Str(choices=("local", "highhx", "anthropic", "openai", "gemini"))),
+                                "model": Prop(Str(min_length=1)),
+                                "base_url": Prop(Str(min_length=1)),
+                                "coordinates": Prop(Str(choices=("pixels", "relative1000"))),
+                                "format": Prop(Str(choices=("json", "uitars"))),
+                                "vision": Prop(Bool()),
+                                "max_images": Prop(Int(minimum=1, maximum=8)),
+                            },
+                            description="The vision model for `highhx computer task --desktop`",
+                        )
+                    ),
+                    "target": Prop(Str(min_length=1), description="local, or ssh://user@host for a remote computer"),
+                    "browser_endpoint": Prop(Str(min_length=1), description="An existing browser's DevTools URL"),
+                }
+            )
+        ),
+        "mcp": Prop(
+            Obj(
+                {
+                    "servers": Prop(
+                        Map(
+                            Obj(
+                                {
+                                    "command": Prop(Str(min_length=1), required=True),
+                                    "args": Prop(List(Str())),
+                                    "env": Prop(Map(Str())),
+                                    "enabled": Prop(Bool()),
+                                    "timeout": Prop(Int(minimum=1, maximum=3600)),
+                                }
+                            )
+                        )
+                    )
+                },
+                description="External MCP servers whose tools the HighhX agent may use",
+            )
+        ),
     }
 )
 

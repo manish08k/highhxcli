@@ -19,14 +19,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from highhx.automation.engine.bridge import EngineError
+from highhx.computer.capture import FRAME_SLACK, window_at
 from highhx.computer.model import UIElement
 from highhx.core.errors import HighhXError
 
 if TYPE_CHECKING:
     from highhx.computer.driver import HighhXDriver, Window
 
-FRAME_SLACK = 4
-"""Points a bound window may have shifted and still hold the grounded point where it was found."""
 
 
 class GroundingError(HighhXError):
@@ -52,12 +51,6 @@ class Grounded:
             "bounds": list(self.bounds),
             "window": self.window.id if self.window else None,
         }
-
-
-def window_at(windows: list[Window], point: tuple[int, int]) -> Window | None:
-    """The frontmost window containing ``point`` (``windows`` is front to back)."""
-    x, y = point
-    return next((w for w in windows if w.x <= x < w.x + w.width and w.y <= y < w.y + w.height), None)
 
 
 def _windows(driver: HighhXDriver) -> list[Window] | None:

@@ -334,6 +334,30 @@ class MacBackend(Backend):
         self._native("Move the pointer", lambda: self._trusted().move(x, y))
         return {"x": x, "y": y}
 
+    def op_mouse_button(self, action: str, x: int, y: int, button: str = "left") -> dict[str, Any]:
+        quartz = self._trusted()
+        down = action == "down"
+        self._native("Press the mouse button", lambda: quartz.press_button(x, y, button=button, down=down))
+        return {"action": action, "x": x, "y": y, "button": button}
+
+    def op_window_focus(self, window: int) -> dict[str, Any]:
+        quartz = self._trusted()
+        current = next((w for w in quartz.windows() if w["id"] == window), None)
+        if current is None:
+            raise EngineError("not_found", f"There is no on-screen window {window}.")
+        match = (current["x"], current["y"], current["width"], current["height"])
+        if not self._native("Bring the window to the front", lambda: quartz.raise_window(current["pid"], match)):
+            raise EngineError(
+                "not_found", f"Window {window} of {current['app']} is not reachable through Accessibility."
+            )
+        self._jxa(_ACTIVATE, current["app"], what=f"Switch to {current['app']}")
+
+        def in_front() -> bool:  # the window server reorders its list asynchronously
+            front = quartz.windows()
+            return bool(front) and front[0]["id"] == window
+
+        return {"window": window, "app": current["app"], "frontmost": self.poll(in_front, 3)}
+
     def op_cursor(self) -> dict[str, Any]:
         x, y = self._quartz().cursor()
         return {"x": x, "y": y}
@@ -351,7 +375,9 @@ class MacBackend(Backend):
     def op_screen(self) -> dict[str, Any]:
         return dict(self._quartz().screen())
 
-    def op_screenshot(self, path: str, window: int | None = None) -> dict[str, Any]:
+    def op_screenshot(
+        self, path: str, window: int | None = None, region: list[int] | None = None, max_size: int | None = None
+    ) -> dict[str, Any]:
         if not self._quartz().screen_capture_allowed():
             raise EngineError(
                 "screen_recording_denied",
@@ -360,18 +386,41 @@ class MacBackend(Backend):
             )
         target = Path(path)
         self.run(
-            ["screencapture", "-x", "-t", "png", *(["-l", str(window)] if window else []), str(target)],
+            [
+                "screencapture",
+                "-x",
+                "-t",
+                "png",
+                *(["-o", "-l", str(window)] if window else []),  # -o: the window's frame, no shadow
+                *(["-R", ",".join(str(v) for v in region)] if region else []),
+                str(target),
+            ],
             "Capture the screen",
         )
         if not target.is_file():
             raise EngineError("failed", "The screen capture produced no file.")
+        screen = self.op_screen()
+        if window:
+            frame = next((w for w in self._quartz().windows() if w["id"] == window), None)
+            if frame is None:
+                raise EngineError("not_found", f"There is no on-screen window {window}.")
+            origin, points = (frame["x"], frame["y"]), (frame["width"], frame["height"])
+        elif region:
+            origin, points = (region[0], region[1]), (region[2], region[3])
+        else:
+            origin, points = (screen["x"], screen["y"]), (screen["width"], screen["height"])
         width, height = png_size(target)
+        if max_size and max(width, height) > max_size:
+            self.run(["sips", "-Z", str(max_size), str(target)], "Scale the screenshot")
+            width, height = png_size(target)
         return {
             "path": str(target),
             "width": width,
             "height": height,
-            "scale": self.op_screen()["scale"],
+            "scale": width / points[0] if points[0] else float(screen["scale"]),
+            "origin": list(origin),
             "window": window,
+            "region": region,
         }
 
     def op_windows(self, app: str | None = None) -> dict[str, Any]:

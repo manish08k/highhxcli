@@ -66,6 +66,15 @@ def to_openai_messages(system: str, messages: list[Message]) -> list[dict[str, A
             if isinstance(block, ToolResultBlock):
                 content = f"ERROR: {block.content}" if block.is_error else block.content
                 out.append({"role": "tool", "tool_call_id": block.tool_call_id, "content": content})
+        images = message.images
+        if images:  # after the tool messages: Chat Completions carries images only in user content
+            parts: list[dict[str, Any]] = [{"type": "text", "text": message.text}] if message.text else []
+            for image in images:
+                if image.label:
+                    parts.append({"type": "text", "text": image.label})
+                parts.append({"type": "image_url", "image_url": {"url": f"data:{image.media_type};base64,{image.data}"}})
+            out.append({"role": "user", "content": parts})
+            continue
         text = message.text
         if text:
             out.append({"role": "user", "content": text})

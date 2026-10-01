@@ -38,6 +38,8 @@ class ComputerSession:
         cancel: CancellationToken | None = None,
         state_dir: Path | None = None,
         headless: bool | None = None,
+        target: str = "local",
+        browser_endpoint: str = "",
     ) -> None:
         self.gate = gate
         self.actor = actor
@@ -45,15 +47,30 @@ class ComputerSession:
         self.cancel = cancel or CancellationToken()
         self.state_dir = state_dir or user_data_dir() / "computer"
         self.headless = headless
+        self.target = target
+        """The computer operated: ``local``, or ``ssh://user@host``."""
+        self.browser_endpoint = browser_endpoint
+        """An existing browser's DevTools endpoint (a remote browser); empty: HighhX's own browser."""
         self._browser: ChromeBrowser | None = None
         self._runtimes: dict[str, ComputerRuntime] = {}
         self._desktop_app: str | None = None
         self._driver: HighhXDriver | None = None
+        from highhx.computer.capture import CaptureStore
+
+        self.captures = CaptureStore()
+        """Screenshots handed to models, and the checks that ground their coordinates."""
 
     def driver(self) -> HighhXDriver:
         """The HighhX Computer API for desktop operations — one per session, shared by HighhX Free's
         actions and HighhX Pro's agent tools, on the C#/.NET engine when installed (its newer
-        operations on the built-in engine) or the built-in engine (see :mod:`highhx.automation.engine`)."""
+        operations on the built-in engine) or the built-in engine (see :mod:`highhx.automation.engine`),
+        or a remote computer's engine over SSH. A connection found dead is replaced for the next
+        operation — and everything observed through it (screenshots, element ids) is discarded."""
+        if self._driver is not None and not self._driver.connected():
+            self._driver.end_session()
+            self._driver = None
+            self.captures.retire("the connection to the computer was lost")
+            self._runtimes.pop("desktop", None)
         if self._driver is None:
             from highhx.automation.engine.bridge import open_bridge
             from highhx.computer.driver import HighhXDriver
@@ -75,14 +92,19 @@ class ComputerSession:
                 code = 0 if result.ok else (result.exit_code or 1)
                 return code, result.stdout or "", result.stderr or result.error or ""
 
-            self._driver = HighhXDriver(open_bridge(runner, cancel=self.cancel))
+            self._driver = HighhXDriver(open_bridge(runner, cancel=self.cancel, target=self.target), target=self.target)
         return self._driver
 
     # ------------------------------------------------------------- providers
     @property
     def browser(self) -> ChromeBrowser:
         if self._browser is None:
-            self._browser = ChromeBrowser(self.state_dir, headless=self.headless)
+            if self.browser_endpoint:
+                from highhx.computer.browser import RemoteBrowser
+
+                self._browser = RemoteBrowser(self.state_dir, self.browser_endpoint)
+            else:
+                self._browser = ChromeBrowser(self.state_dir, headless=self.headless)
         return self._browser
 
     def provider(self, source: str) -> ComputerUseProvider:

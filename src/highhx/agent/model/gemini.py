@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from highhx.agent.messages import Message, StopReason, TextBlock, ToolCall, ToolResultBlock, Usage
+from highhx.agent.messages import ImageBlock, Message, StopReason, TextBlock, ToolCall, ToolResultBlock, Usage
 from highhx.agent.model.base import (
     DEFAULT_SDK_RETRIES,
     DEFAULT_TIMEOUT,
@@ -70,6 +70,14 @@ def to_gemini_contents(messages: list[Message], types: Any) -> list[Any]:
                             id=block.tool_call_id, name=block.name or "tool", response={key: block.content}
                         )
                     )
+                )
+            elif isinstance(block, ImageBlock):
+                import base64
+
+                if block.label:
+                    parts.append(types.Part(text=block.label))
+                parts.append(
+                    types.Part(inline_data=types.Blob(mime_type=block.media_type, data=base64.b64decode(block.data)))
                 )
         if parts:
             contents.append(types.Content(role="model" if message.role == "assistant" else "user", parts=parts))

@@ -46,6 +46,18 @@ VK = {
     "pagedown": 0x22,
     "home": 0x24,
     "end": 0x23,
+    "f1": 0x70,
+    "f2": 0x71,
+    "f3": 0x72,
+    "f4": 0x73,
+    "f5": 0x74,
+    "f6": 0x75,
+    "f7": 0x76,
+    "f8": 0x77,
+    "f9": 0x78,
+    "f10": 0x79,
+    "f11": 0x7A,
+    "f12": 0x7B,
 }
 """The protocol's named keys as virtual-key codes (``delete`` is backspace, as in the protocol)."""
 VK_MODIFIERS = {"command": 0x11, "control": 0x11, "option": 0x12, "shift": 0x10}
@@ -241,7 +253,7 @@ class Win32:
 
 
 UIA_SCRIPT = r"""
-param([string]$Mode, [string]$A = '', [string]$B = '', [string]$C = '', [string]$D = '', [string]$E = '')
+param([string]$Mode, [string]$A = '', [string]$B = '', [string]$C = '', [string]$D = '', [string]$E = '', [string]$F = '')
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing, System.Windows.Forms
 Add-Type -Namespace HighhX -Name Win32 -MemberDefinition @'
@@ -360,9 +372,19 @@ switch ($Mode) {
     $bitmap = New-Object System.Drawing.Bitmap($area.Width, $area.Height)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     $graphics.CopyFromScreen($area.Location, [System.Drawing.Point]::Empty, $area.Size)
-    $bitmap.Save($A, [System.Drawing.Imaging.ImageFormat]::Png)
-    $graphics.Dispose(); $bitmap.Dispose()
-    Emit @{ ok = $true }
+    $out = $bitmap
+    $limit = 0; [void][int]::TryParse($F, [ref]$limit)
+    $long = [Math]::Max($area.Width, $area.Height)
+    if ($limit -gt 0 -and $long -gt $limit) {
+      $out = New-Object System.Drawing.Bitmap([int]($area.Width * $limit / $long), [int]($area.Height * $limit / $long))
+      $scaled = [System.Drawing.Graphics]::FromImage($out)
+      $scaled.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+      $scaled.DrawImage($bitmap, 0, 0, $out.Width, $out.Height)
+      $scaled.Dispose()
+    }
+    $out.Save($A, [System.Drawing.Imaging.ImageFormat]::Png)
+    $graphics.Dispose(); $bitmap.Dispose(); if ($out -ne $bitmap) { $out.Dispose() }
+    Emit @{ ok = $true; x = $area.X; y = $area.Y; width = $area.Width; height = $area.Height }
   }
   'clipboard-read' { $t = Get-Clipboard -Raw -Format Text; Emit @{ text = $t } }
   'clipboard-write' { Set-Clipboard -Value $A; Emit @{ ok = $true } }
@@ -589,6 +611,21 @@ class WindowsBackend(Backend):
         self.api.send([self._move(x, y)])
         return {"x": x, "y": y}
 
+    def op_mouse_button(self, action: str, x: int, y: int, button: str = "left") -> dict[str, Any]:
+        down, up = MOUSE_FLAGS[button]
+        self.api.send([self._move(x, y), mouse_input(down if action == "down" else up)])
+        return {"action": action, "x": x, "y": y, "button": button}
+
+    def op_window_focus(self, window: int) -> dict[str, Any]:
+        if window not in self.api.windows():
+            raise EngineError("not_found", f"There is no visible window {window}.")
+        self.api.activate(window)
+        return {
+            "window": window,
+            "app": self.api.process_name(self.api.pid(window)),
+            "frontmost": self.poll(lambda: self.api.foreground() == window, 3),
+        }
+
     def op_cursor(self) -> dict[str, Any]:
         x, y = self.api.cursor()
         return {"x": x, "y": y}
@@ -642,17 +679,28 @@ class WindowsBackend(Backend):
             "scale": 1.0,
         }
 
-    def op_screenshot(self, path: str, window: int | None = None) -> dict[str, Any]:
-        area: list[str] = []
+    def op_screenshot(
+        self, path: str, window: int | None = None, region: list[int] | None = None, max_size: int | None = None
+    ) -> dict[str, Any]:
+        area: list[str] = [str(v) for v in region] if region else ["", "", "", ""]
         if window is not None:
             if window not in self.api.windows():
                 raise EngineError("not_found", f"There is no visible window {window}.")
             area = [str(v) for v in self.api.rect(window)]
-        self.uia("capture", path, *area, what="Capture the screen")
+        data = self.uia("capture", path, *area, str(max_size or ""), what="Capture the screen")
         if not Path(path).is_file():
             raise EngineError("failed", "The screen capture produced no file.")
         width, height = png_size(Path(path))
-        return {"path": path, "width": width, "height": height, "scale": 1.0, "window": window}
+        wide = int(data.get("width") or width)
+        return {
+            "path": path,
+            "width": width,
+            "height": height,
+            "scale": width / wide if wide else 1.0,
+            "origin": [int(data.get("x") or 0), int(data.get("y") or 0)],
+            "window": window,
+            "region": region,
+        }
 
     def op_clipboard_read(self) -> dict[str, Any]:
         text = self.uia("clipboard-read", what="Read the clipboard").get("text")

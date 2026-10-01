@@ -44,9 +44,10 @@ from highhx.execution.cancellation import CancellationToken
 if TYPE_CHECKING:
     from highhx.computer.verify import StateCheck
 
-TARGETS = ("local",)
-"""Where a driver can run. Sandboxes, cloud computers and virtual machines are not part of this
-HighhX build (see docs/COMPUTER_RUNTIME.md); asking for one is an error, never a pretend success."""
+TARGETS = ("local", "ssh://")
+"""Where a driver can run: this computer, or another one through SSH (``ssh://user@host``, see
+:mod:`highhx.automation.engine.remote`). Sandboxes and cloud computers are not part of this build;
+asking for one is an error, never a pretend success."""
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,15 @@ class Screenshot:
     width: int
     height: int
     scale: float = 1.0
+    """Image pixels per desktop point (after any downscaling)."""
     window: int | None = None
+    origin: tuple[int, int] = (0, 0)
+    """The desktop point the image's top-left pixel shows: point = origin + pixel / scale."""
+
+    def to_point(self, x: float, y: float) -> tuple[int, int]:
+        """A pixel of this image → the desktop point it shows."""
+        scale = self.scale or 1.0
+        return round(self.origin[0] + x / scale), round(self.origin[1] + y / scale)
 
 
 @dataclass(frozen=True)
@@ -230,12 +239,12 @@ class HighhXDriver:
         cancel: CancellationToken | None = None,
     ) -> HighhXDriver:
         """A driver for this computer (``target="local"``) on the configured engine."""
-        if target not in TARGETS:
+        if target != "local" and not target.startswith("ssh://"):
             raise UsageError(
-                f"Unknown computer target {target!r}: this HighhX build operates the local computer only.",
-                hint="Sandboxes, cloud computers and virtual machines are not available yet.",
+                f"Unknown computer target {target!r}: use local or ssh://user@host.",
+                hint="Sandboxes and cloud computers are not available in this build.",
             )
-        return cls(open_bridge(runner or standalone_runner(cancel), cancel=cancel), target=target)
+        return cls(open_bridge(runner or standalone_runner(cancel), cancel=cancel, target=target), target=target)
 
     @staticmethod
     def list_sessions() -> list[Session]:
@@ -263,6 +272,11 @@ class HighhXDriver:
     @property
     def name(self) -> str:
         return self.bridge.name
+
+    def connected(self) -> bool:
+        """False once the engine (for a remote computer: the SSH connection) is gone."""
+        alive = getattr(self.bridge.engine, "alive", None)
+        return self.session.ended is None and (alive is None or bool(alive()))
 
     # ------------------------------------------------------------- plumbing
     def call(self, op: str, **args: Any) -> dict[str, Any]:
@@ -311,11 +325,28 @@ class HighhXDriver:
         folder.mkdir(parents=True, exist_ok=True)
         return folder / f"{self.session.id}-{next(_SHOTS)}.png"
 
-    def screenshot(self, window: int | None = None, *, path: Path | None = None) -> Screenshot:
+    def screenshot(
+        self,
+        window: int | None = None,
+        *,
+        region: tuple[int, int, int, int] | None = None,
+        max_size: int | None = None,
+        path: Path | None = None,
+    ) -> Screenshot:
+        """The screen, one window, or a region (x, y, width, height in desktop points), at most
+        ``max_size`` pixels on its long side (scaled by the platform, so coordinates stay exact)."""
         target = path or self.screenshot_path()
-        data = self.call("screenshot", path=str(target), window=window)
+        data = self.call(
+            "screenshot", path=str(target), window=window, region=list(region) if region else None, max_size=max_size
+        )
+        origin = data.get("origin") or (region[:2] if region else (0, 0))
         return Screenshot(
-            Path(data["path"]), int(data["width"]), int(data["height"]), float(data.get("scale") or 1.0), window
+            Path(data["path"]),
+            int(data["width"]),
+            int(data["height"]),
+            float(data.get("scale") or 1.0),
+            window,
+            (int(origin[0]), int(origin[1])),
         )
 
     def apps(self) -> list[App]:
@@ -447,6 +478,13 @@ class HighhXDriver:
     def move(self, x: int, y: int) -> dict[str, Any]:
         return self.call("move", x=x, y=y)
 
+    def mouse_down(self, x: int, y: int, *, button: str = "left") -> dict[str, Any]:
+        """Press (and hold) a button at a point — release it with :meth:`mouse_up`."""
+        return self.call("mouse_button", action="down", x=x, y=y, button=button)
+
+    def mouse_up(self, x: int, y: int, *, button: str = "left") -> dict[str, Any]:
+        return self.call("mouse_button", action="up", x=x, y=y, button=button)
+
     def drag(
         self, start: tuple[int, int], end: tuple[int, int], *, button: str = "left", duration_ms: int = 300
     ) -> dict[str, Any]:
@@ -479,6 +517,10 @@ class HighhXDriver:
 
     def focus(self, app: str) -> dict[str, Any]:
         return self.call("focus", app=app)
+
+    def focus_window(self, window: int) -> dict[str, Any]:
+        """Bring one exact window to the front (an application with several windows)."""
+        return self.call("window_focus", window=window)
 
     def quit(self, app: str) -> dict[str, Any]:
         return self.call("quit", app=app)

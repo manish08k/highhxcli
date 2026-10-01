@@ -1,5 +1,6 @@
-"""A minimal RFC 6455 WebSocket client (text frames, ping/pong, close) for local DevTools
-connections. Standard library only; every blocking read observes a cancellation token."""
+"""A minimal RFC 6455 WebSocket client (text frames, ping/pong, close) for DevTools connections —
+local, or a configured remote browser over TLS. Standard library only; every blocking read
+observes a cancellation token."""
 
 from __future__ import annotations
 
@@ -28,16 +29,33 @@ class WebSocketTimeout(IntegrationError):
     ``closed`` tells which."""
 
 
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
 class WebSocket:
-    def __init__(self, url: str, *, timeout: float = 30.0) -> None:
+    """``ws://`` to this computer (the HighhX browser, or an ``ssh -L`` tunnel), or — only when a
+    remote browser was configured explicitly (``allow_remote``) — ``wss://`` with verified TLS.
+    Plain ``ws://`` to another host is refused: DevTools controls the browser completely."""
+
+    def __init__(self, url: str, *, timeout: float = 30.0, allow_remote: bool = False) -> None:
         parsed = urlparse(url)
-        if parsed.scheme != "ws":
-            raise IntegrationError(f"Only local ws:// DevTools endpoints are supported, got {url!r}")
+        if parsed.scheme not in ("ws", "wss"):
+            raise IntegrationError(f"Not a WebSocket DevTools endpoint: {url.split('?')[0]!r}")
         host = parsed.hostname or "127.0.0.1"
-        if host not in ("127.0.0.1", "localhost", "::1"):
+        local = host in LOOPBACK
+        if not local and not allow_remote:
             raise IntegrationError("Refusing to connect to a non-local DevTools endpoint.")
-        port = parsed.port or 80
-        self.sock = socket.create_connection((host, port), timeout=timeout)
+        if not local and parsed.scheme != "wss":
+            raise IntegrationError(
+                "A remote browser's DevTools must use wss:// (TLS); for plain ws:// use an SSH tunnel to 127.0.0.1."
+            )
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+        raw = socket.create_connection((host, port), timeout=timeout)
+        if parsed.scheme == "wss":
+            import ssl
+
+            raw = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
+        self.sock = raw
         key = base64.b64encode(os.urandom(16)).decode()
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
         request = (

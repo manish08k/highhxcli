@@ -131,8 +131,9 @@ def test_mac_screenshot_needs_screen_recording(fake_quartz: dict[str, Any], tmp_
     assert runner.argv == []
     fake_quartz["capture"] = True
     shot = MacBackend(runner).call("screenshot", {"path": str(tmp_path / "a.png"), "window": 5})
-    assert runner.argv[-1] == ["screencapture", "-x", "-t", "png", "-l", "5", str(tmp_path / "a.png")]
-    assert (shot["width"], shot["height"], shot["scale"]) == (1, 1, 2.0)
+    assert runner.argv[-1] == ["screencapture", "-x", "-t", "png", "-o", "-l", "5", str(tmp_path / "a.png")]
+    # the image maps to the window's frame: point = origin + pixel / scale (a 1-pixel fake of an 800-point window)
+    assert (shot["width"], shot["height"], shot["origin"], shot["scale"]) == (1, 1, [0, 25], 1 / 800)
 
 
 def test_mac_menu_errors_name_what_exists(fake_quartz: dict[str, Any]) -> None:

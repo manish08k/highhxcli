@@ -39,6 +39,23 @@ AGENT_TURN = "agent.turn"
 AGENT_TOOL_CALL = "agent.tool_call"
 AGENT_COMPLETED = "agent.completed"
 VOICE_HEARD = "voice.heard"
+COMPUTER_TASK_STARTED = "computer.task.started"
+COMPUTER_SCREENSHOT = "computer.screenshot"
+COMPUTER_MODEL_REQUEST = "computer.model.request"
+COMPUTER_MODEL_RESPONSE = "computer.model.response"
+COMPUTER_ACTION_PREDICTED = "computer.action.predicted"
+COMPUTER_ACTION_INVALID = "computer.action.invalid"
+COMPUTER_ACTION_EXECUTED = "computer.action.executed"
+COMPUTER_VERIFICATION_STARTED = "computer.verification.started"
+COMPUTER_VERIFICATION_PASSED = "computer.verification.passed"
+COMPUTER_VERIFICATION_FAILED = "computer.verification.failed"
+COMPUTER_RECOVERY = "computer.recovery"
+COMPUTER_TASK_COMPLETED = "computer.task.completed"
+COMPUTER_TASK_FAILED = "computer.task.failed"
+COMPUTER_TASK_NEEDS_USER = "computer.task.needs_user"
+COMPUTER_TASK_CANCELLED = "computer.task.cancelled"
+MCP_CONNECTED = "mcp.connected"
+ATTACHMENTS_ADDED = "attachments.added"
 
 EVENT_NAMES = (
     SESSION_STARTED,
@@ -61,8 +78,37 @@ EVENT_NAMES = (
     AGENT_TOOL_CALL,
     AGENT_COMPLETED,
     VOICE_HEARD,
+    COMPUTER_TASK_STARTED,
+    COMPUTER_SCREENSHOT,
+    COMPUTER_MODEL_REQUEST,
+    COMPUTER_MODEL_RESPONSE,
+    COMPUTER_ACTION_PREDICTED,
+    COMPUTER_ACTION_INVALID,
+    COMPUTER_ACTION_EXECUTED,
+    COMPUTER_VERIFICATION_STARTED,
+    COMPUTER_VERIFICATION_PASSED,
+    COMPUTER_VERIFICATION_FAILED,
+    COMPUTER_RECOVERY,
+    COMPUTER_TASK_COMPLETED,
+    COMPUTER_TASK_FAILED,
+    COMPUTER_TASK_NEEDS_USER,
+    COMPUTER_TASK_CANCELLED,
+    MCP_CONNECTED,
+    ATTACHMENTS_ADDED,
 )
-LOGGED_PREFIXES = ("session.", "intent.", "action.", "approval.", "workflow.", "agent.", "voice.", "step.")
+LOGGED_PREFIXES = (
+    "session.",
+    "intent.",
+    "action.",
+    "approval.",
+    "workflow.",
+    "agent.",
+    "voice.",
+    "step.",
+    "computer.",
+    "mcp.",
+    "attachments.",
+)
 
 
 def events_dir() -> Path:

@@ -7,6 +7,7 @@ import AppKit
 final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let statePath: String
     var window: NSWindow!
+    var second: NSWindow!
     var count = 0
     var adds = [0, 0]
     let label = NSTextField(labelWithString: "Count: 0")
@@ -39,6 +40,11 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     @objc func scrolled() { write() }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A second window of the same application (behind the main one): exact window targeting.
+        second = NSWindow(contentRect: NSRect(x: 760, y: 200, width: 320, height: 200),
+                          styleMask: [.titled], backing: .buffered, defer: false)
+        second.title = "HighhX Fixture 2"
+        second.orderFront(nil)
         window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 480, height: 400),
                           styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "HighhX Fixture"

@@ -535,11 +535,6 @@ RULES: tuple[Rule, ...] = (
     ),
     # browser & desktop
     _rule(
-        "screenshot",
-        r"(?:take\s+(?:a\s+)?)?screenshot(?:\s+(?:of\s+)?(?:the\s+)?(?:page|browser))?",
-        _fixed("browser.screenshot", "take a screenshot"),
-    ),
-    _rule(
         "read-page",
         r"(?:read|extract|get)\s+(?:the\s+)?(?:page|web\s*page)(?:\s+(?:text|content|data))?",
         _fixed("browser.extract", "read the page"),

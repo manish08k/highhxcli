@@ -379,6 +379,7 @@ class ChromeBrowser:
     """
 
     name = "browser"
+    reset_hint = RESET_HINT
 
     def __init__(self, state_dir: Path, *, headless: bool | None = None, binary: str | None = None) -> None:
         self.state_dir = state_dir
@@ -598,7 +599,7 @@ class ChromeBrowser:
         detail = last.message if isinstance(last, IntegrationError) else str(last)
         self._note(BrowserState.RECOVERY_REQUIRED, "connect_failed", detail)
         raise IntegrationError(
-            f"Could not connect to the browser after {CONNECT_ATTEMPTS} attempts: {detail}", hint=RESET_HINT
+            f"Could not connect to the browser after {CONNECT_ATTEMPTS} attempts: {detail}", hint=self.reset_hint
         )
 
     def _ping(self, conn: CDPConnection, cancel: CancellationToken | None) -> bool:
@@ -730,7 +731,7 @@ class ChromeBrowser:
                 self.tabs.remove(target)
                 self._session_id = ""
                 self._note(BrowserState.PAGE_CLOSED, "page_closed", "the tab closed while HighhX was attaching")
-        raise IntegrationError("Could not find a usable tab in the browser.", hint=RESET_HINT)
+        raise IntegrationError("Could not find a usable tab in the browser.", hint=self.reset_hint)
 
     def _choose_tab(self, conn: CDPConnection, *, crashed: bool, cancel: CancellationToken | None) -> str:
         previous = self._target_id or str(self._saved().get("tab") or "")
@@ -925,7 +926,7 @@ class ChromeBrowser:
                 raise OperationCancelledError("Browser operation cancelled.")
         self._note(BrowserState.RECOVERY_REQUIRED, "gave_up", f"could not {op} after {RECOVERY_ATTEMPTS} attempts")
         raise IntegrationError(
-            f"Could not {op}: the browser failed {RECOVERY_ATTEMPTS} times.", hint=RESET_HINT, details=problems
+            f"Could not {op}: the browser failed {RECOVERY_ATTEMPTS} times.", hint=self.reset_hint, details=problems
         )
 
     def _recover(self, exc: IntegrationError) -> None:
@@ -1355,6 +1356,105 @@ class ChromeBrowser:
         )
         return base64.b64decode(str(data.get("data") or ""))
 
+    # ------------------------------------------------- the page as pixels (vision)
+    def viewport(self, *, cancel: CancellationToken | None = None) -> dict[str, Any]:
+        """Where the page is: URL, title, scroll offset and viewport size in CSS pixels, pixel ratio."""
+        data = self._eval(
+            "({url: location.href, title: document.title, x: scrollX, y: scrollY,"
+            " width: innerWidth, height: innerHeight, dpr: devicePixelRatio})",
+            cancel,
+        )
+        return dict(data or {})
+
+    def page_capture(self, *, cancel: CancellationToken | None = None) -> tuple[bytes, dict[str, Any]]:
+        """The visible viewport as PNG, one image pixel per CSS pixel, with the viewport it shows."""
+        import base64
+
+        view = self.viewport(cancel=cancel)
+        clip = {
+            "x": float(view.get("x") or 0),
+            "y": float(view.get("y") or 0),
+            "width": float(view.get("width") or 0),
+            "height": float(view.get("height") or 0),
+            "scale": 1 / float(view.get("dpr") or 1),
+        }
+        data = self._run(
+            "take a screenshot",
+            Retry.SAFE,
+            lambda c, s: c.call("Page.captureScreenshot", {"format": "png", "clip": clip}, session_id=s, cancel=cancel),
+            cancel,
+        )
+        return base64.b64decode(str(data.get("data") or "")), view
+
+    def pointer(
+        self,
+        kind: str,
+        x: float,
+        y: float,
+        *,
+        to: tuple[float, float] | None = None,
+        button: str = "left",
+        count: int = 1,
+        direction: str = "down",
+        cancel: CancellationToken | None = None,
+    ) -> None:
+        """Pointer input at a viewport point (CSS pixels): click, move, drag, wheel. A click or drag
+        is never repeated after a failure (it could happen twice); a move is."""
+        if kind in ("click", "drag"):
+            self._before_action(cancel, follow_tabs=kind == "click")
+
+        def events(conn: CDPConnection, session: str) -> None:
+            def mouse(**event: Any) -> None:
+                self._mouse(conn, session, cancel, **event)
+
+            mouse(type="mouseMoved", x=x, y=y)
+            if kind == "click":
+                for n in range(1, count + 1):
+                    mouse(type="mousePressed", x=x, y=y, button=button, clickCount=n)
+                    mouse(type="mouseReleased", x=x, y=y, button=button, clickCount=n)
+            elif kind == "drag" and to is not None:
+                mouse(type="mousePressed", x=x, y=y, button=button, clickCount=1)
+                for step in range(1, 9):
+                    mouse(type="mouseMoved", x=x + (to[0] - x) * step / 8, y=y + (to[1] - y) * step / 8, button=button)
+                mouse(type="mouseReleased", x=to[0], y=to[1], button=button, clickCount=1)
+            elif kind == "wheel":
+                dx, dy = {"down": (0, 400), "up": (0, -400), "right": (400, 0), "left": (-400, 0)}[direction]
+                mouse(type="mouseWheel", x=x, y=y, deltaX=dx, deltaY=dy)
+
+        self._run(f"{kind} at ({x:g}, {y:g})", Retry.SAFE if kind == "move" else Retry.UNSAFE, events, cancel)
+
+    def insert_text(self, text: str, *, cancel: CancellationToken | None = None) -> None:
+        """Type into whatever has focus on the page (after a visual click into a field)."""
+        self._before_action(cancel)
+        self._run(
+            "type text",
+            Retry.UNSAFE,
+            lambda c, s: c.call("Input.insertText", {"text": text}, session_id=s, cancel=cancel),
+            cancel,
+        )
+
+    def key_combo(self, modifiers: list[str], key: str, *, cancel: CancellationToken | None = None) -> None:
+        """A key with modifiers (``["command"], "a"``) to the page."""
+        bits = {"option": 1, "control": 2, "command": 4, "shift": 8}
+        mask = sum(bits[m] for m in modifiers if m in bits)
+        if key in KEY_CODES:
+            name, code, vk, text = KEY_CODES[key]
+        elif len(key) == 1:
+            name, code, vk, text = key, f"Key{key.upper()}", ord(key.upper()), key
+        else:
+            raise IntegrationError(f"Unsupported key {key!r}")
+        down: dict[str, Any] = {"type": "keyDown", "key": name, "code": code, "windowsVirtualKeyCode": vk, "modifiers": mask}
+        if text and not mask & (2 | 4):
+            down["text"] = text
+        up = {"type": "keyUp", "key": name, "code": code, "windowsVirtualKeyCode": vk, "modifiers": mask}
+        self._before_action(cancel)
+
+        def keystroke(conn: CDPConnection, session: str) -> None:
+            conn.call("Input.dispatchKeyEvent", down, session_id=session, cancel=cancel)
+            conn.call("Input.dispatchKeyEvent", up, session_id=session, cancel=cancel)
+
+        self._run(f"press {'+'.join([*modifiers, key])}", Retry.UNSAFE, keystroke, cancel)
+
     # ----------------------------------------------------------------- actions
     def _act(
         self, element_id: str, action: str, arg: str = "", cancel: CancellationToken | None = None
@@ -1587,6 +1687,96 @@ def _uses_profile(pid: int, profile: Path) -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
     return f"--user-data-dir={profile}" in out
+
+
+class RemoteBrowser(ChromeBrowser):
+    """A browser HighhX did not start: an existing DevTools endpoint — a browser on another
+    computer (``wss://`` or through an ``ssh -L`` tunnel), a hosted browser service, or one you
+    started with ``--remote-debugging-port``.
+
+        HIGHHX_BROWSER_ENDPOINT=http://127.0.0.1:9222          # or computer.browser_endpoint
+        HIGHHX_BROWSER_ENDPOINT=wss://browser.example.com/devtools/browser/…?token=…
+
+    Everything that runs over the DevTools connection is the same as for HighhX's own browser —
+    tabs, navigation, the page's elements, dialogs, screenshots, verification, reconnection after
+    a lost connection. What HighhX cannot do to a browser it did not start is refused, not faked:
+    it never launches, restarts or stops it, and downloads (saved on the browser's computer, not
+    this one) cannot be followed or verified here."""
+
+    reset_hint = "Start the remote browser (HighhX never starts it), or fix HIGHHX_BROWSER_ENDPOINT."
+
+    def __init__(self, state_dir: Path, endpoint: str) -> None:
+        super().__init__(state_dir, headless=True, binary="remote")
+        self.endpoint = endpoint.rstrip("/")
+
+    @property
+    def shown_endpoint(self) -> str:
+        return self.endpoint.split("?", 1)[0]  # a token in the query is never shown or logged
+
+    def capability(self) -> Capability:
+        return Capability(self.name, True, f"remote browser {self.shown_endpoint} via DevTools")
+
+    def _ws_url(self) -> str:
+        from urllib.parse import urlparse
+
+        if urlparse(self.endpoint).scheme in ("ws", "wss"):
+            return self.endpoint
+        request = urllib.request.Request(f"{self.endpoint}/json/version")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as r:  # nosec B310 - the configured endpoint
+                version = json.loads(r.read())
+        except (OSError, ValueError) as exc:
+            raise IntegrationError(f"The remote browser at {self.shown_endpoint} does not answer: {exc}") from None
+        url = str(version.get("webSocketDebuggerUrl") or "")
+        if not url:
+            raise IntegrationError(f"{self.shown_endpoint} is not a DevTools endpoint.")
+        return url
+
+    def _state(self) -> dict[str, Any] | None:
+        try:
+            self._ws_url()
+        except IntegrationError:
+            return None
+        return {"pid": 0, "port": 0, "endpoint": self.shown_endpoint}
+
+    def start(self, *, cancel: CancellationToken | None = None) -> dict[str, Any]:
+        state = self._state()
+        if state is None:
+            raise IntegrationError(
+                f"The remote browser at {self.shown_endpoint} is unreachable.",
+                hint="HighhX never starts a remote browser: start it, or fix HIGHHX_BROWSER_ENDPOINT.",
+            )
+        return state
+
+    def stop(self) -> bool:
+        self.close()  # the connection only: the browser is not HighhX's to stop
+        self.state = BrowserState.STOPPED
+        return True
+
+    def _connect(self, cancel: CancellationToken | None) -> CDPConnection:
+        from urllib.parse import urlparse
+
+        url = self._ws_url()
+        remote = (urlparse(url).hostname or "") not in ("127.0.0.1", "localhost", "::1")
+        conn = CDPConnection(url, allow_remote=remote)
+        try:
+            conn.listeners.append(self._on_event)
+            conn.call("Target.setDiscoverTargets", {"discover": True}, cancel=cancel, timeout=SETUP_TIMEOUT)
+            infos = conn.call("Target.getTargets", cancel=cancel, timeout=SETUP_TIMEOUT).get("targetInfos") or []
+            self.tabs.sync(infos)
+        except BaseException:
+            conn.close()
+            raise
+        if self._conn is not None or self.state is not BrowserState.STOPPED:
+            self.reconnects += 1
+        self._session_id = ""
+        self._note(BrowserState.CONNECTED, "connected", f"connected to the remote browser {self.shown_endpoint}")
+        return conn
+
+    def download(self, element_id: str, *, cancel: CancellationToken | None = None) -> Download:
+        raise IntegrationError(
+            "Downloads from a remote browser are saved on its computer: HighhX cannot follow or verify them here."
+        )
 
 
 def _alive(pid: int) -> bool:

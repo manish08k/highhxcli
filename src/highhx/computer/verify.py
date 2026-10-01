@@ -62,12 +62,17 @@ _ELEMENT = Obj(
         ["exists: false is not provable (the accessibility walk is bounded)"] if v.get("exists") is False else []
     ),
 )
+_TEXT = Obj(
+    {"contains": Prop(Str(min_length=1, check=lambda v: "at most 200 characters" if len(v) > 200 else None), required=True)},
+    description="Text visible in the window: its accessibility text, else OCR of the window (when installed).",
+)
 PREDICATE = Obj(
     {
         "window": Prop(Obj({"exists": Prop(Bool()), "bounds": Prop(_BOUNDS)})),
         "element": Prop(_ELEMENT),
+        "text": Prop(_TEXT),
     },
-    check=lambda v: [] if len([k for k in v if v[k] is not None]) == 1 else ["give exactly one of window or element"],
+    check=lambda v: [] if len([k for k in v if v[k] is not None]) == 1 else ["give exactly one of window, element or text"],
 )
 PREDICATES = List(PREDICATE, min_items=1, description=f"1 to {MAX_PREDICATES} predicates, all of which must hold.")
 
@@ -179,6 +184,33 @@ def _element(spec: dict[str, Any], tree: Observation | str) -> tuple[str, str]:
     return ("unknown" if unknown else "unsatisfied"), detail
 
 
+def _text(driver: HighhXDriver, window: Window, wanted: str, tree: Observation | str) -> tuple[str, str]:
+    """Visible text: the window's accessibility names and values first; OCR of the window's own
+    capture when that finds nothing and tesseract is installed. Not found stays unknown."""
+    needle = " ".join(wanted.lower().split())
+    if not isinstance(tree, str):
+        for element in tree.elements:
+            haystack = " ".join(f"{element.name} {'' if element.secret else element.value}".lower().split())
+            if needle in haystack:
+                return "satisfied", f"{element.role} {element.name!r} shows it"
+    from highhx.computer.desktop import TesseractOCR
+
+    reader = TesseractOCR()
+    if not reader.capability().available:
+        return "unknown", "not in the accessibility text, and OCR is not installed to read the pixels"
+    try:
+        shot = driver.screenshot(window.id)
+    except EngineError as exc:
+        return "unknown", f"not in the accessibility text; the window could not be captured: {exc.message}"
+    try:
+        text = " ".join(reader.read_image(shot.path).text.lower().split())
+    finally:
+        shot.path.unlink(missing_ok=True)
+    if needle in text:
+        return "satisfied", "read on screen (OCR)"
+    return "unknown", "neither the accessibility text nor OCR shows it (absence is not proven)"
+
+
 def sample(driver: HighhXDriver, window_id: int, expect: list[dict[str, Any]]) -> tuple[list[PredicateResult], Any]:
     """One fresh evaluation of every predicate."""
     window = next((w for w in driver.windows() if w.id == window_id), None)
@@ -187,6 +219,16 @@ def sample(driver: HighhXDriver, window_id: int, expect: list[dict[str, Any]]) -
     for index, predicate in enumerate(expect):
         if predicate.get("window") is not None:
             status, detail = _window(predicate["window"], window)
+        elif predicate.get("text") is not None:
+            if window is None:
+                status, detail = "unknown", "the window is gone, so its text cannot be read"
+            else:
+                if tree is None:
+                    try:
+                        tree = driver.get_ui_tree(window.app, limit=TREE_LIMIT)
+                    except EngineError as exc:
+                        tree = f"the accessibility tree could not be read: {exc.message}"
+                status, detail = _text(driver, window, str(predicate["text"]["contains"]), tree)
         elif window is None:
             status, detail = "unknown", "the window is gone, so its elements cannot be observed"
         else:

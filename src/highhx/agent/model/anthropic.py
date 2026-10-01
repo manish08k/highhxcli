@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
-from highhx.agent.messages import Message, StopReason, TextBlock, ToolCall, ToolResultBlock, Usage
+from highhx.agent.messages import ImageBlock, Message, StopReason, TextBlock, ToolCall, ToolResultBlock, Usage
 from highhx.agent.model.base import (
     DEFAULT_SDK_RETRIES,
     DEFAULT_TIMEOUT,
@@ -69,6 +69,12 @@ def to_anthropic_messages(messages: list[Message]) -> list[dict[str, Any]]:
                         "content": block.content,
                         "is_error": block.is_error,
                     }
+                )
+            elif isinstance(block, ImageBlock):
+                if block.label:
+                    content.append({"type": "text", "text": block.label})
+                content.append(
+                    {"type": "image", "source": {"type": "base64", "media_type": block.media_type, "data": block.data}}
                 )
         if content:
             out.append({"role": message.role, "content": content})

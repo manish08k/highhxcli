@@ -26,11 +26,23 @@ REQUEST_TIMEOUT = 30.0
 HANDSHAKE_TIMEOUT = 10.0
 
 
-class DotnetEngine:
-    name = "dotnet"
+class SubprocessEngine:
+    """An automation engine in a subprocess speaking the protocol as JSON lines: the .NET engine,
+    or a remote computer's HighhX engine at the end of an SSH connection."""
 
-    def __init__(self, binary: Path, *, cancel: CancellationToken | None = None) -> None:
-        self.binary = binary
+    name = "subprocess"
+    label = "The automation engine"
+    lost = "failed"
+    """The error code when the engine (or the link to it) is gone mid-session."""
+
+    def __init__(
+        self,
+        argv: list[str],
+        *,
+        cancel: CancellationToken | None = None,
+        handshake_timeout: float = HANDSHAKE_TIMEOUT,
+    ) -> None:
+        self.argv = argv
         self.cancel = cancel
         self._next = 0
         self.protocol = MIN_ENGINE_PROTOCOL
@@ -38,7 +50,7 @@ class DotnetEngine:
         self._lines: queue.Queue[str | None] = queue.Queue()
         try:
             self._process = subprocess.Popen(  # nosec B603 - fixed argv
-                [str(binary), "--stdio"],
+                argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -47,11 +59,11 @@ class DotnetEngine:
                 start_new_session=os.name == "posix",
             )
         except OSError as exc:
-            raise EngineError("not_found", f"The .NET automation engine could not start: {exc}") from None
+            raise EngineError("not_found", f"{self.label} could not start: {exc}") from None
         assert self._process.stdout is not None
         threading.Thread(target=self._read, args=(self._process.stdout,), daemon=True).start()
         try:
-            status = self._send("status", {}, timeout=HANDSHAKE_TIMEOUT)
+            status = self._send("status", {}, timeout=handshake_timeout)
         except EngineError:
             self.close()
             raise
@@ -60,7 +72,7 @@ class DotnetEngine:
             self.close()
             raise EngineError(
                 "failed",
-                f"The .NET automation engine speaks protocol {status.get('protocol')}, HighhX needs "
+                f"{self.label} speaks protocol {status.get('protocol')}, HighhX needs "
                 f"{MIN_ENGINE_PROTOCOL}-{PROTOCOL_VERSION}.",
                 hint="Rebuild the engine from this HighhX version's engine/dotnet.",
             )
@@ -73,14 +85,14 @@ class DotnetEngine:
 
     def _send(self, op: str, args: dict[str, Any], *, timeout: float = REQUEST_TIMEOUT) -> dict[str, Any]:
         if self._process.poll() is not None or self._process.stdin is None:
-            raise EngineError("failed", "The .NET automation engine is not running.")
+            raise EngineError(self.lost, f"{self.label} is not running.")
         self._next += 1
         message = request(op, args, self._next, version=self.protocol)
         try:
             self._process.stdin.write(json.dumps(message) + "\n")
             self._process.stdin.flush()
         except OSError as exc:
-            raise EngineError("failed", f"The .NET automation engine stopped: {exc}") from None
+            raise EngineError(self.lost, f"{self.label} stopped: {exc}") from None
         waited = 0.0
         while True:
             if self.cancel is not None and self.cancel.cancelled:
@@ -92,10 +104,10 @@ class DotnetEngine:
                 waited += 0.2
                 if waited >= timeout:
                     self.close()
-                    raise EngineError("timeout", f"The .NET automation engine did not answer {op} in time.") from None
+                    raise EngineError("timeout", f"{self.label} did not answer {op} in time.") from None
                 continue
             if line is None:
-                raise EngineError("failed", "The .NET automation engine exited.")
+                raise EngineError(self.lost, f"{self.label} exited.")
             try:
                 reply = json.loads(line)
             except ValueError:
@@ -115,6 +127,9 @@ class DotnetEngine:
         timeout = REQUEST_TIMEOUT + (args.get("ms", 0) / 1000 if op == "wait" else 0)
         return self._send(op, args, timeout=timeout)
 
+    def alive(self) -> bool:
+        return self._process.poll() is None
+
     def close(self) -> None:
         process = getattr(self, "_process", None)
         if process is None:
@@ -132,3 +147,12 @@ class DotnetEngine:
                     process.stdout.close()
                 except OSError:
                     pass
+
+
+class DotnetEngine(SubprocessEngine):
+    name = "dotnet"
+    label = "The .NET automation engine"
+
+    def __init__(self, binary: Path, *, cancel: CancellationToken | None = None) -> None:
+        self.binary = binary
+        super().__init__([str(binary), "--stdio"], cancel=cancel)

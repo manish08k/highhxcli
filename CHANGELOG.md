@@ -8,6 +8,20 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Plain-language checks and screenshots.** "… and verify the window", "confirm Saved is shown",
+  "make sure the Save button is visible" become `computer.verify` on the desktop (or
+  `browser.wait` on a page); "take a screenshot of TextEdit" / "capture the screen" become
+  `computer.screenshot` of that window or the screen. Bare "take a screenshot" still captures the
+  page, as before.
+- **Mouse button down / up** (`computer.mouse_button`, `highhx computer mouse down|up X,Y`,
+  `mouse_down:` / `mouse_up:` for the agent, MCP `mouse_button`): drags and long presses that
+  `computer.drag` cannot express. Asked like a drag.
+- **One exact window to the front** (`computer.focus` with `window`, `highhx computer window --id
+  ID --focus`, `focus_window:` for the agent): for applications with several windows; verified
+  from the window order.
+- **Region and application-window screenshots** (`--region X,Y,W,H`, `--app APP`).
+- `computer.verify` without a window or application checks the frontmost window; the agent can
+  verify with `verify` (JSON predicates).
 - **MCP: `highhx computer mcp`.** The desktop tools (observe, screenshot, windows, apps,
   element_at, verify, launch, focus, click, click_at, move, drag, scroll, type, press, hotkey,
   menu, window, quit, clipboard) for MCP clients over stdio, with their JSON schemas and
@@ -23,6 +37,11 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **macOS read and pressed the wrong window of a multi-window application.** The tree came from
+  whichever window System Events listed first, and a press went to "the first window" at that
+  moment. Observation now reads the focused window, and a press re-finds that window by title
+  and frame — or is refused as stale.
+- "click Save and verify the window" made "Save and verify the window" the button's name.
 - **A desktop press could reach a different control with the same name.** The runtime bound the
   approved element, but engines re-found it by name and took the first match (macOS, Windows,
   Linux). `click` now carries the observed occurrence and bounds: several matches without one

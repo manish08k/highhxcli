@@ -16,6 +16,19 @@ from highhx.automation.engine.bridge import AutomationBridge, EngineError
 from highhx.automation.engine.protocol import FEATURES
 from highhx.computer.driver import HighhXDriver
 
+def png(width: int, height: int) -> bytes:
+    """A valid grey PNG of this size (real header and pixels, as a capture tool writes)."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    rows = b"".join(b"\0" + b"\x80" * width for _ in range(height))
+    header = struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+
 PNG_1X1 = bytes.fromhex(
     "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
     "1f15c4890000000d49444154789c6300010000050001"
@@ -45,6 +58,8 @@ class FakeEngine:
         self.refuse_quit: set[str] = set()
         self.menus = {"File": ["Save", "Close"], "Edit": ["Copy", "Paste"]}
         self.chosen: list[list[str]] = []
+        self.shot_size = (1, 1)
+        """Screenshots' pixel size (a model-sized capture: e.g. (720, 450) of the 1440x900 screen)."""
         self.windows = [
             {"id": 7, "pid": 70, "app": "Notes", "title": "Untitled", "x": 0, "y": 25, "width": 800, "height": 600}
         ]
@@ -93,8 +108,16 @@ class FakeEngine:
         if op == "screen":
             return {"width": 1440, "height": 900, "x": 0, "y": 0, "scale": 2.0}
         if op == "screenshot":
-            Path(args["path"]).write_bytes(PNG_1X1)
-            return {"path": args["path"], "width": 1, "height": 1, "scale": 2.0, "window": args.get("window")}
+            width, height = self.shot_size
+            Path(args["path"]).write_bytes(png(width, height))
+            return {
+                "path": args["path"],
+                "width": width,
+                "height": height,
+                "scale": width / 1440 if self.shot_size != (1, 1) else 2.0,  # pixels per point of the 1440-point screen
+                "origin": [0, 0],
+                "window": args.get("window"),
+            }
         if op == "apps":
             return {
                 "apps": [
@@ -131,6 +154,17 @@ class FakeEngine:
             if op == "click_at":
                 return {**args, "element": self._at(args["x"], args["y"])}
             return {"x": args["x"], "y": args["y"]}
+        if op == "mouse_button":
+            self.pointer = (args["x"], args["y"])
+            return {"action": args["action"], "x": args["x"], "y": args["y"], "button": args.get("button", "left")}
+        if op == "window_focus":
+            window = next((w for w in self.windows if w["id"] == args["window"]), None)
+            if window is None:
+                raise EngineError("not_found", "no such window")
+            if not self.focus_fails:
+                self.windows.remove(window)
+                self.windows.insert(0, window)  # front to back, as the window server lists them
+            return {"window": window["id"], "app": window["app"], "frontmost": self.windows[0] is window}
         if op == "drag":
             self.pointer = (args["to_x"], args["to_y"])
             return {"from": [args["from_x"], args["from_y"]], "to": [args["to_x"], args["to_y"]]}

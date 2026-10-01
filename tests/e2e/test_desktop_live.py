@@ -195,3 +195,49 @@ def test_verify_state_against_a_real_window(fixture_app: tuple[Any, Any]) -> Non
     assert check.ok, check.to_dict()
     moved = driver.verify_state(window.id, [{"window": {"bounds": {**frame, "x": window.x + 50}}}], timeout_ms=0)
     assert moved.status == "unsatisfied"
+
+
+def test_a_manual_drag_with_button_down_and_up(fixture_app: tuple[Any, Any]) -> None:
+    driver, state = fixture_app
+    x, y, width, height = _element(driver, "Volume").bounds
+    high = state()["volume"] > 50  # drag toward the other end, wherever the slider is now
+    start, end = (x + width - 6, x + 6) if high else (x + 6, x + width - 6)
+    driver.mouse_down(start, y + height // 2)
+    try:
+        for step in range(1, 9):
+            driver.move(start + (end - start) * step // 8, y + height // 2)
+            time.sleep(0.03)
+    finally:
+        driver.mouse_up(end, y + height // 2)
+    moved = state(lambda s: (s["volume"] < 50) if high else (s["volume"] > 50))
+    assert (moved["volume"] < 50) if high else (moved["volume"] > 50)
+
+
+def test_one_exact_window_of_an_application_comes_to_the_front(fixture_app: tuple[Any, Any]) -> None:
+    driver, _state = fixture_app
+    main, other = sorted(driver.windows(APP), key=lambda w: w.width, reverse=True)[:2]
+    try:
+        assert driver.focus_window(other.id)["frontmost"] is True
+        assert driver.windows()[0].id == other.id
+    finally:
+        assert driver.focus_window(main.id)["frontmost"] is True  # back as the other tests expect
+    assert driver.windows()[0].id == main.id
+
+
+def test_a_region_screenshot(fixture_app: tuple[Any, Any]) -> None:
+    from highhx.automation.engine.bridge import EngineError
+    from highhx.automation.engine.platforms import quartz
+
+    driver, _state = fixture_app
+    window = driver.windows(APP)[0]
+    region = (window.x, window.y, 200, 100)
+    if not quartz.screen_capture_allowed():  # without the grant, a refusal — never a blank image
+        with pytest.raises(EngineError) as info:
+            driver.screenshot(region=region)
+        assert info.value.code == "screen_recording_denied"
+        return
+    shot = driver.screenshot(region=region)
+    try:
+        assert (shot.width, shot.height) == (round(200 * shot.scale), round(100 * shot.scale))
+    finally:
+        shot.path.unlink(missing_ok=True)

@@ -282,7 +282,7 @@
       "args": {}
     },
     "screenshot": {
-      "description": "Capture the screen (or one window) to a PNG in HighhX's screenshots folder.",
+      "description": "Capture the screen (or one window, or a region in desktop points) to a PNG in HighhX's screenshots folder, at most `max_size` pixels on its long side. The answer maps the image to the desktop: point = origin + pixel / scale.",
       "since": 2,
       "keyboard": false,
       "args": {
@@ -292,6 +292,16 @@
           "since": 2
         },
         "window": {
+          "type": "int",
+          "required": false,
+          "since": 2
+        },
+        "region": {
+          "type": "rect",
+          "required": false,
+          "since": 2
+        },
+        "max_size": {
           "type": "int",
           "required": false,
           "since": 2
@@ -414,6 +424,54 @@
         }
       }
     },
+    "mouse_button": {
+      "description": "Only press, or only release, a mouse button at a point (a manual drag or a long press).",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "action": {
+          "type": "enum",
+          "required": true,
+          "since": 2,
+          "choices": [
+            "down",
+            "up"
+          ]
+        },
+        "x": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "y": {
+          "type": "coord",
+          "required": true,
+          "since": 2
+        },
+        "button": {
+          "type": "enum",
+          "required": false,
+          "since": 2,
+          "choices": [
+            "left",
+            "middle",
+            "right"
+          ]
+        }
+      }
+    },
+    "window_focus": {
+      "description": "Bring one exact window (by id) to the front, not just its application.",
+      "since": 2,
+      "keyboard": false,
+      "args": {
+        "window": {
+          "type": "int",
+          "required": true,
+          "since": 2
+        }
+      }
+    },
     "cursor": {
       "description": "Where the pointer is.",
       "since": 2,
@@ -527,6 +585,18 @@
     "enter",
     "esc",
     "escape",
+    "f1",
+    "f10",
+    "f11",
+    "f12",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
     "home",
     "left",
     "pagedown",
@@ -565,6 +635,7 @@
   "errors": [
     "accessibility_denied",
     "ambiguous_target",
+    "connection_lost",
     "failed",
     "invalid_request",
     "not_found",

@@ -120,6 +120,7 @@ def frameworks() -> Frameworks:
     _sig(ax, "AXUIElementCopyElementAtPosition", c_int32, ref, ctypes.c_float, ctypes.c_float, POINTER(ref))
     _sig(ax, "AXUIElementCopyAttributeValue", c_int32, ref, ref, POINTER(ref))
     _sig(ax, "AXUIElementSetAttributeValue", c_int32, ref, ref, ref)
+    _sig(ax, "AXUIElementPerformAction", c_int32, ref, ref)
     _sig(ax, "AXUIElementGetPid", c_int32, ref, POINTER(c_int32))
     _sig(ax, "AXValueCreate", ref, c_uint32, ref)
     _sig(ax, "AXValueGetValue", c_bool, ref, c_uint32, ref)
@@ -276,6 +277,13 @@ def click(x: float, y: float, *, button: str = "left", count: int = 1, pid: int 
         _mouse(up, x, y, number, clicks=n, pid=pid)
 
 
+def press_button(x: float, y: float, *, button: str = "left", down: bool) -> None:
+    """Only the press, or only the release, of one button at a point (a manual drag, a long press)."""
+    pressed, released, _dragged, number = BUTTONS[button]
+    move(x, y)
+    _mouse(pressed if down else released, x, y, number, clicks=1)
+
+
 def drag(start: tuple[float, float], end: tuple[float, float], *, button: str = "left", duration: float = 0.3) -> None:
     down, up, dragged, number = BUTTONS[button]
     move(*start)
@@ -420,6 +428,28 @@ def element_at(x: float, y: float) -> dict[str, Any]:
         }
     finally:
         _release(element)
+
+
+def raise_window(pid: int, match: tuple[int, int, int, int]) -> bool:
+    """Make the window of ``pid`` whose frame is ``match`` its application's front (main) window."""
+    fw = frameworks()
+    app = fw.ax.AXUIElementCreateApplication(pid)
+    windows = _attribute(app, "AXWindows")
+    try:
+        if not windows:
+            return False
+        for index in range(fw.cf.CFArrayGetCount(windows)):
+            window = fw.cf.CFArrayGetValueAtIndex(windows, index)
+            if _frame(window) != match:
+                continue
+            error = fw.ax.AXUIElementPerformAction(window, _cfstr("AXRaise"))
+            if error:
+                raise NativeError(f"the window refused to come to the front (AXError {error})", error)
+            return True
+        return False
+    finally:
+        _release(windows)
+        _release(app)
 
 
 def set_window_frame(pid: int, match: tuple[int, int, int, int], frame: tuple[int, int, int, int]) -> bool:

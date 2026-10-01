@@ -315,6 +315,19 @@ Choose PATH (items separated by >) in APP's menu bar.
 highhx computer menu [OPTIONS] APP PATH
 ```
 
+#### `highhx computer mouse`
+
+Press (down) or release (up) a button at X,Y — for a drag or long press that `computer
+drag` cannot express (asks first). Release what you press.
+
+```
+highhx computer mouse [OPTIONS] {down|up} X,Y
+```
+
+| Option | Description |
+|---|---|
+| `--right` | The right button. |
+
 #### `highhx computer move`
 
 Move the pointer to X,Y (hovering) and check that it arrived.
@@ -391,8 +404,9 @@ highhx computer run [OPTIONS] FLOW_FILE
 
 #### `highhx computer screenshot`
 
-Save a screenshot in HighhX's screenshots folder and print its path. macOS needs Screen
-Recording permission for your terminal; HighhX says so instead of saving a blank image.
+Save a screenshot (the screen, --window ID, --app APP's front window or a --region) in
+HighhX's screenshots folder and print its path. macOS needs Screen Recording permission for
+your terminal; HighhX says so instead of saving a blank image.
 
 ```
 highhx computer screenshot [OPTIONS]
@@ -401,6 +415,8 @@ highhx computer screenshot [OPTIONS]
 | Option | Description |
 |---|---|
 | `--window` | Only this window (ids from `computer windows`). |
+| `--app` | Only this application's front window. |
+| `--region` | Only this region, in desktop points. |
 
 #### `highhx computer scroll`
 
@@ -500,7 +516,8 @@ highhx computer verify [OPTIONS] APP
 
 #### `highhx computer window`
 
-Move and resize APP's front window (or --id WINDOW) to --frame, and check the new frame.
+Move and resize APP's front window (or --id WINDOW) to --frame, and check the new frame; or
+with --focus bring window --id to the front — one exact window of an application that has several.
 
 ```
 highhx computer window [OPTIONS] APP
@@ -510,6 +527,7 @@ highhx computer window [OPTIONS] APP
 |---|---|
 | `--id` | The window id (from `computer windows`) instead of APP. |
 | `--frame` | The new frame in desktop points. |
+| `--focus` | Bring window --id to the front (and check that it is). |
 
 #### `highhx computer windows`
 

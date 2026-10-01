@@ -18,6 +18,7 @@ import dataclasses
 import logging
 import shlex
 import signal
+from pathlib import Path
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -108,6 +109,13 @@ SLASH_COMMANDS = (
         "task",
         "/task <goal> [--verify test,check,build]",
         "Work until HighhX verifies it (tests, checks, build)",
+        agent=True,
+        group="Run",
+    ),
+    SlashCommand(
+        "attach",
+        "/attach <file>",
+        "Give the agent a file with your next request (or write @file in the request)",
         agent=True,
         group="Run",
     ),
@@ -1151,7 +1159,31 @@ class AgentREPL:
                     + (f" · always-allowed: {', '.join(sorted(s.permissions.grants))}" if s.permissions.grants else ""),
                 ),
             ]
+        rows += self.connection_rows()
         self._grid(rows)
+
+    def connection_rows(self) -> list[tuple[str, str]]:
+        """Model, computer, browser, MCP servers, attachments — each read now, never remembered."""
+        from highhx.connections import CONNECTED, all_states
+
+        styles = {"connected": "green", "ready": "green", "not_started": "dim", "unavailable": "yellow"}
+        rows = []
+        computer_up = False
+        for state in all_states(self.app, self.session):
+            style = styles.get(state.state, "red")
+            label = state.state.replace("_", " ")
+            rows.append((state.name.capitalize(), f"[{style}]{label}[/{style}] [dim]{escape(state.detail)}[/dim]"))
+            computer_up = computer_up or (state.name == "computer" and state.state == CONNECTED)
+        if computer_up:
+            try:
+                from highhx.computer.driver import HighhXDriver
+
+                with HighhXDriver.create() as driver:
+                    app_name, title, _window = driver.active()
+                rows.append(("In front", escape(app_name + (f" — {title}" if title else "")) or "[dim]nothing[/dim]"))
+            except Exception as exc:  # what is in front is a fact to show, not a reason to fail /status
+                rows.append(("In front", f"[dim]unknown ({escape(str(getattr(exc, 'message', exc)))})[/dim]"))
+        return rows
 
     def _grid(self, rows: list[tuple[str, str]]) -> None:
         table = Table.grid(padding=(0, 3))
@@ -1575,6 +1607,31 @@ class AgentREPL:
         if self.session is not None:
             journals.append(self.session.journal)
         return journals
+
+    def cmd_attach(self, arg: str) -> None:
+        """Attach a file for the next request: its text (documents, PDFs) and, for a model that
+        takes images, its pictures go to the agent with that request; attachment_read/view later."""
+        from highhx.attachments import AttachmentError
+
+        if self.session is None:
+            self.ui.notice("warn", "Attachments are for the HighhX Pro agent (/login).")
+            return
+        raw = arg.strip().strip("\"'")
+        if not raw:
+            items = self.session.attachments.items.values()
+            if not items:
+                self.ui.notice("info", "Nothing attached. /attach <file>, or write @file in a request.")
+            for attachment in items:
+                self.ui.print(f"  {escape(attachment.header())}")
+            return
+        path = Path(raw).expanduser()
+        try:
+            attachment = self.session.attachments.add(path if path.is_absolute() else self.app.start_dir / path)
+        except AttachmentError as exc:
+            self.ui.notice("error", exc.message)
+            return
+        seen = "" if self.session.capabilities.vision or attachment.kind not in ("image", "pdf") else " (text only: this model does not take images)"
+        self.ui.notice("info", f"Attached {attachment.id}: {attachment.name} ({attachment.kind}){seen} — it goes with your next request.")
 
     def cmd_changes(self, _arg: str) -> None:
         first: dict[Any, Any] = {}

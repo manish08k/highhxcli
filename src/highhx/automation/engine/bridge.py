@@ -136,9 +136,15 @@ def engine_binary() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def open_bridge(runner: Runner, *, cancel: CancellationToken | None = None) -> AutomationBridge:
-    """The bridge to the configured engine (see the module docstring)."""
+def open_bridge(runner: Runner, *, cancel: CancellationToken | None = None, target: str = "local") -> AutomationBridge:
+    """The bridge to the configured engine (see the module docstring) — or, for ``ssh://…``, to
+    the remote computer's engine only (never a local fallback: its operations are not ours)."""
     from highhx.automation.engine.python_engine import PythonEngine
+
+    if target != "local":
+        from highhx.automation.engine.remote import RemoteEngine, parse_target
+
+        return AutomationBridge(RemoteEngine(parse_target(target), cancel=cancel))
 
     choice = os.environ.get(ENGINE_ENV, "auto").strip() or "auto"
     if choice == "python":

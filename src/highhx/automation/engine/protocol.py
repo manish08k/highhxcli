@@ -67,6 +67,18 @@ KEY_CODES = {
     "pagedown": 121,
     "home": 115,
     "end": 119,
+    "f1": 122,
+    "f2": 120,
+    "f3": 99,
+    "f4": 118,
+    "f5": 96,
+    "f6": 97,
+    "f7": 98,
+    "f8": 100,
+    "f9": 101,
+    "f10": 109,
+    "f11": 103,
+    "f12": 111,
 }
 """Named keys (macOS virtual key codes); any other key is one printable character."""
 
@@ -86,6 +98,7 @@ ERROR_CODES = frozenset(
         "refused",
         "stale_target",
         "ambiguous_target",
+        "connection_lost",
         "timeout",
         "failed",
     }
@@ -280,8 +293,15 @@ OPS: dict[str, Op] = {
         Op("screen", description="The main display: size in points and the pixel scale factor.", since=2),
         Op(
             "screenshot",
-            {"path": Arg("png", required=True), "window": Arg("int", low=0, high=2**31 - 1)},
-            description="Capture the screen (or one window) to a PNG in HighhX's screenshots folder.",
+            {
+                "path": Arg("png", required=True),
+                "window": Arg("int", low=0, high=2**31 - 1),
+                "region": Arg("rect"),
+                "max_size": Arg("int", low=200, high=8000),
+            },
+            description="Capture the screen (or one window, or a region in desktop points) to a PNG in HighhX's "
+            "screenshots folder, at most `max_size` pixels on its long side. The answer maps the image to the "
+            "desktop: point = origin + pixel / scale.",
             since=2,
         ),
         Op("apps", description="Running applications with a user interface (name, pid, frontmost).", since=2),
@@ -327,6 +347,23 @@ OPS: dict[str, Op] = {
             description="Move the pointer.",
             since=2,
         ),
+        Op(
+            "mouse_button",
+            {
+                "action": Arg("enum", required=True, choices=frozenset({"down", "up"})),
+                "x": Arg("coord", required=True),
+                "y": Arg("coord", required=True),
+                "button": Arg("enum", choices=BUTTONS),
+            },
+            description="Only press, or only release, a mouse button at a point (a manual drag or a long press).",
+            since=2,
+        ),
+        Op(
+            "window_focus",
+            {"window": Arg("int", required=True, low=0, high=2**31 - 1)},
+            description="Bring one exact window (by id) to the front, not just its application.",
+            since=2,
+        ),
         Op("cursor", description="Where the pointer is.", since=2),
         Op(
             "drag",
@@ -369,6 +406,8 @@ def validate(op: str, args: dict[str, Any] | None) -> dict[str, Any]:
     spec = OPS.get(op)
     if spec is None:
         raise ProtocolError(f"unknown operation {op!r}")
+    if op == "screenshot" and (args or {}).get("window") is not None and (args or {}).get("region") is not None:
+        raise ProtocolError("screenshot takes a window or a region, not both")
     args = dict(args or {})
     extra = set(args) - set(spec.args)
     if extra:

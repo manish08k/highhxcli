@@ -153,9 +153,14 @@ function run(argv) {
   // Controls whose children are never acted on: not descended into (fewer Apple events).
   const leaves = {AXStaticText: 1, AXTextField: 1, AXSecureTextField: 1, AXCheckBox: 1, AXRadioButton: 1,
                   AXSlider: 1, AXImage: 1, AXButton: 1, AXPopUpButton: 1, AXMenuButton: 1, AXValueIndicator: 1};
+  // The window the person sees in front: focused, else main, else the first one listed.
   let title = '';
-  let win;
-  try { win = proc.windows[0]; title = win.name() || ''; }
+  let win = null;
+  for (const a of ['AXFocusedWindow', 'AXMainWindow']) {
+    try { const w = proc.attributes.byName(a).value(); if (w) { w.position(); win = w; break; } } catch (e) {}
+  }
+  let frame;
+  try { if (!win) win = proc.windows[0]; title = win.name() || ''; frame = [...win.position(), ...win.size()]; }
   catch (e) { return JSON.stringify({app: proc.name(), title, error: String(e)}); }
   // Depth-first, by position: each element's path ("5.0.2") names exactly one element. (The
   // specifiers entireContents() returns are by *name*, so two controls called "Add" were the
@@ -189,16 +194,26 @@ function run(argv) {
     }
   };
   walk(win, '', 0);
-  return JSON.stringify({app: proc.name(), title, elements: out});
+  return JSON.stringify({app: proc.name(), title, window: {title, frame}, elements: out});
 }
 """
 
 _AX_ACT = r"""
 function run(argv) {
-  const [appName, path, action, text, expected] = argv;
+  const [appName, path, action, text, expected, observed] = argv;
   const se = Application('System Events');
   const procs = appName ? se.processes.whose({name: appName}) : se.processes.whose({frontmost: true});
-  let el = procs[0].windows[0];
+  // The window that was observed — by title and frame — never simply the first one now.
+  const want = JSON.parse(observed);
+  let el = null;
+  const wins = procs[0].windows;
+  for (let i = 0; i < wins.length && !el; i++) {
+    try {
+      const w = wins[i]; const f = [...w.position(), ...w.size()];
+      if ((w.name() || '') === want.title && f.every((v, k) => v === want.frame[k])) el = w;
+    } catch (e) {}
+  }
+  if (!el) return 'stale';  // it closed, moved or was renamed
   try { for (const i of path.split('.')) el = el.uiElements[Number(i)]; el.role(); }
   catch (e) { return 'stale'; }
   const get = f => { try { const v = el[f](); return v === null || v === undefined ? '' : String(v); } catch (e) { return ''; } };
@@ -234,6 +249,8 @@ class MacAccessibility:
         self.timeout = timeout
         self._last: dict[str, tuple[str, str]] = {}
         """element id → (its path in the window, its name when observed)"""
+        self._window = ""
+        """The observed window's title and frame (JSON): presses go to that window only."""
 
     def _osascript(self, script: str, *args: str, cancel: CancellationToken | None = None) -> str:
         if sys.platform != "darwin":
@@ -287,6 +304,7 @@ class MacAccessibility:
             raise IntegrationError(f"{data.get('app') or self.application or 'The frontmost application'}: {error}")
         elements = []
         self._last = {}
+        self._window = json.dumps(data.get("window") or {"title": "", "frame": []})
         for n, item in enumerate(data.get("elements") or [], start=1):
             element_id = f"a{n}"
             self._last[element_id] = (str(item["index"]), str(item.get("name") or ""))
@@ -317,7 +335,8 @@ class MacAccessibility:
         from highhx.computer.browser import ElementNotFoundError
 
         path, name = self._last[element_id]
-        if self._osascript(_AX_ACT, self.application or "", path, action, text, name, cancel=cancel) == "stale":
+        answer = self._osascript(_AX_ACT, self.application or "", path, action, text, name, self._window, cancel=cancel)
+        if answer == "stale":
             raise ElementNotFoundError(f"{name or element_id!r} is no longer where it was observed; the UI changed.")
 
     def click(self, element_id: str, *, cancel: CancellationToken | None = None) -> None:

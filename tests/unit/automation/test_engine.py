@@ -241,7 +241,7 @@ def test_the_csharp_engine_mirrors_the_protocol() -> None:
     assert _csharp_list(source, "Modifiers") == set(MODIFIERS.values())
     assert _csharp_list(source, "Roles") == set(ROLES)
     assert _csharp_list(source, "TerminalApps") == set(bridge_module.TERMINAL_APPS)
-    keys = dict(re.findall(r'\["([a-z]+)"\]\s*=\s*(\d+)', source.split("KeyCodes", 1)[1].split("};", 1)[0]))
+    keys = dict(re.findall(r'\["([a-z0-9]+)"\]\s*=\s*(\d+)', source.split("KeyCodes", 1)[1].split("};", 1)[0]))
     assert {k: int(v) for k, v in keys.items()} == KEY_CODES
 
 

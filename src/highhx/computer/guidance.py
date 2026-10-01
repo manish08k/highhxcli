@@ -6,8 +6,9 @@ Operate one exact target: observe, act once, verify.
 - Observe before acting and after the UI changes; act only on what the latest observation shows.
   Element ids from an older observation may be stale: a changed UI is refused, not guessed.
 - Prefer semantic targets (an element by id or accessible name) over coordinates. Use a point
-  only when no element reaches the control, taken from a fresh observation or screenshot of the
-  same window; never infer one from a different window or an old image.
+  only when no element reaches the control: a pixel of the newest screenshot, passed with that
+  screenshot's capture id — HighhX converts it to the desktop and refuses it if the screen changed.
+  Never infer a point from a different window or an older image.
 - A direct operation (a click at a point, a drag, keys, a menu) is not verified by HighhX: its
   effect belongs to the application. Observe again, or verify the window and its elements, before
   claiming success. Unverified or unknown is not done.

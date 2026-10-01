@@ -365,9 +365,11 @@ def test_cdp_calls_are_cancellable() -> None:
 
 def test_websocket_refuses_remote_endpoints() -> None:
     with pytest.raises(IntegrationError, match="non-local"):
-        WebSocket("ws://example.com:9222/devtools/page/1")
-    with pytest.raises(IntegrationError, match="ws://"):
-        WebSocket("wss://127.0.0.1:9222/x")
+        WebSocket("ws://example.com:9222/devtools/page/1")  # not configured as a remote browser
+    with pytest.raises(IntegrationError, match="wss://"):
+        WebSocket("ws://example.com:9222/devtools/page/1", allow_remote=True)  # a remote one: TLS only
+    with pytest.raises(IntegrationError, match="Not a WebSocket"):
+        WebSocket("http://127.0.0.1:9222/x")
 
 
 def test_ocr_output_is_grouped_into_text_lines() -> None:

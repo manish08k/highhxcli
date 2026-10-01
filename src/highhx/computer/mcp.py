@@ -53,6 +53,7 @@ TOOLS = (
     "click",
     "click_at",
     "move",
+    "mouse_button",
     "drag",
     "scroll",
     "type",

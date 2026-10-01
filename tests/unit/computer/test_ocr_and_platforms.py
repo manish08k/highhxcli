@@ -143,6 +143,7 @@ def test_macos_elements_are_addressed_by_position_and_rechecked(monkeypatch: pyt
     assert ".entireContents()" not in desktop_module._AX_OBSERVE  # its specifiers are by name
     observed = {
         "app": "Dialogs",
+        "window": {"title": "Doc 2", "frame": [760, 524, 320, 232]},
         "elements": [
             {"index": "6", "role": "button", "name": "Add", "bounds": [215, 635, 50, 26]},
             {"index": "7", "role": "button", "name": "Add", "bounds": [271, 635, 50, 26]},
@@ -159,7 +160,10 @@ def test_macos_elements_are_addressed_by_position_and_rechecked(monkeypatch: pyt
     provider = MacAccessibility("Dialogs")
     second = provider.observe().elements[1]
     provider.click(second.id)
-    assert calls[-1] == ("Dialogs", "7", "press", "", "Add")  # the path, and the name to find there
+    # the path, the name to find there, and the observed window (never simply the first one)
+    assert calls[-1][:5] == ("Dialogs", "7", "press", "", "Add")
+    assert json.loads(calls[-1][5]) == {"title": "Doc 2", "frame": [760, 524, 320, 232]}
+    assert "AXFocusedWindow" in desktop_module._AX_OBSERVE and "want.frame" in desktop_module._AX_ACT
     answer["act"] = "stale"  # the UI changed: another element (or none) is at that path now
     with pytest.raises(ElementNotFoundError, match="no longer where it was observed"):
         provider.type_text(second.id, "x")

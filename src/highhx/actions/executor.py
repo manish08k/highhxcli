@@ -158,7 +158,15 @@ class ActionExecutor:
         if self._computer is None:
             from highhx.computer.session import ComputerSession
 
-            self._computer = ComputerSession(self.gate, actor=self.actor, tool="actions")
+            from highhx.connections import browser_endpoint, computer_target
+
+            self._computer = ComputerSession(
+                self.gate,
+                actor=self.actor,
+                tool="actions",
+                target=computer_target(self.app),
+                browser_endpoint=browser_endpoint(self.app),
+            )
         return self._computer
 
     def driver(self, cancel: CancellationToken | None = None) -> HighhXDriver:
@@ -168,6 +176,13 @@ class ActionExecutor:
         if cancel is not None:
             session.cancel = cancel
         return session.driver()
+
+    def _screen_changed(self, action: str) -> None:
+        """An action ran (or may have): screenshots taken before it no longer ground coordinates."""
+        if self._computer is not None or self._computer_factory is not None:
+            captures = getattr(self.computer(), "captures", None)  # a supplied session may not keep any
+            if captures is not None:
+                captures.retire(action)
 
     def close(self) -> None:
         if self._computer is not None:
@@ -294,6 +309,8 @@ class ActionExecutor:
             timer.cancel()
             self.app.ctx.cancel = previous
         result.seconds = time.monotonic() - started
+        if spec.kind != ActionKind.READ and result.status not in ("denied", "blocked", "planned"):
+            self._screen_changed(spec.name)
         if result.ok:
             self.events.emit(ev.ACTION_COMPLETED, action=spec.name, summary=result.summary, seconds=result.seconds)
         else:

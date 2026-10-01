@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from highhx.agent.context import ProjectContext
 from highhx.agent.history import SessionBusyError, SessionRecord, SessionStore, lease_owner
 from highhx.agent.memory import ProjectMemory
-from highhx.agent.messages import Message, ToolCall, ToolResultBlock, Usage
+from highhx.agent.messages import ImageBlock, Message, TextBlock, ToolCall, ToolResultBlock, Usage, limit_images, without_images
 from highhx.agent.model.base import ModelProvider, ModelRequest
 from highhx.agent.model.resilience import CircuitBreaker, RetryPolicy
 from highhx.agent.permissions import AgentPermissions, ApprovalMode
@@ -219,6 +219,8 @@ class AgentSession:
             session_id=record.id if record else None,
             account_id=account_id,
         )
+        self.mcp: Any = None
+        """External MCP servers (:class:`~highhx.integrations.mcp_client.McpManager`), when configured."""
         self.registry = registry or self._build_registry()
         self.sink = EngineSink(ui)
         # Route the engine's output and approval prompts through the agent UI.
@@ -232,6 +234,15 @@ class AgentSession:
         self.state = parse_state(record.status) if record is not None else SessionState.CREATED
         self._turn_lock = threading.Lock()
         self._lease: str | None = None
+        from highhx.agent.model.capabilities import capabilities_for
+
+        self.capabilities = capabilities_for(settings.provider, settings.model)
+        """What the model takes (images?) — tools send screenshots only to a model that can see them."""
+        self._images: list[ImageBlock | TextBlock] = []
+        from highhx.attachments import AttachmentStore
+
+        self.attachments = AttachmentStore()
+        """Files attached in this conversation (``@path`` in a request, or /attach)."""
 
     # ------------------------------------------------------------------ setup
     def _build_registry(self) -> ToolRegistry:
@@ -241,8 +252,26 @@ class AgentSession:
             features=self.features,
             read_only=self.settings.approval == ApprovalMode.READ_ONLY,
             initialized=self.app.initialized,
-            extra=[RunActionsTool(self.features)],
+            extra=[RunActionsTool(self.features), *self._mcp_tools()],
         )
+
+    def _mcp_tools(self) -> list[Any]:
+        """Tools of the configured external MCP servers; a server that fails is said, not fatal."""
+        from highhx.agent.tools.mcp import mcp_tools
+        from highhx.integrations.mcp_client import McpError, McpManager, load_servers
+
+        try:
+            servers = load_servers(self.app.config.raw if self.app.initialized else None)
+        except McpError as exc:
+            self.ui.notice("warn", exc.message)
+            return []
+        if not servers:
+            return []
+        self.mcp = McpManager(servers)
+        for problem in self.mcp.connect_all():
+            self.ui.notice("warn", problem)
+        self.app.ctx.events.emit("mcp.connected", servers=self.mcp.status())
+        return mcp_tools(self.mcp)
 
     def _system_prompt(self) -> str:
         return system_prompt(
@@ -285,7 +314,7 @@ class AgentSession:
         self.messages.append(message)
         if self.store is not None and self.record is not None:
             try:
-                self.store.append(self.record.id, message)
+                self.store.append(self.record.id, without_images(message))
             except Exception as exc:  # storage must never break the session
                 log.warning("could not save agent message: %s", exc)
 
@@ -318,6 +347,22 @@ class AgentSession:
                 log.warning("could not save agent session: %s", exc)
         if self.sync is not None:
             self.sync.update(self.record)
+
+    def _request_message(self, text: str) -> Message:
+        """The person's request, with the files it mentions (``@report.pdf``) or that were attached
+        before it — their text, and pictures when the model takes images."""
+        from highhx.attachments import context_blocks
+
+        _added, problems = self.attachments.mentions(text, self.app.start_dir)
+        for problem in problems:
+            self.ui.notice("warn", problem)
+        attached = self.attachments.take_pending()
+        if not attached:
+            return Message.user(text)
+        self.app.ctx.events.emit(
+            "attachments.added", files=[a.to_dict() for a in attached], vision=self.capabilities.vision
+        )
+        return Message("user", [TextBlock(text), *context_blocks(attached, vision=self.capabilities.vision)])
 
     def _repair_transcript(self) -> None:
         """Answer tool calls left unanswered by an interrupted turn (providers reject dangling calls)."""
@@ -352,7 +397,7 @@ class AgentSession:
         if self.sync is not None and self.record is not None:
             self.sync.start(self.record, self.context)
         self.journal.begin_turn()
-        self._persist(Message.user(text))
+        self._persist(self._request_message(text))
         self.app.ctx.events.emit(
             "agent.turn", session=self.record.id if self.record else None, turn=self.turns, text=text[:200]
         )
@@ -441,16 +486,17 @@ class AgentSession:
                 result.steps += 1
                 continue
             outcomes: list[Any] = []
+            self._images = []
             for call in calls:
                 block = self._execute(call, result)
                 outcomes.append(block)
-            self._persist(Message("user", outcomes))
+            self._persist(Message("user", [*outcomes, *self._images]))  # images after every tool result
             result.steps += 1
 
     def _call_model(self) -> Completed:
         request = ModelRequest(
             system=self.system,
-            messages=self.messages,
+            messages=limit_images(self.messages),
             tools=self.registry.specs(),
             model=self.settings.model,
             max_tokens=self.settings.max_tokens,
@@ -589,14 +635,26 @@ class AgentSession:
         content = self.app.redactor.redact(outcome.content)
         if tool.untrusted_output:
             content = frame_untrusted(content, source=f"the {call.name} tool")
+        for image in outcome.images:
+            if self.capabilities.vision:
+                self._images.append(image)
+            else:
+                self._images.append(TextBlock(f"[not shown — this model does not take images: {image.label}]"))
         return ToolResultBlock(call.id, content, not outcome.ok, call.name)
 
     def computer_session(self) -> ComputerSession:
         if self._computer is None:
             from highhx.computer.session import ComputerSession
 
+            from highhx.connections import browser_endpoint, computer_target
+
             self._computer = ComputerSession(
-                self.permissions.gate, actor=Actor.AGENT, tool="computer", cancel=self.cancel
+                self.permissions.gate,
+                actor=Actor.AGENT,
+                tool="computer",
+                cancel=self.cancel,
+                target=computer_target(self.app),
+                browser_endpoint=browser_endpoint(self.app),
             )
         return self._computer
 
@@ -620,6 +678,8 @@ class AgentSession:
     def close(self) -> None:
         if self._computer is not None:
             self._computer.close()
+        if self.mcp is not None:
+            self.mcp.close()
         if self.state in (SessionState.RUNNING, SessionState.WAITING_FOR_CONFIRMATION):
             self.state = SessionState.CANCELLED
         self.transition(SessionState.CLOSED)

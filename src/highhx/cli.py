@@ -29,7 +29,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Containers, services & data", ("docker", "services", "ports", "db")),
     ("Workflows & automation", ("workflow", "actions", "schedule", "hook", "trigger", "watchers")),
     ("Observability", ("logs", "history", "events", "audit", "report", "trace", "runs")),
-    ("Extensibility & team", ("plugin", "config", "policy", "workspace", "profile")),
+    ("Extensibility & team", ("plugin", "mcp", "config", "policy", "workspace", "profile")),
     ("Diagnostics", ("doctor", "diagnose", "repair", "debug")),
 )
 

@@ -52,9 +52,38 @@ def run(ctx: ActionContext, operate: Callable[[HighhXDriver], T]) -> T:
     except (ProtocolError, UsageError) as exc:
         raise ToolError(str(getattr(exc, "message", exc))) from None
     except EngineError as exc:
+        if exc.code == "connection_lost":
+            from highhx.automation.engine.remote import LOST
+
+            raise ToolError(f"{LOST}: {exc.message} Whether this action happened is unknown; HighhX reconnects for the next one.") from None
         if exc.code in EXPLAINED:
             raise ToolError(exc.message + (f" {exc.hint}" if exc.hint else "")) from None
         raise
+
+
+def _point(ctx: ActionContext, inputs: Inputs, x_key: str = "x", y_key: str = "y") -> tuple[int, int]:
+    """A desktop point from ``inputs``: desktop points as given — or, with ``capture``, a position
+    in that screenshot (``space``: pixels or relative1000), grounded and checked by the session's
+    capture store; a stale screenshot is refused, never clicked."""
+    from highhx.computer.capture import StaleCapture
+
+    if inputs.get(x_key) is None or inputs.get(y_key) is None:
+        raise ToolError(f"give {x_key} and {y_key}")
+    x, y = inputs[x_key], inputs[y_key]
+    if not inputs.get("capture"):
+        return int(x), int(y)
+    store = ctx.computer().captures
+    try:
+        return run(
+            ctx,
+            lambda d: store.ground(d, str(inputs["capture"]), float(x), float(y), space=str(inputs.get("space") or "pixels")),
+        )
+    except StaleCapture as exc:
+        raise ToolError(f"{STALE}: {exc.message}") from None
+
+
+STALE = "Stale screenshot"
+"""How a refused, out-of-date screenshot coordinate starts its error (callers take a new one)."""
 
 
 def frontmost_app(ctx: ActionContext) -> str:
@@ -70,10 +99,14 @@ def _app_name(name: str) -> str:
 
 # ----------------------------------------------------------- applications
 def focus(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    """Bring an application to the front — launching it first when it is not running — and
-    verify that it is frontmost."""
+    """Bring an application to the front — launching it first when it is not running — or one
+    exact window (by id), and verify that it is frontmost."""
     from highhx.actions.handlers.computer import _app_for
 
+    if inputs.get("window") is not None:
+        return _focus_window(ctx, int(inputs["window"]))
+    if not inputs.get("app"):
+        raise ToolError("give the application or the window id")
     app = _app_for(str(inputs["app"]))
     if app is None:
         raise ToolError("no application given")
@@ -95,6 +128,21 @@ def focus(ctx: ActionContext, inputs: Inputs) -> ActionResult:
         summary=f"{'opened and ' if launched else ''}switched to {app.name}",
         verified=ok,
         error="" if ok else f"{app.name} is not in front ({actual or 'another application'} is)",
+    )
+
+
+def _focus_window(ctx: ActionContext, window: int) -> ActionResult:
+    result = run(ctx, lambda d: d.focus_window(window))
+    front = run(ctx, lambda d: d.windows())
+    ok = bool(result.get("frontmost")) and bool(front) and front[0].id == window
+    where = str(result.get("app") or f"window {window}")
+    actual = f"{front[0].app} window {front[0].id}" if front else "no window"
+    return ActionResult(
+        ok,
+        output={"window": window, "app": result.get("app"), "frontmost": ok},
+        summary=f"brought {where} (window {window}) to the front",
+        verified=ok,
+        error="" if ok else f"window {window} is not in front ({actual} is)",
     )
 
 
@@ -130,16 +178,50 @@ def _target(inputs: Inputs) -> str | None:
     return _app_name(str(inputs["app"])) if inputs.get("app") else None
 
 
+READBACK_SECONDS = 1.5
+"""How long typed text may take to show in the focused field before it counts as missing."""
+
+
 def type_text(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """Type, then read the focused field back: the text there is verified; a readable field without
+    it is a failure (the keys went elsewhere); a secret or unreadable field stays unverified."""
     text = str(inputs["text"])
     target = _target(inputs)
     where = target or frontmost_app(ctx)
     run(ctx, lambda d: d.type_text(text, app=target))
+    verified, field_name = _typed_readback(ctx, where, text)
+    detail = f" ({field_name})" if field_name else ""
     return ActionResult(
-        True,
-        output={"app": where, "characters": len(text), "background": bool(target)},
-        summary=f"typed {len(text)} character(s) into {where}",
+        verified is not False,
+        output={"app": where, "characters": len(text), "background": bool(target), "field": field_name or None},
+        summary=f"typed {len(text)} character(s) into {where}{detail}",
+        verified=verified,
+        error="" if verified is not False else f"the focused field{detail} does not show the typed text",
     )
+
+
+def _typed_readback(ctx: ActionContext, app: str, text: str) -> tuple[bool | None, str]:
+    import time
+
+    wanted = " ".join(text.split())
+    deadline = time.monotonic() + READBACK_SECONDS
+    while True:
+        try:
+            tree = ctx.executor.driver(ctx.cancel).get_ui_tree(app)
+        except EngineError:
+            return None, ""  # the tree is not readable here: unverified, never assumed
+        focused = next((e for e in tree.elements if e.focused and e.role in ("textbox", "searchbox")), None)
+        if focused is None:
+            return None, ""
+        label = focused.name or focused.role
+        if focused.secret:
+            return None, label
+        if wanted and wanted in " ".join(focused.value.split()):
+            return True, label
+        if time.monotonic() >= deadline or len(focused.value) >= 300:  # values are read up to 300 characters
+            return (False if len(focused.value) < 300 else None), label
+        if ctx.cancel.wait(0.25):
+            return None, label
 
 
 def press(ctx: ActionContext, inputs: Inputs) -> ActionResult:
@@ -186,7 +268,7 @@ def click_at(ctx: ActionContext, inputs: Inputs) -> ActionResult:
         x, y = found.point
         grounded = found.to_dict()
     elif inputs.get("x") is not None and inputs.get("y") is not None:
-        x, y = int(inputs["x"]), int(inputs["y"])
+        x, y = _point(ctx, inputs)
     else:
         raise ToolError("give x and y, or the text to click")
     button, count = str(inputs.get("button") or "left"), int(inputs.get("count") or 1)
@@ -203,14 +285,22 @@ def click_at(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     kind = {1: "clicked", 2: "double-clicked", 3: "triple-clicked"}[count]
     return ActionResult(
         True,
-        output={"x": x, "y": y, "button": button, "count": count, "element": hit or None, "grounded": grounded},
+        output={
+            "x": x,
+            "y": y,
+            "button": button,
+            "count": count,
+            "element": hit or None,
+            "grounded": grounded,
+            "capture": inputs.get("capture"),
+        },
         summary=f"{button + '-' if button != 'left' else ''}{kind} {what}",
         verified=None,  # the effect of a click at a point is the application's; observe to check it
     )
 
 
 def move(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    x, y = int(inputs["x"]), int(inputs["y"])
+    x, y = _point(ctx, inputs)
     run(ctx, lambda d: d.move(x, y))
     actual = run(ctx, lambda d: d.cursor())
     ok = abs(actual[0] - x) <= 2 and abs(actual[1] - y) <= 2
@@ -223,9 +313,27 @@ def move(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     )
 
 
+def mouse_button(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """Only the press, or only the release, of a button — for drags and long presses that
+    ``computer.drag`` cannot express. The pointer's arrival is verified; what the press does is the
+    application's."""
+    (x, y), action = _point(ctx, inputs), str(inputs["action"])
+    button = str(inputs.get("button") or "left")
+    run(ctx, lambda d: d.mouse_down(x, y, button=button) if action == "down" else d.mouse_up(x, y, button=button))
+    actual = run(ctx, lambda d: d.cursor())
+    arrived = abs(actual[0] - x) <= 2 and abs(actual[1] - y) <= 2
+    return ActionResult(
+        arrived,
+        output={"action": action, "x": x, "y": y, "button": button, "cursor": list(actual)},
+        summary=f"{'pressed' if action == 'down' else 'released'} the {button} button at ({x}, {y})",
+        verified=None if arrived else False,
+        error="" if arrived else f"the pointer is at {actual}, not ({x}, {y})",
+    )
+
+
 def drag(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    start = (int(inputs["from_x"]), int(inputs["from_y"]))
-    end = (int(inputs["to_x"]), int(inputs["to_y"]))
+    start = _point(ctx, inputs, "from_x", "from_y")
+    end = _point(ctx, inputs, "to_x", "to_y")
     button = str(inputs.get("button") or "left")
     run(ctx, lambda d: d.drag(start, end, button=button, duration_ms=int(inputs.get("duration_ms") or 300)))
     return ActionResult(
@@ -237,7 +345,7 @@ def scroll(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     direction = str(inputs.get("direction") or "down")
     if str(inputs.get("source") or "browser") == "browser":
         return _flow_step(ctx, {"scroll": direction})
-    at = (int(inputs["x"]), int(inputs["y"])) if inputs.get("x") is not None and inputs.get("y") is not None else None
+    at = _point(ctx, inputs) if inputs.get("x") is not None and inputs.get("y") is not None else None
     where = frontmost_app(ctx)
     run(ctx, lambda d: d.scroll(direction, int(inputs.get("amount") or 3), at=at))
     return ActionResult(True, output={"app": where, "direction": direction}, summary=f"scrolled {direction} in {where}")
@@ -257,14 +365,34 @@ def observe(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     return ActionResult(True, output=state.to_dict(), summary=" · ".join(parts))
 
 
+def _front_window(ctx: ActionContext, app: str) -> int:
+    """The id of ``app``'s front window (windows are listed front to back)."""
+    name = _app_name(app)
+    found = run(ctx, lambda d: d.windows(name))
+    if not found:
+        raise ToolError(f"{name} has no window on screen.")
+    return found[0].id
+
+
 def screenshot(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     window = int(inputs["window"]) if inputs.get("window") is not None else None
-    shot = run(ctx, lambda d: d.screenshot(window))
+    if window is None and inputs.get("app"):
+        window = _front_window(ctx, str(inputs["app"]))
+    region: tuple[int, int, int, int] | None = None
+    if inputs.get("region"):
+        x, y, width, height = (int(v) for v in inputs["region"])
+        region = (x, y, width, height)
+    if region is not None and window is not None:
+        raise ToolError("give a window (or app) or a region, not both")
+    max_size = int(inputs["max_size"]) if inputs.get("max_size") else None
+    store = ctx.computer().captures
+    capture = run(ctx, lambda d: store.take(d, window=window, region=region, max_size=max_size))
+    shot = capture.shot
     ok = shot.path.is_file() and shot.width > 0
     return ActionResult(
         ok,
-        output={"path": str(shot.path), "width": shot.width, "height": shot.height, "scale": shot.scale},
-        summary=f"{shot.width}x{shot.height} screenshot: {shot.path}",
+        output={**capture.to_dict(), "window": window, "region": list(region) if region else None},
+        summary=f"{shot.width}x{shot.height} {capture.id}: {shot.path}",
         verified=ok,
     )
 
@@ -301,17 +429,18 @@ def element_at(ctx: ActionContext, inputs: Inputs) -> ActionResult:
 
 
 def verify(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    """Checked observation of one exact window (by id, or an application's front window)."""
+    """Checked observation of one exact window: by id, an application's front window, or (neither
+    given) the frontmost application's front window."""
     if inputs.get("window") is not None:
         window_id = int(inputs["window"])
     elif inputs.get("app"):
-        name = _app_name(str(inputs["app"]))
-        found = run(ctx, lambda d: d.windows(name))
-        if not found:
-            raise ToolError(f"{name} has no window on screen.")
-        window_id = found[0].id
+        window_id = _front_window(ctx, str(inputs["app"]))
     else:
-        raise ToolError("give the window id or the application")
+        front_app, _title, active = run(ctx, lambda d: d.active())
+        front = active or next(iter(run(ctx, lambda d: d.windows(front_app) if front_app else [])), None)
+        if front is None:
+            raise ToolError("No window is in front to verify; give the window id or the application.")
+        window_id = front.id
     check = run(
         ctx,
         lambda d: d.verify_state(

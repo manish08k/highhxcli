@@ -30,6 +30,8 @@ public static partial class Protocol
         ["down"] = 125, ["up"] = 126, ["arrowleft"] = 123, ["arrowright"] = 124,
         ["arrowdown"] = 125, ["arrowup"] = 126, ["pageup"] = 116, ["pagedown"] = 121,
         ["home"] = 115, ["end"] = 119,
+        ["f1"] = 122, ["f2"] = 120, ["f3"] = 99, ["f4"] = 118, ["f5"] = 96, ["f6"] = 97,
+        ["f7"] = 98, ["f8"] = 100, ["f9"] = 101, ["f10"] = 109, ["f11"] = 103, ["f12"] = 111,
     };
 
     public static readonly string[] Modifiers = ["command", "control", "option", "shift"];

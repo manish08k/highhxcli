@@ -47,7 +47,16 @@ def computer_session(app: App, *, headless: bool | None = None, agent: bool = Fa
         audit=AuditLog(app.db, app.redactor) if app.db is not None else None,
     )
     actor = Actor.AGENT if agent else Actor.USER
-    return ComputerSession(gate, actor=actor, cancel=app.ctx.cancel, headless=headless)
+    from highhx.connections import browser_endpoint, computer_target
+
+    return ComputerSession(
+        gate,
+        actor=actor,
+        cancel=app.ctx.cancel,
+        headless=headless,
+        target=computer_target(app),
+        browser_endpoint=browser_endpoint(app),
+    )
 
 
 def render_outcome(app: App, outcome: ActionOutcome) -> int:
@@ -370,13 +379,28 @@ def computer_protocol(app: App) -> int:
     return 0
 
 
-@computer.command("screenshot", short_help="Capture the screen or one window to a PNG.")
+@computer.command("screenshot", short_help="Capture the screen, one window or a region to a PNG.")
 @click.option("--window", "window", type=int, metavar="ID", help="Only this window (ids from `computer windows`).")
+@click.option("--app", "application", metavar="APP", help="Only this application's front window.")
+@click.option("--region", metavar="X,Y,WIDTH,HEIGHT", help="Only this region, in desktop points.")
 @pass_app
-def computer_screenshot(app: App, window: int | None) -> int:
-    """Save a screenshot in HighhX's screenshots folder and print its path. macOS needs Screen
-    Recording permission for your terminal; HighhX says so instead of saving a blank image."""
-    return run_action(app, "computer.screenshot", {"window": window} if window is not None else {})
+def computer_screenshot(app: App, window: int | None, application: str | None, region: str | None) -> int:
+    """Save a screenshot (the screen, --window ID, --app APP's front window or a --region) in
+    HighhX's screenshots folder and print its path. macOS needs Screen Recording permission for
+    your terminal; HighhX says so instead of saving a blank image."""
+    inputs: dict[str, Any] = {}
+    if window is not None:
+        inputs["window"] = window
+    if application:
+        inputs["app"] = application
+    if region:
+        try:
+            inputs["region"] = [int(v.strip()) for v in region.split(",")]
+        except ValueError:
+            raise UsageError("--region needs X,Y,WIDTH,HEIGHT, e.g. 0,25,800,600.") from None
+    if len(inputs) > 1:
+        raise UsageError("Give one of --window, --app or --region.")
+    return run_action(app, "computer.screenshot", inputs)
 
 
 @computer.command("windows", short_help="List windows (or, with --apps, running applications).")
@@ -425,6 +449,20 @@ def computer_move(app: App, point: str) -> int:
     return run_action(app, "computer.move", {"x": x, "y": y})
 
 
+@computer.command("mouse", short_help="Only press or only release a mouse button at a point.")
+@click.argument("action", type=click.Choice(["down", "up"]))
+@click.argument("point", metavar="X,Y")
+@click.option("--right", is_flag=True, help="The right button.")
+@pass_app
+def computer_mouse(app: App, action: str, point: str, right: bool) -> int:
+    """Press (down) or release (up) a button at X,Y — for a drag or long press that `computer
+    drag` cannot express (asks first). Release what you press."""
+    x, y = _point(point)
+    return run_action(
+        app, "computer.mouse_button", {"action": action, "x": x, "y": y, "button": "right" if right else "left"}
+    )
+
+
 @computer.command("drag", short_help="Drag from one desktop point to another.")
 @click.argument("start", metavar="X1,Y1")
 @click.argument("end", metavar="X2,Y2")
@@ -446,13 +484,21 @@ def computer_menu(app: App, application: str, path: str) -> int:
     return run_action(app, "computer.menu", {"app": application, "path": path})
 
 
-@computer.command("window", short_help="Move and resize an application's window.")
+@computer.command("window", short_help="Move, resize or bring to the front one window.")
 @click.argument("application", metavar="APP", required=False)
 @click.option("--id", "window", type=int, help="The window id (from `computer windows`) instead of APP.")
-@click.option("--frame", required=True, metavar="X,Y,WIDTH,HEIGHT", help="The new frame in desktop points.")
+@click.option("--frame", metavar="X,Y,WIDTH,HEIGHT", help="The new frame in desktop points.")
+@click.option("--focus", is_flag=True, help="Bring window --id to the front (and check that it is).")
 @pass_app
-def computer_window(app: App, application: str | None, window: int | None, frame: str) -> int:
-    """Move and resize APP's front window (or --id WINDOW) to --frame, and check the new frame."""
+def computer_window(app: App, application: str | None, window: int | None, frame: str | None, focus: bool) -> int:
+    """Move and resize APP's front window (or --id WINDOW) to --frame, and check the new frame; or
+    with --focus bring window --id to the front — one exact window of an application that has several."""
+    if focus:
+        if window is None or frame:
+            raise UsageError("--focus needs --id WINDOW (and no --frame).")
+        return run_action(app, "computer.focus", {"window": window})
+    if not frame:
+        raise UsageError("Give --frame X,Y,WIDTH,HEIGHT (or --focus with --id).")
     try:
         x, y, width, height = (int(v.strip()) for v in frame.split(","))
     except ValueError:
@@ -470,6 +516,7 @@ def computer_window(app: App, application: str | None, window: int | None, frame
 @click.option("--element", "label", metavar="TEXT", help="An element whose name contains TEXT exists …")
 @click.option("--role", help="… with this role (button, textbox, checkbox …).")
 @click.option("--value", help="… and holds exactly this value.")
+@click.option("--text", "visible", metavar="TEXT", help="TEXT is visible in the window (accessibility, then OCR).")
 @click.option(
     "--expect",
     "raw",
@@ -494,6 +541,7 @@ def computer_verify(
     label: str | None,
     role: str | None,
     value: str | None,
+    visible: str | None,
     raw: tuple[str, ...],
     timeout_ms: int,
     stable: int,
@@ -520,6 +568,8 @@ def computer_verify(
         expect.append({"element": element})
     elif value is not None:
         raise UsageError("--value needs --element (and/or --role).")
+    if visible:
+        expect.append({"text": {"contains": visible}})
     for text in raw:
         try:
             expect.append(json.loads(text))
@@ -552,6 +602,20 @@ def computer_clipboard(app: App, text: str | None) -> int:
     if text is not None:
         return run_action(app, "computer.clipboard_write", {"text": text})
     return run_action(app, "computer.clipboard_read", {}, lambda o: app.output.plain(o.get("text") or ""))
+
+
+@computer.command("engine", hidden=True, short_help="Serve this computer's engine on stdin/stdout.")
+def computer_engine() -> int:
+    """What a remote HighhX runs through SSH (HIGHHX_COMPUTER_TARGET=ssh://…): this computer's
+    built-in engine, speaking the automation protocol as JSON lines. Not for interactive use."""
+    import sys
+
+    from highhx.automation.engine.bridge import AutomationBridge
+    from highhx.automation.engine.python_engine import PythonEngine
+    from highhx.automation.engine.serve import serve
+    from highhx.computer.driver import standalone_runner
+
+    return serve(AutomationBridge(PythonEngine(standalone_runner())), sys.stdin, sys.stdout)
 
 
 @computer.command("mcp", short_help="Serve the desktop tools to an MCP client over stdio.")
@@ -639,6 +703,22 @@ def computer_run(app: App, flow_file: Path, source: str) -> int:
 @click.option("--schema", is_flag=True, help="Print the Task IR JSON Schemas and exit.")
 @click.option("--max-steps", type=click.IntRange(1, 200), help="At most this many actions.")
 @click.option("--timeout", type=click.FloatRange(1, 3600), help="Give up after this many seconds.")
+@click.option(
+    "--desktop",
+    is_flag=True,
+    help="Work on the whole desktop with a vision model: screenshot → model → one GUI action → repeat.",
+)
+@click.option("--app", "window_app", metavar="APP", help="With --desktop: look only at APP's front window.")
+@click.option(
+    "--attach",
+    "attachments",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="With --desktop: a file the task needs (repeatable), e.g. an invoice to copy a total from.",
+)
+@click.option(
+    "--expect", "expect", multiple=True, metavar="JSON", help="With --desktop: a predicate that must hold at the end."
+)
 @pass_app
 def computer_task(
     app: App,
@@ -648,6 +728,10 @@ def computer_task(
     schema: bool,
     max_steps: int | None,
     timeout: float | None,
+    desktop: bool,
+    window_app: str | None,
+    attachments: tuple[Path, ...],
+    expect: tuple[str, ...],
 ) -> int:
     """Work toward a goal in the HighhX browser, step by step:
 
@@ -681,6 +765,10 @@ def computer_task(
     if schema:
         out.emit(json_schemas(), lambda: out.console.print_json(json.dumps(json_schemas())))
         return 0
+    if desktop:
+        return _desktop_task(app, " ".join(request), window_app, attachments, expect, max_steps, timeout)
+    if window_app or attachments or expect:
+        raise UsageError("--app, --attach and --expect go with --desktop.")
     prepared = runner.prepare(app, " ".join(request), ir_file, app.ctx.cancel)
     task = runner.with_limits(prepared.task, max_steps=max_steps, timeout=timeout)
     if show_ir or app.options.dry_run:
@@ -733,6 +821,101 @@ def computer_task(
     }
     out.emit(data, lambda: out.note(f"log: {log_file}") if log_file else None)
     return {COMPLETED: 0, NEEDS_USER: 2, CANCELLED: 130}.get(state.status, 1)
+
+
+def _desktop_task(
+    app: App,
+    goal: str,
+    window_app: str | None,
+    files: tuple[Path, ...],
+    raw_expect: tuple[str, ...],
+    max_steps: int | None,
+    timeout: float | None,
+) -> int:
+    """The vision agent on the desktop (see highhx.computer.operator.vision), through the person's
+    action executor: every action is classified, approved (on this terminal), audited, grounded."""
+    import json
+
+    from highhx.attachments import AttachmentError, AttachmentStore, context_blocks
+    from highhx.computer.operator.computer import ComputerOperator
+    from highhx.computer.operator.models import vision_model
+    from highhx.computer.operator.vision import COMPLETED, NEEDS_USER, VisionAgent
+    from highhx.computer.verify import check_predicates
+
+    if not goal.strip():
+        raise UsageError("Describe the task, e.g. highhx computer task --desktop \"turn on Auto Save in VS Code\".")
+    try:
+        expect = check_predicates([json.loads(e) for e in raw_expect]) if raw_expect else None
+    except ValueError:
+        raise UsageError("--expect must be JSON predicates (see `highhx computer verify`).") from None
+    out = app.output
+    provider, capabilities = vision_model(app, app.ctx.cancel)
+    if not capabilities.local:
+        where = f"{capabilities.provider} ({capabilities.model or 'default model'})"
+        question = f"Screenshots of your screen (and attached files) will be sent to {where}. Continue?"
+        if not (app.options.yes or (app.options.is_interactive() and click.confirm(question, err=True))):
+            out.error("Not started: sending screenshots needs your consent (--yes, or answer yes).")
+            out.note("  A local vision model keeps them here: HIGHHX_VISION_BASE_URL + HIGHHX_VISION_MODEL.")
+            return 6
+    store = AttachmentStore()
+    try:
+        attached = [store.add(f) for f in files]
+    except AttachmentError as exc:
+        raise UsageError(exc.message) from None
+    context = context_blocks(attached, vision=capabilities.vision)
+
+    def emit(event: str, **data: Any) -> None:
+        app.ctx.events.emit(event, **data)
+        if out.json_mode or out.quiet:
+            return
+        line = _task_line(event, data)
+        if line:
+            out.console.print(line)
+
+    executor = app.user_actions()
+    operator = ComputerOperator(executor, window_app=window_app)
+    agent = VisionAgent(
+        operator,
+        provider,
+        capabilities,
+        cancel=app.ctx.cancel,
+        emit=emit,
+        max_steps=max_steps or 30,
+        timeout=timeout or 600.0,
+        expect=expect,
+    )
+    with app.engine.operation("task", goal[:60]):
+        result = agent.run(goal, context)
+    out.emit(result.to_dict(), lambda: None)
+    return {COMPLETED: 0, NEEDS_USER: 2}.get(result.status, 1)
+
+
+def _task_line(event: str, data: dict[str, Any]) -> str:
+    """One line per task event (the same events the REPL and the event log see)."""
+    if event == "computer.task.started":
+        where = "local" if data.get("local") else "remote"
+        return f"[bold]TASK:[/bold]     {escape(str(data['goal']))} [dim]({data.get('model') or 'model'}, {where})[/dim]"
+    if event == "computer.screenshot":
+        return f"[dim]OBSERVE:  {data['capture']} {data['size'][0]}x{data['size'][1]}[/dim]"
+    if event == "computer.action.predicted":
+        thought = f" [dim]— {escape(str(data['thought'])[:100])}[/dim]" if data.get("thought") else ""
+        return f"[bold]ACTION:[/bold]   {escape(str(data['action']))}{thought}"
+    if event == "computer.action.executed":
+        mark = "✓" if data.get("ok") else "✗"
+        style = "ok" if data.get("ok") else "fail"
+        detail = "" if data.get("ok") else f" — {escape(str(data.get('error') or data.get('status')))}"
+        return f"[{style}]RESULT:   {mark} {escape(str(data['catalog']))}{detail}[/{style}]"
+    if event == "computer.action.invalid":
+        return f"[warn]INVALID:  {escape(str(data['error']))}[/warn]"
+    if event == "computer.recovery":
+        return f"[warn]RECOVERY: {escape(str(data['reason']))}: {escape(str(data.get('detail') or ''))[:160]}[/warn]"
+    if event.startswith("computer.verification."):
+        return f"VERIFY:   {event.rsplit('.', 1)[1]} {escape(str(data.get('detail') or ''))}"
+    if event.startswith("computer.task.") and event != "computer.task.started":
+        status = event.rsplit(".", 1)[1]
+        style = "ok" if status == "completed" else "fail"
+        return f"[{style}]FINAL:    {status} — {escape(str(data['reason']))} ({data['steps']} action(s))[/{style}]"
+    return ""
 
 
 @computer.group("browser", short_help="Start or stop the HighhX-controlled browser.")

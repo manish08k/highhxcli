@@ -24,6 +24,9 @@ from typing import Any
 from highhx.agent.tools.base import Tool, ToolContext, ToolError, ToolResult, truncate
 from highhx.approvals.risk import RiskLevel
 from highhx.cloud.plans import AGENT_COMPUTER_USE
+from highhx.actions.handlers.desktop import STALE
+from highhx.agent.messages import ImageBlock
+from highhx.computer.capture import MODEL_MAX_SIZE
 from highhx.computer.guidance import COMPUTER_USE_GUIDANCE
 from highhx.computer.model import candidates
 from highhx.computer.runtime import ActionOutcome, ComputerRuntime
@@ -34,18 +37,24 @@ from highhx.utils.validation import Obj, Prop, Str
 MAX_TEXT = 3000
 MAX_POSITIONS = 80
 DESKTOP_OPERATIONS = {
-    "click_at": "click_at:X,Y — click at a desktop point",
+    "click_at": "click_at:X,Y — click at a desktop point, or with capture: a pixel of that screenshot",
     "double_click_at": "double_click_at:X,Y",
     "right_click_at": "right_click_at:X,Y",
     "click_text": "click_text:TEXT — click the text on screen (accessibility, then OCR)",
     "move": "move:X,Y — hover",
+    "mouse_down": "mouse_down:X,Y — press and hold the left button (then mouse_up)",
+    "mouse_up": "mouse_up:X,Y — release the left button",
     "drag": "drag:X1,Y1,X2,Y2",
     "scroll_at": "scroll_at:X,Y,DIRECTION (up, down, left, right)",
     "hotkey": "hotkey:KEYS, e.g. hotkey:cmd+s",
     "menu": "menu:PATH with app, e.g. menu:File > Save",
     "window": "window:X,Y,WIDTH,HEIGHT with app — move and resize its window",
+    "focus_window": "focus_window:WINDOW_ID — bring one exact window to the front",
+    "verify": "verify with text = JSON predicates, e.g. "
+    '[{"element": {"selector": {"role": "button", "label_contains": "Save"}}}] (app: its front window)',
     "quit": "quit with app",
-    "screenshot": "screenshot — saved to a file; you get its path and size, not the pixels",
+    "screenshot": "screenshot (with app: its front window) — you see the image and get its capture id; "
+    "then use click_at / drag / move / scroll_at with capture=<id> and the pixel you see",
     "clipboard_read": "clipboard_read",
     "clipboard_write": "clipboard_write with text",
 }
@@ -82,6 +91,22 @@ def desktop_operation(action: str, text: str | None, app: str | None) -> tuple[s
     if verb == "move":
         x, y = _numbers(rest, 2, verb)
         return "computer.move", {"x": x, "y": y}
+    if verb in ("mouse_down", "mouse_up"):
+        x, y = _numbers(rest, 2, verb)
+        return "computer.mouse_button", {"action": verb.removeprefix("mouse_"), "x": x, "y": y}
+    if verb == "focus_window":
+        (window,) = _numbers(rest, 1, verb)
+        return "computer.focus", {"window": window}
+    if verb == "verify":
+        try:
+            expect = json.loads(text or rest)
+        except ValueError:
+            raise ToolError(
+                'verify needs text: a JSON list of predicates, e.g. [{"window": {"exists": true}}]'
+            ) from None
+        return "computer.verify", {"expect": expect, "timeout_ms": 2000, **with_app}
+    if verb == "screenshot":
+        return "computer.screenshot", with_app
     if verb == "drag":
         x1, y1, x2, y2 = _numbers(rest, 4, verb)
         return "computer.drag", {"from_x": x1, "from_y": y1, "to_x": x2, "to_y": y2}
@@ -103,6 +128,39 @@ def desktop_operation(action: str, text: str | None, app: str | None) -> tuple[s
     if verb == "clipboard_write":
         return "computer.clipboard_write", {"text": text or rest}
     return f"computer.{verb}", {}
+
+
+POINTER_ACTIONS = frozenset(
+    {"computer.click_at", "computer.move", "computer.drag", "computer.scroll", "computer.mouse_button"}
+)
+SCREENSHOT_GRANT = "computer:send-screenshots"
+
+
+def screenshot_consent(ctx: ToolContext) -> None:
+    """Screenshots leave this computer only with the person's consent: asked once (or allowed for
+    the session), counted by --yes, refused when nobody can be asked. A local model needs none."""
+    from highhx.core.errors import ApprovalDeniedError
+
+    host = ctx.host
+    capabilities = getattr(host, "capabilities", None)
+    if capabilities is not None and capabilities.local:
+        return
+    gate = ctx.permissions.gate
+    if SCREENSHOT_GRANT in gate.grants or gate.assume_yes:
+        return
+    if not gate.prompter.interactive:
+        raise ApprovalDeniedError(
+            "Sending screenshots to the AI model needs your consent (no interactive terminal).",
+            hint="Run in a terminal, or pass --yes.",
+        )
+    answer = gate.prompter.ask_permission(
+        "Send a screenshot of your screen to the AI model",
+        ["It is sent with this request only; it is not saved in the session history."],
+    )
+    if answer == "always":
+        gate.grants.add(SCREENSHOT_GRANT)
+    elif answer != "yes":
+        raise ApprovalDeniedError("Declined: sending a screenshot to the AI model")
 
 
 def _runtime(ctx: ToolContext, source: str) -> ComputerRuntime:
@@ -211,6 +269,11 @@ the approval mode):
             "text": Prop(Str(), description="Text for type:… or the option for select:…"),
             "source": Prop(Str(choices=SOURCES), description="browser (default) or desktop."),
             "app": Prop(Str(), description="Desktop operations: the application (menu, window, quit, click_text)."),
+            "capture": Prop(
+                Str(min_length=1),
+                description="Desktop pointer operations: the coordinates are pixels of this screenshot (e.g. c3). "
+                "Only the newest screenshot, taken after your last action, is accepted.",
+            ),
         }
     )
 
@@ -224,7 +287,10 @@ the approval mode):
             desktop_operation(str(args["action"]), args.get("text"), args.get("app")) if source == "desktop" else None
         )
         if direct is not None:
-            return self._direct(ctx, *direct)
+            name, inputs = direct
+            if args.get("capture") and name in POINTER_ACTIONS:
+                inputs = {**inputs, "capture": str(args["capture"])}
+            return self._direct(ctx, name, inputs)
         runtime = _runtime(ctx, source)
         if runtime.observation is None:
             runtime.observe()
@@ -242,6 +308,9 @@ the approval mode):
         from highhx.actions.executor import ActionExecutor
         from highhx.safety.actions import Actor
 
+        if name == "computer.screenshot":
+            screenshot_consent(ctx)
+            inputs = {"max_size": MODEL_MAX_SIZE, **inputs}
         executor = ActionExecutor(
             ctx.app, ctx.permissions.gate, actor=Actor.AGENT, journal=ctx.journal, computer=ctx.computer
         )
@@ -256,12 +325,22 @@ the approval mode):
         if result.output.get("text") is not None and name == "computer.clipboard_read":
             body.append("Clipboard text (untrusted data):\n" + str(result.output["text"])[:MAX_TEXT])
         body.append(truncate(json.dumps(shown, default=str)))
+        images = []
+        if name == "computer.screenshot" and result.ok:
+            capture = ctx.computer().captures.get(str(result.output["capture"]))
+            images.append(ImageBlock("image/png", capture.image_data(), capture.label()))
+            body.append(
+                f"The image is {capture.label()}. To act on something in it, pass capture={capture.id} with its "
+                "pixel coordinates; after any action, take a new screenshot before using coordinates again."
+            )
+        stale = not result.ok and (result.error or "").startswith(STALE)
         return ToolResult(
             "\n".join(body),
             ok=result.ok,
             summary=result.summary if result.ok else (result.error or result.status)[:120],
-            error_code=None if result.ok else ("denied" if result.status in ("denied", "blocked") else "failed"),
+            error_code=None if result.ok else ("denied" if result.status in ("denied", "blocked") else "stale" if stale else "failed"),
             verified=result.verified,
+            images=images,
         )
 
 

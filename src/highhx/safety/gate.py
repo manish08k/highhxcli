@@ -25,7 +25,7 @@ from highhx.core.errors import (
     PolicyViolationError,
     TimeoutExpiredError,
 )
-from highhx.safety.actions import ActionDescriptor, Actor
+from highhx.safety.actions import ActionDescriptor, ActionKind, Actor
 from highhx.safety.audit import AuditEvent, AuditLog
 from highhx.safety.classifier import SafetyPolicy, SafetyVerdict
 from highhx.safety.confirmation import ApprovalTicket, ConfirmationBroker, ConfirmPrompter
@@ -139,7 +139,8 @@ class ActionGate:
             verdict.reasons.append(min_risk_reason)  # a person is never asked without a reason
         verdict.risk_label = risk_label
         try:
-            if self.mode == ApprovalMode.READ_ONLY and verdict.risk > RiskLevel.SAFE:
+            if self.mode == ApprovalMode.READ_ONLY and action.kind != ActionKind.READ and verdict.risk > RiskLevel.SAFE:
+                # read-only refuses changes; a read that needs a confirmation still asks for one below
                 raise ApprovalDeniedError(f"Not allowed in read-only mode: {action.summary}")
             self.engine.evaluate_policy(policy_action, command=action.command, target=action.target or None)
             if verdict.risk <= RiskLevel.SAFE and not always_confirm:
