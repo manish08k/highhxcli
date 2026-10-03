@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import logging
+import secrets
 import threading
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,6 +19,36 @@ log = logging.getLogger(__name__)
 WILDCARD = "*"
 
 
+CONTEXT_KEYS = ("trace_id", "session_id", "task_id", "action_id", "source")
+"""The envelope every event carries when it is emitted inside :func:`trace_context`."""
+
+_context: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar("highhx_event_context", default=None)
+
+
+def new_id(prefix: str) -> str:
+    return f"{prefix}_{secrets.token_hex(6)}"
+
+
+def current_context() -> dict[str, str]:
+    """The trace envelope of the code running now (empty outside any :func:`trace_context`)."""
+    return dict(_context.get() or {})
+
+
+@contextlib.contextmanager
+def trace_context(**values: str | None) -> Iterator[dict[str, str]]:
+    """Stamp every event emitted inside the block with these ids (nested blocks add to and
+    override the outer ones). Unknown keys are refused so the envelope stays a fixed schema."""
+    unknown = set(values) - set(CONTEXT_KEYS)
+    if unknown:
+        raise ValueError(f"unknown event context keys: {', '.join(sorted(unknown))}")
+    merged = {**(_context.get() or {}), **{k: str(v) for k, v in values.items() if v}}
+    token = _context.set(merged)
+    try:
+        yield merged
+    finally:
+        _context.reset(token)
+
+
 @dataclass(frozen=True)
 class Event:
     """An event emitted by the runtime."""
@@ -23,6 +56,11 @@ class Event:
     name: str
     data: dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=iso_now)
+    context: dict[str, str] = field(default_factory=dict)
+    """trace_id, session_id, task_id, action_id, source — whichever were set when it was emitted."""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"name": self.name, "timestamp": self.timestamp, **self.context, "payload": dict(self.data)}
 
 
 Handler = Callable[[Event], None]
@@ -49,7 +87,7 @@ class EventBus:
 
     def emit(self, name: str, /, **data: Any) -> Event:
         """Emit an event synchronously to all matching handlers."""
-        event = Event(name=name, data=data)
+        event = Event(name=name, data=data, context=current_context())
         with self._lock:
             handlers = [*self._handlers.get(name, ()), *self._handlers.get(WILDCARD, ())]
         for handler in handlers:

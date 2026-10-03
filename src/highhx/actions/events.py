@@ -56,6 +56,28 @@ COMPUTER_TASK_NEEDS_USER = "computer.task.needs_user"
 COMPUTER_TASK_CANCELLED = "computer.task.cancelled"
 MCP_CONNECTED = "mcp.connected"
 ATTACHMENTS_ADDED = "attachments.added"
+# The computer-use runtime (agent loop, perception, grounding, recovery, sandboxes).
+# ``action.proposed`` is ACTION_PLANNED and ``approval.required`` is APPROVAL_REQUESTED.
+AGENT_PLANNING = "agent.planning"
+PLAN_CREATED = "plan.created"
+PLAN_UPDATED = "plan.updated"
+OBSERVATION_CREATED = "observation.created"
+GROUNDING_STARTED = "grounding.started"
+GROUNDING_ATTEMPT = "grounding.attempt"
+GROUNDING_COMPLETED = "grounding.completed"
+VERIFICATION_STARTED = "verification.started"
+VERIFICATION_COMPLETED = "verification.completed"
+RECOVERY_STARTED = "recovery.started"
+RECOVERY_COMPLETED = "recovery.completed"
+REFLECTION_CREATED = "reflection.created"
+CHECKPOINT_SAVED = "checkpoint.saved"
+SANDBOX_CREATED = "sandbox.created"
+SANDBOX_EXEC = "sandbox.exec"
+SANDBOX_DESTROYED = "sandbox.destroyed"
+MODEL_USAGE = "model.usage"
+BENCHMARK_STARTED = "benchmark.started"
+BENCHMARK_TASK = "benchmark.task"
+BENCHMARK_COMPLETED = "benchmark.completed"
 
 EVENT_NAMES = (
     SESSION_STARTED,
@@ -95,6 +117,26 @@ EVENT_NAMES = (
     COMPUTER_TASK_CANCELLED,
     MCP_CONNECTED,
     ATTACHMENTS_ADDED,
+    AGENT_PLANNING,
+    PLAN_CREATED,
+    PLAN_UPDATED,
+    OBSERVATION_CREATED,
+    GROUNDING_STARTED,
+    GROUNDING_ATTEMPT,
+    GROUNDING_COMPLETED,
+    VERIFICATION_STARTED,
+    VERIFICATION_COMPLETED,
+    RECOVERY_STARTED,
+    RECOVERY_COMPLETED,
+    REFLECTION_CREATED,
+    CHECKPOINT_SAVED,
+    SANDBOX_CREATED,
+    SANDBOX_EXEC,
+    SANDBOX_DESTROYED,
+    MODEL_USAGE,
+    BENCHMARK_STARTED,
+    BENCHMARK_TASK,
+    BENCHMARK_COMPLETED,
 )
 LOGGED_PREFIXES = (
     "session.",
@@ -108,6 +150,16 @@ LOGGED_PREFIXES = (
     "computer.",
     "mcp.",
     "attachments.",
+    "plan.",
+    "observation.",
+    "grounding.",
+    "verification.",
+    "recovery.",
+    "reflection.",
+    "checkpoint.",
+    "sandbox.",
+    "model.",
+    "benchmark.",
 )
 
 
@@ -134,6 +186,8 @@ class EventLog:
         if not event.name.startswith(LOGGED_PREFIXES):
             return
         record: dict[str, Any] = {"ts": event.timestamp, "event": event.name, **_plain(event.data)}
+        for key, value in event.context.items():
+            record.setdefault(key, value)
         if self.session_id and "session" not in record:
             record["session"] = self.session_id
         line = self.redactor.redact(json.dumps(record, default=str, sort_keys=True))

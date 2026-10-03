@@ -1638,7 +1638,9 @@ def _specs() -> list[ActionSpec]:
             policy_action=lambda i: f"exec:{(str(i.get('command', '')).split() or ['shell'])[0]}",
         ),
     ]
-    return specs
+    from highhx.actions.catalog_computer import computer_use_specs
+
+    return [*specs, *computer_use_specs()]
 
 
 @cache
