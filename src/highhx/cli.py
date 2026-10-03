@@ -17,6 +17,7 @@ from highhx.core.lifecycle import Lifecycle
 SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Interactive session & AI agent (HighhX Pro)", ("agent", "voice")),
     ("Automation (no AI)", ("do", "computer")),
+    ("Computer use", ("tui", "browser", "android", "sandbox", "replay", "trajectories")),
     ("Account", ("login", "logout", "account")),
     ("Project", ("init", "status", "info", "dev", "start", "stop", "restart", "check")),
     ("Code & tasks", ("run", "exec", "script", "task", "watch", "fix")),

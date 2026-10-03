@@ -958,3 +958,83 @@ def browser_stop(app: App) -> int:
         {"stopped": stopped}, lambda: app.output.info("Browser stopped." if stopped else "The browser was not running.")
     )
     return 0
+
+
+# ------------------------------------------------------------- the computer-use runtime
+@computer.command("state", short_help="One fused observation: structure, and pixels/OCR/vision when asked.")
+@click.option("--surface", type=click.Choice(["browser", "desktop", "android"]), default="desktop", show_default=True)
+@click.option("--screenshot", is_flag=True, help="Capture a screenshot.")
+@click.option("--ocr", type=click.Choice(["never", "auto", "always"]), help="Read the screen with OCR.")
+@click.option("--vision", is_flag=True, help="Ask the configured vision model too.")
+@click.option("--remote-vision", is_flag=True, help="Allow a remote vision model (screenshots leave this computer).")
+@pass_app
+def computer_state(app: App, surface: str, screenshot: bool, ocr: str | None, vision: bool, remote_vision: bool) -> int:
+    """The computer.state action: DOM / accessibility elements with provenance, the active app,
+    window or page, and — only when asked — a screenshot, OCR and vision. Each source says what
+    it did (ok, unavailable and why)."""
+    inputs: dict[str, Any] = {"surface": surface}
+    if screenshot:
+        inputs["screenshot"] = True
+    if ocr:
+        inputs["ocr"] = ocr
+    if vision:
+        inputs["vision"] = "auto"
+        inputs["remote_vision"] = remote_vision
+
+    def render(output: dict[str, Any]) -> None:
+        from highhx.perception.state import ComputerState
+
+        state = ComputerState.from_dict(output["state"])
+        app.output.plain(state.summary(limit=60))
+        for record in state.perception:
+            app.output.note(f"  {record.source}: {record.status}{' — ' + record.detail if record.detail else ''}")
+
+    return run_action(app, "computer.state", inputs, render)
+
+
+@computer.command("ground", short_help="Find a target by every representation (never acts).")
+@click.argument("target")
+@click.option("--surface", type=click.Choice(["browser", "desktop", "android"]), default="desktop", show_default=True)
+@click.option("--ocr/--no-ocr", default=True, help="Fetch OCR when structure does not find it.")
+@pass_app
+def computer_ground(app: App, target: str, surface: str, ocr: bool) -> int:
+    """Hybrid grounding of TARGET (`Save`, `button:Save`): accessibility → DOM → text → OCR →
+    vision → coordinates, each attempt reported. Several equal matches are reported, never guessed."""
+    from highhx.actions.handlers.state import state_from_result
+    from highhx.grounding import HybridGrounder, Target
+
+    executor = app.user_actions()
+    result = executor.run("computer.state", {"surface": surface})
+    if not result.ok:
+        raise UsageError(f"Cannot observe the {surface}: {result.error}")
+    state = state_from_result(result)
+    assert state is not None
+
+    def escalate(level: str, query: str) -> Any:
+        if level != "ocr" or not ocr:
+            return None
+        richer = executor.run("computer.state", {"surface": surface, "screenshot": True, "ocr": "always", "query": query})
+        return state_from_result(richer) if richer.ok else None
+
+    found = HybridGrounder(emit=executor.events.emit).ground(state, Target.parse(target), escalate=escalate)
+    app.output.emit(found.to_dict(), lambda: app.output.plain(found.explain() + (f"\n  point: {list(found.point)}" if found.point else "")))
+    return 0 if found.grounded else 1
+
+
+@computer.command("drivers", short_help="Which computer drivers and runtimes can run here.")
+@pass_app
+def computer_drivers(app: App) -> int:
+    """Desktop, browser, Android, remote and VM drivers, and the sandbox backends — available or
+    not, and why."""
+    from highhx.drivers import discover
+    from highhx.runtimes import available_backends
+
+    drivers = discover()
+    backends = [{"backend": n, "available": c.available, "detail": c.detail} for n, c in available_backends().items()]
+
+    def render() -> None:
+        app.output.table(["driver", "available", "detail"], [(d["driver"], "yes" if d["available"] else "no", d["detail"]) for d in drivers], title="Drivers")
+        app.output.table(["sandbox", "available", "detail"], [(b["backend"], "yes" if b["available"] else "no", b["detail"]) for b in backends], title="Sandbox isolation")
+
+    app.output.emit({"drivers": drivers, "sandbox": backends}, render)
+    return 0

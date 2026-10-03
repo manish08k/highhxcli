@@ -29,6 +29,12 @@ def all_commands() -> list[click.Command]:
     from highhx.commands.code.watch import watch
     from highhx.commands.computer.do import do
     from highhx.commands.computer.main import computer
+    from highhx.commands.computer_use.android import android
+    from highhx.commands.computer_use.browser import browser
+    from highhx.commands.computer_use.replay import replay
+    from highhx.commands.computer_use.sandbox import sandbox
+    from highhx.commands.computer_use.trajectories import trajectories
+    from highhx.commands.computer_use.tui import tui
     from highhx.commands.database.main import db
     from highhx.commands.dependencies.main import deps
     from highhx.commands.deployment.deploy import deploy
@@ -132,6 +138,12 @@ def all_commands() -> list[click.Command]:
         agent,
         do,
         computer,
+        browser,
+        android,
+        sandbox,
+        replay,
+        trajectories,
+        tui,
         audit,
         login,
         logout,

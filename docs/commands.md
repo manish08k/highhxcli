@@ -52,6 +52,30 @@ result. Every risky action goes through HighhX's policies and approvals.
 
 Running `highhx agent` without a subcommand runs `highhx agent run`.
 
+#### `highhx agent loop`
+
+The computer-use agent loop (Planner → Worker → Observer → Verifier → Reflector): every
+action goes through HighhX's executor — risk, policy, approval on this terminal, verification,
+audit — and the run is recorded as a trajectory and a task trace. Steps come from --plan, a
+model (--model), or HighhX Free's deterministic resolver.
+
+```
+highhx agent loop [OPTIONS] [GOAL]
+```
+
+| Option | Description |
+|---|---|
+| `--surface` |  (default: `auto`) |
+| `--plan` | Steps from a YAML/JSON file (no AI). |
+| `--model` | Plan with a model (HighhX Pro or a local model). |
+| `--remote-model` | Allow a remote model to see the task and screen. |
+| `--vision` | Allow a vision model for grounding when structure and OCR fail. |
+| `--success` | The task's success check, e.g. '{"text": "Order placed"}'. |
+| `--max-steps` |  (default: `30`) |
+| `--resume` | Continue an interrupted task from its checkpoint. |
+| `--live` | Show the live dashboard. |
+| `--device` | Android device. |
+
 #### `highhx agent models`
 
 AI providers and models the HighhX gateway can route agent requests to.
@@ -83,7 +107,7 @@ highhx agent run [OPTIONS] [PROMPT]...
 | Option | Description |
 |---|---|
 | `--continue, -c` | Continue the most recent session in this project. |
-| `--resume` | Resume a saved session (see `highhx agent sessions`). |
+| `--resume` | Resume a saved session (`highhx agent sessions`) or an agent-loop task (task_…). |
 | `--provider` | AI provider (default: account setting, else highhx). |
 | `--model` | Model to use (default: provider default). |
 | `--mode` | Approvals: ask (default), auto-edit (normal changes without asking), read-only. |
@@ -289,6 +313,29 @@ highhx computer drag [OPTIONS] X1,Y1 X2,Y2
 |---|---|
 | `--right` | With the right button. |
 
+#### `highhx computer drivers`
+
+Desktop, browser, Android, remote and VM drivers, and the sandbox backends — available or
+not, and why.
+
+```
+highhx computer drivers [OPTIONS]
+```
+
+#### `highhx computer ground`
+
+Hybrid grounding of TARGET (`Save`, `button:Save`): accessibility → DOM → text → OCR →
+vision → coordinates, each attempt reported. Several equal matches are reported, never guessed.
+
+```
+highhx computer ground [OPTIONS] TARGET
+```
+
+| Option | Description |
+|---|---|
+| `--surface` |  (default: `desktop`) |
+| `--ocr` | Fetch OCR when structure does not find it. |
+
 #### `highhx computer mcp`
 
 Speak MCP (JSON-RPC over stdin/stdout) so an MCP client can observe and operate this
@@ -306,6 +353,7 @@ highhx computer mcp [OPTIONS]
 |---|---|
 | `--mode` | read-only: observation tools only. ask/auto-edit: the approval rules of `highhx computer`. (default: `ask`) |
 | `--allow` | Offer only these tools (repeatable): a bounded set. |
+| `--toolset` | desktop (default): computer.* tools. runtime: state, browser, Android, sandbox and HTTP tools. |
 
 #### `highhx computer menu`
 
@@ -444,6 +492,24 @@ highhx computer select [OPTIONS] SELECTOR OPTION
 |---|---|
 | `--source` | browser (DevTools DOM) or desktop (native accessibility, macOS). (default: `browser`) |
 
+#### `highhx computer state`
+
+The computer.state action: DOM / accessibility elements with provenance, the active app,
+window or page, and — only when asked — a screenshot, OCR and vision. Each source says what
+it did (ok, unavailable and why).
+
+```
+highhx computer state [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--surface` |  (default: `desktop`) |
+| `--screenshot` | Capture a screenshot. |
+| `--ocr` | Read the screen with OCR. |
+| `--vision` | Ask the configured vision model too. |
+| `--remote-vision` | Allow a remote vision model (screenshots leave this computer). |
+
 #### `highhx computer status`
 
 Report native accessibility, browser, OCR and vision availability on this machine.
@@ -479,6 +545,10 @@ highhx computer task [OPTIONS] [REQUEST]...
 | `--schema` | Print the Task IR JSON Schemas and exit. |
 | `--max-steps` | At most this many actions. |
 | `--timeout` | Give up after this many seconds. |
+| `--desktop` | Work on the whole desktop with a vision model: screenshot → model → one GUI action → repeat. |
+| `--app` | With --desktop: look only at APP's front window. |
+| `--attach` | With --desktop: a file the task needs (repeatable), e.g. an invoice to copy a total from. |
+| `--expect` | With --desktop: a predicate that must hold at the end. |
 
 #### `highhx computer type`
 
@@ -510,6 +580,7 @@ highhx computer verify [OPTIONS] APP
 | `--element` | An element whose name contains TEXT exists … |
 | `--role` | … with this role (button, textbox, checkbox …). |
 | `--value` | … and holds exactly this value. |
+| `--text` | TEXT is visible in the window (accessibility, then OCR). |
 | `--expect` | A predicate as JSON (repeatable; see docs/COMPUTER_RUNTIME.md). |
 | `--timeout-ms` | Keep sampling until the predicates hold or this passes (0: one sample). (default: `5000`) |
 | `--stable` | Consecutive samples. (default: `2`) |
@@ -541,6 +612,397 @@ highhx computer windows [OPTIONS]
 |---|---|
 | `--app` | Only this application's windows. |
 | `--apps` | List running applications instead. |
+
+## Computer use
+
+### `highhx tui`
+
+An interactive console for computer-use work: type a goal to run it (agent loop with a live
+dashboard of plan, action, computer state, grounding, verification, recovery, cost and
+trace), or a /command — /help lists them, / and Tab open the palette. Approvals are asked
+here. Ctrl-C cancels a running task (resumable with /resume), Ctrl-D leaves.
+
+```
+highhx tui [OPTIONS]
+```
+
+### `highhx browser`
+
+Record what you do in the HighhX browser as semantic steps (role, name, test id, href,
+text, position — never only coordinates), then replay it: every target is found again on the
+current page, every action is approved and verified, and selectors that drifted are healed
+and saved. Secret fields are never recorded.
+
+Running `highhx browser` without a subcommand runs `highhx browser workflows`.
+
+#### `highhx browser delete`
+
+Delete the recorded workflow NAME.
+
+```
+highhx browser delete [OPTIONS] NAME
+```
+
+#### `highhx browser heal`
+
+The same as `replay --save-heals`: run it against the site as it is now and refresh the
+selectors that drifted.
+
+```
+highhx browser heal [OPTIONS] NAME
+```
+
+| Option | Description |
+|---|---|
+| `--var` |  |
+
+#### `highhx browser record`
+
+Open the HighhX browser and record clicks, typing, selections and Enter until Ctrl-C
+(or --duration). Nothing is clicked for you while recording.
+
+```
+highhx browser record [OPTIONS] NAME
+```
+
+| Option | Description |
+|---|---|
+| `--url` | Start here. |
+| `--duration` | Stop after this many seconds (default: Ctrl-C). |
+
+#### `highhx browser replay`
+
+Replay NAME: targets are grounded on the current page (accessibility → DOM → text → OCR →
+vision → coordinates); drifted selectors are healed and saved.
+
+```
+highhx browser replay [OPTIONS] NAME
+```
+
+| Option | Description |
+|---|---|
+| `--var` | Values for secret fields (or HIGHHX_VAR_NAME). |
+| `--save-heals` | Save healed selectors back to the workflow. |
+| `--live` | Show the live dashboard. |
+
+#### `highhx browser show`
+
+Each step with its target and check, and the heal history.
+
+```
+highhx browser show [OPTIONS] NAME
+```
+
+#### `highhx browser workflows`
+
+List recorded browser workflows.
+
+```
+highhx browser workflows [OPTIONS]
+```
+
+### `highhx android`
+
+Operate an Android phone, tablet or emulator through adb: observe the UI hierarchy, tap by
+text or point, type, swipe, launch apps — each step classified, approved and verified like
+any HighhX action. Without adb, every command says what to install.
+
+Running `highhx android` without a subcommand runs `highhx android devices`.
+
+#### `highhx android agent`
+
+The agent loop on Android: observe the hierarchy, ground targets, act through android.*
+actions, verify, recover. Steps come from --plan, a model (--model), or HighhX Free's
+resolver.
+
+```
+highhx android agent [OPTIONS] GOAL
+```
+
+| Option | Description |
+|---|---|
+| `--plan` | Steps from a file (no AI). |
+| `--model` | Plan with a model (HighhX Pro or a local model). |
+| `--remote-model` | Allow a remote model to see the task and screen. |
+| `--max-steps` |  (default: `30`) |
+| `--live` | Show the live dashboard. |
+| `--device, -s` | Device serial (default: the only connected device). |
+
+#### `highhx android back`
+
+Press the Back key.
+
+```
+highhx android back [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--device, -s` | Device serial (default: the only connected device). |
+
+#### `highhx android connect`
+
+adb connect HOST:PORT (wireless debugging or a networked emulator).
+
+```
+highhx android connect [OPTIONS] ADDRESS
+```
+
+#### `highhx android devices`
+
+List devices (serial, state, model). Tells you how to set up adb when it is missing.
+
+```
+highhx android devices [OPTIONS]
+```
+
+#### `highhx android find`
+
+Where TEXT is on screen; several matches are listed, never guessed.
+
+```
+highhx android find [OPTIONS] TEXT
+```
+
+| Option | Description |
+|---|---|
+| `--device, -s` | Device serial (default: the only connected device). |
+
+#### `highhx android home`
+
+Press the Home key.
+
+```
+highhx android home [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--device, -s` | Device serial (default: the only connected device). |
+
+#### `highhx android launch`
+
+Launch PACKAGE (e.g. com.android.settings), verified by what comes to the front.
+
+```
+highhx android launch [OPTIONS] PACKAGE
+```
+
+| Option | Description |
+|---|---|
+| `--activity` | A specific activity. |
+| `--device, -s` | Device serial (default: the only connected device). |
+
+#### `highhx android observe`
+
+Controls on screen (role, name, bounds, resource id) and the focused app.
+
+```
+highhx android observe [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--device, -s` | Device serial (default: the only connected device). |
+| `--screenshot` | Capture a screenshot too. |
+
+#### `highhx android press`
+
+A key event: enter, back, home, tab, delete, app_switch, or KEYCODE_….
+
+```
+highhx android press [OPTIONS] KEY
+```
+
+| Option | Description |
+|---|---|
+| `--device, -s` | Device serial (default: the only connected device). |
+
+#### `highhx android recents`
+
+Open the recent-apps switcher.
+
+```
+highhx android recents [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--device, -s` | Device serial (default: the only connected device). |
+
+#### `highhx android screenshot`
+
+Save the device screen to HighhX's screenshots folder.
+
+```
+highhx android screenshot [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--device, -s` | Device serial (default: the only connected device). |
+
+#### `highhx android swipe`
+
+`highhx android swipe up` or `highhx android swipe 540,1500 540,400`.
+
+```
+highhx android swipe [OPTIONS] POINTS...
+```
+
+| Option | Description |
+|---|---|
+| `--device, -s` | Device serial (default: the only connected device). |
+
+#### `highhx android tap`
+
+TARGET is visible text or a content description ("Save"), or device pixels "540,1200".
+
+```
+highhx android tap [OPTIONS] TARGET
+```
+
+| Option | Description |
+|---|---|
+| `--long` | Long press. |
+| `--role` | The control's role (button, textbox …) when the text is ambiguous. |
+| `--device, -s` | Device serial (default: the only connected device). |
+
+#### `highhx android type`
+
+Type TEXT (verified by the field's value; never read back from password fields).
+
+```
+highhx android type [OPTIONS] TEXT
+```
+
+| Option | Description |
+|---|---|
+| `--device, -s` | Device serial (default: the only connected device). |
+
+### `highhx sandbox`
+
+A copy of the project (secrets left out) with filesystem, network, environment and
+resource isolation — macOS Seatbelt, Linux bubblewrap or Docker. Run commands inside, look
+at the patch, apply it to the project (an approved change), destroy it.
+
+Running `highhx sandbox` without a subcommand runs `highhx sandbox list`.
+
+#### `highhx sandbox apply`
+
+Apply the patch to the project (shown and asked first).
+
+```
+highhx sandbox apply [OPTIONS] SANDBOX_ID
+```
+
+#### `highhx sandbox create`
+
+Create a sandbox. `workspace` isolation is only a copy (no confinement) and asks first.
+
+```
+highhx sandbox create [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--isolation` | Default: the strongest available. |
+| `--network` |  (default: `deny`) |
+| `--timeout` | Seconds per command. |
+| `--memory` | Memory limit in MB (Linux and Docker). |
+| `--empty` | Start with an empty workspace instead of a copy. |
+
+#### `highhx sandbox destroy`
+
+Destroy SANDBOX_ID, or --all.
+
+```
+highhx sandbox destroy [OPTIONS] [SANDBOX_ID]
+```
+
+| Option | Description |
+|---|---|
+| `--all` | Every sandbox (the kill switch). |
+
+#### `highhx sandbox exec`
+
+`highhx sandbox exec sbx_… -- pytest -q` (classified like any command).
+
+```
+highhx sandbox exec [OPTIONS] SANDBOX_ID COMMAND...
+```
+
+| Option | Description |
+|---|---|
+| `--timeout` |  |
+
+#### `highhx sandbox list`
+
+Every sandbox: id, isolation, network, commands run.
+
+```
+highhx sandbox list [OPTIONS]
+```
+
+#### `highhx sandbox patch`
+
+Print the unified diff of everything changed in the sandbox.
+
+```
+highhx sandbox patch [OPTIONS] SANDBOX_ID
+```
+
+### `highhx replay`
+
+NAME is a recorded browser workflow (`highhx browser workflows`) or a task id
+(`task_…`, see `highhx trajectories`). Targets are grounded again on the current screen —
+never replayed as coordinates — and every action is approved and verified.
+
+```
+highhx replay [OPTIONS] NAME
+```
+
+| Option | Description |
+|---|---|
+| `--var` | Values for secret fields (workflows). |
+| `--live` | Show the live dashboard. |
+
+### `highhx trajectories`
+
+Each agent task's steps — observation, action, result, verification, reflection and how
+each target was grounded — stored redacted. Similar past tasks inform planning, and their
+selectors inform grounding.
+
+Running `highhx trajectories` without a subcommand runs `highhx trajectories list`.
+
+#### `highhx trajectories list`
+
+Recent tasks: id, status, steps, goal.
+
+```
+highhx trajectories list [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--limit, -n` |  (default: `20`) |
+| `--status` | Only tasks with this status. |
+
+#### `highhx trajectories search`
+
+Tasks that share words with QUERY (lexical; a model embedding can replace it).
+
+```
+highhx trajectories search [OPTIONS] QUERY
+```
+
+#### `highhx trajectories show`
+
+Every step with its action, outcome, grounding strategy and reflection.
+
+```
+highhx trajectories show [OPTIONS] TASK_ID
+```
 
 ## Account
 
@@ -919,10 +1381,64 @@ highhx test [OPTIONS] [ARGS]...
 
 ### `highhx benchmark`
 
+`highhx benchmark [-- COMMAND]` times a command over several runs (the default).
+`list` / `run` / `report` / `compare` measure the computer-use runtime on benchmark suites:
+task success rate, grounding accuracy, selector healing rate, recovery success rate,
+verification accuracy, average retries, completion time and token/tool cost.
+
+Running `highhx benchmark` without a subcommand runs `highhx benchmark time`.
+
+#### `highhx benchmark compare`
+
+Metric changes from BASE to OTHER (default: the latest result).
+
+```
+highhx benchmark compare [OPTIONS] BASE [OTHER]
+```
+
+#### `highhx benchmark list`
+
+The built-in suites (deterministic: simulated web app, desktop, Android device and
+temporary workspaces) and how many tasks each has.
+
+```
+highhx benchmark list [OPTIONS]
+```
+
+#### `highhx benchmark report`
+
+Per task and overall (default: the latest result).
+
+```
+highhx benchmark report [OPTIONS] [BENCHMARK_ID]
+```
+
+| Option | Description |
+|---|---|
+| `--list` | List saved results. |
+
+#### `highhx benchmark run`
+
+Run SUITES (built-in names or YAML files): each task in a fresh environment on the real
+executor and agent loop, scored by an independent evaluator. Results are saved for
+`report` and `compare`.
+
+```
+highhx benchmark run [OPTIONS] SUITES...
+```
+
+| Option | Description |
+|---|---|
+| `--runs, -n` | Repetitions of each task. (default: `1`) |
+| `--model` | Also run model-planned tasks (HighhX Pro or a local model). |
+| `--remote-model` | Allow a remote model. |
+
+#### `highhx benchmark time`
+
 Run COMMAND (default: the test command) repeatedly and report min/mean/median/max.
 
 ```
-highhx benchmark [OPTIONS] [COMMAND]...
+highhx benchmark time [OPTIONS] [COMMAND]...
 ```
 
 | Option | Description |
@@ -1838,10 +2354,43 @@ highhx report [OPTIONS]
 
 ### `highhx trace`
 
-Show where time went in EXECUTION_ID (default: latest).
+`highhx trace [ID]` shows a trace: a task trace (`tr_…` or `task_…`: what was asked,
+planned, observed, done, retried, healed, verified, and how it ended) or an execution's
+timing tree (an execution id, default: the latest). `list` and `export` work on task traces.
+
+Running `highhx trace` without a subcommand runs `highhx trace show`.
+
+#### `highhx trace export`
+
+The trace with its tree and every (redacted) event.
 
 ```
-highhx trace [OPTIONS] [EXECUTION_ID]
+highhx trace export [OPTIONS] TRACE_ID
+```
+
+| Option | Description |
+|---|---|
+| `--format` |  (default: `json`) |
+| `--output, -o` | Write to a file (default: stdout). |
+
+#### `highhx trace list`
+
+Recent task traces: id, task, status, number of events.
+
+```
+highhx trace list [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--limit, -n` |  (default: `20`) |
+
+#### `highhx trace show`
+
+Show the task trace for a ``tr_``/``task_`` id, or where time went in EXECUTION_ID.
+
+```
+highhx trace show [OPTIONS] [EXECUTION_ID]
 ```
 
 ### `highhx runs`
@@ -1968,6 +2517,48 @@ highhx plugin update [OPTIONS] NAME
 | Option | Description |
 |---|---|
 | `--global` |  |
+
+### `highhx mcp`
+
+MCP servers configured under `mcp.servers` in .highhx/config.yaml (or the JSON file named
+by HIGHHX_MCP_CONFIG, in the {"mcpServers": …} format). The HighhX agent mounts their tools as
+mcp__<server>__<tool>; each call is approved and audited like the agent's own actions.
+To serve HighhX's own computer tools to an MCP client, see `highhx computer mcp`.
+
+Running `highhx mcp` without a subcommand runs `highhx mcp status`.
+
+#### `highhx mcp serve`
+
+Speak MCP (JSON-RPC over stdin/stdout). Every tool call is an action request through
+HighhX's executor — risk, policy, approval (pre-approve non-critical actions with --yes),
+verification, audit (source "mcp") and a trace. Register it with, e.g.:
+claude mcp add highhx -- highhx mcp serve
+
+```
+highhx mcp serve [OPTIONS]
+```
+
+| Option | Description |
+|---|---|
+| `--mode` | read-only: observation tools only. ask/auto-edit: HighhX's approval rules. (default: `ask`) |
+| `--allow` | Offer only these tools (repeatable). |
+| `--toolset` | Default: both. desktop: computer.* tools; runtime: state, browser, Android, sandbox and HTTP tools. |
+
+#### `highhx mcp status`
+
+Start each configured server, negotiate MCP, list its tools, and show what works.
+
+```
+highhx mcp status [OPTIONS]
+```
+
+#### `highhx mcp tools`
+
+List the tools of every server (or SERVER), with the name the agent calls them by.
+
+```
+highhx mcp tools [OPTIONS] [SERVER]
+```
 
 ### `highhx config`
 

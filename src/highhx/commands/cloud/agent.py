@@ -36,7 +36,7 @@ def _read_stdin_prompt() -> str:
 @agent.command("run", short_help="Start the agent (interactive), or run one request.")
 @click.argument("prompt", nargs=-1)
 @click.option("--continue", "-c", "cont", is_flag=True, help="Continue the most recent session in this project.")
-@click.option("--resume", "resume_id", metavar="ID", help="Resume a saved session (see `highhx agent sessions`).")
+@click.option("--resume", "resume_id", metavar="ID", help="Resume a saved session (`highhx agent sessions`) or an agent-loop task (task_…).")
 @click.option(
     "--provider", type=click.Choice(PROVIDER_NAMES), help="AI provider (default: account setting, else highhx)."
 )
@@ -85,6 +85,11 @@ def agent_run(
     output limit, refusal, interruption), 10 without a HighhX Pro account
     (one-shot requests only; the interactive session works on every plan).
     """
+    if resume_id and resume_id.startswith("task_"):
+        # a computer-use task (agent loop) rather than a chat session: continue from its checkpoint
+        from highhx.commands.computer_use.agent import resume_goal
+
+        return resume_goal(app, resume_id)
     # Imported here so Free commands do not pay for loading the agent at start-up.
     from highhx.agent.bootstrap import Resume, create_session
     from highhx.agent.running import registered
@@ -322,3 +327,8 @@ def agent_stop(app: App, all_agents: bool, session_id: str | None) -> int:
 
     out.emit({"stopped": results}, render)
     return 0 if all(r["stopped"] for r in results) else 1
+
+
+from highhx.commands.computer_use.agent import agent_loop  # noqa: E402
+
+agent.add_command(agent_loop)
