@@ -246,6 +246,13 @@ class BrowserScreenshots:
         return self.browser.capability()
 
     def capture(self, *, cancel: CancellationToken | None = None) -> ScreenshotRef:
+        """The visible viewport, one image pixel per CSS pixel. That is the space browser input and
+        DOM bounds use, so a box found in the image can be clicked as it is (a plain
+        screenshot is in device pixels: twice as large on a HiDPI display)."""
+        capture = getattr(self.browser, "page_capture", None)
+        if callable(capture):
+            data, _view = capture(cancel=cancel)
+            return ScreenshotRef.from_bytes(data, scale=1.0)
         return ScreenshotRef.from_bytes(self.browser.screenshot(cancel=cancel))
 
 

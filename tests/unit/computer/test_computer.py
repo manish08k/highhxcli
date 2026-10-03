@@ -385,3 +385,14 @@ def test_ocr_output_is_grouped_into_text_lines() -> None:
     observation = parse_tesseract_tsv("\n".join([header, *rows]))
     assert [(e.role, e.name) for e in observation.elements] == [("text", "Sign in"), ("text", "Password")]
     assert observation.elements[0].bounds == (10, 20, 65, 12) and observation.elements[0].source == "ocr"
+
+
+def test_flow_labels_never_show_text_typed_into_secret_fields() -> None:
+    """Literal text typed into a password field (instead of text_from_env) is masked in the step
+    label that goes to results, audit and history — both by the field's wording and, after the
+    step, by what the runtime found the field to be."""
+    from highhx.computer.flows import SECRET_MASK, _describe
+
+    assert _describe({"type": {"into": "textbox:Password", "text": "hunter2"}}) == f"type {SECRET_MASK} into textbox:Password"
+    assert _describe({"type": {"into": "textbox:Email", "text": "me@x.test"}}) == "type 'me@x.test' into textbox:Email"
+    assert "s3cret" not in _describe({"type": {"into": "textbox:Login", "text": "s3cret"}}, secret=True)

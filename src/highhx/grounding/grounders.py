@@ -247,7 +247,7 @@ class VisionGrounder:
             located = self.model.locate(image, query, cancel=cancel)
         except HighhXError as exc:
             return Found(status="unavailable", detail=f"vision model: {exc.message}")
-        scale = state.screenshot.scale or 1.0
+        scale = (state.screenshot.scale if state.screenshot is not None else 1.0) or 1.0
         out = []
         for item in located:
             x, y, w, h = item.box

@@ -38,6 +38,8 @@ DATABASE = "database"
 DEPLOY = "deploy"
 BROWSER = "browser"
 DESKTOP = "desktop"
+ANDROID = "android"
+SANDBOX = "sandbox"
 
 
 @dataclass

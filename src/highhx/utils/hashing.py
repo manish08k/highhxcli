@@ -47,9 +47,11 @@ def sha256_tree(root: Path) -> str:
 
 
 def new_id(prefix: str = "") -> str:
-    """Return a sortable, unique identifier such as ``20260926T101500-3f9a1c``."""
+    """Return a sortable, unique identifier such as ``20260926T101500-3f9a1c2b4d6e``. The random
+    part is 48 bits: many executions can start within one second (an agent loop observes and
+    acts several times a second) without colliding."""
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
-    token = secrets.token_hex(3)
+    token = secrets.token_hex(6)
     return f"{prefix}{stamp}-{token}"
 
 

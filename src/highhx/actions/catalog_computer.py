@@ -33,6 +33,25 @@ def browser_scroll(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     return _flow_step(ctx, {"scroll": str(inputs.get("direction") or "down")})
 
 
+def _browser(ctx: ActionContext):  # type: ignore[no-untyped-def]
+    session = ctx.computer()
+    session.cancel = ctx.cancel
+    return session.browser
+
+
+def browser_click_at(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    x, y = int(inputs["x"]), int(inputs["y"])
+    count = int(inputs.get("count") or 1)
+    _browser(ctx).pointer("click", x, y, button=str(inputs.get("button") or "left"), count=count, cancel=ctx.cancel)
+    return ActionResult(True, output={"x": x, "y": y, "count": count}, summary=f"clicked the page at ({x}, {y})", verified=None)
+
+
+def browser_insert_text(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    text = str(inputs["text"])
+    _browser(ctx).insert_text(text, cancel=ctx.cancel)
+    return ActionResult(True, output={"characters": len(text)}, summary=f"typed {len(text)} character(s)", verified=None)
+
+
 def computer_use_specs() -> list[ActionSpec]:
     specs = [
         ActionSpec(
@@ -87,6 +106,41 @@ def computer_use_specs() -> list[ActionSpec]:
             target=lambda i: str(i.get("target", "")),
         ),
         ActionSpec(
+            "browser.click_at",
+            "Click the page at a viewport point (CSS pixels) — for targets found by OCR or vision. Pass the "
+            "target's label with the request so its risk is rated like the control.",
+            browser_click_at,
+            Obj(
+                {
+                    "x": Prop(Int(minimum=0, maximum=100_000), required=True),
+                    "y": Prop(Int(minimum=0, maximum=100_000), required=True),
+                    "button": Prop(Str(choices=("left", "right", "middle"))),
+                    "count": Prop(Int(minimum=1, maximum=3)),
+                }
+            ),
+            {"x": "x", "y": "y"},
+            Risk.MEDIUM,
+            ActionKind.UI_CLICK,
+            (BROWSER,),
+            timeout=60,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,
+            target=lambda i: f"({i.get('x')}, {i.get('y')})",
+        ),
+        ActionSpec(
+            "browser.insert_text",
+            "Type into whatever has focus on the page (after a click into a field found by OCR or vision).",
+            browser_insert_text,
+            Obj({"text": Prop(Str(min_length=1), required=True)}),
+            {"characters": "how many were typed"},
+            Risk.MEDIUM,
+            ActionKind.UI_TYPE,
+            (BROWSER,),
+            timeout=60,
+            feature=AGENT_COMPUTER_USE,
+            agent=False,
+        ),
+        ActionSpec(
             "browser.scroll",
             "Scroll the page up or down.",
             browser_scroll,
@@ -128,4 +182,6 @@ def computer_use_specs() -> list[ActionSpec]:
             risk_for=api.risk_for,
         ),
     ]
-    return specs
+    from highhx.actions.catalog_android import android_specs
+
+    return [*specs, *android_specs()]

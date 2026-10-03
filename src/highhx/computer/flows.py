@@ -31,6 +31,7 @@ verified. When a target is not there yet the step re-observes until ``timeout``
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -152,10 +153,20 @@ def load_flow(path: Path) -> Flow:
     return Flow(str(data.get("name") or path.stem), list(data["steps"]), float(data.get("timeout", 10)), path)
 
 
-def _describe(step: dict[str, Any]) -> str:
+SECRET_MASK = "••••••"
+"""How the runtime shows text typed into a secret field (see computer.model.describe_action)."""
+_SECRET_HINT = re.compile(r"pass(?:word|code|phrase)|\bpin\b|otp|one[- ]time|cvv|cvc|card number|secret|token", re.I)
+
+
+def _describe(step: dict[str, Any], *, secret: bool = False) -> str:
     key, value = next(iter(step.items()))
     if key == "type":
-        shown = "$" + value["text_from_env"] if "text_from_env" in value else repr(value.get("text", ""))
+        if "text_from_env" in value:
+            shown = "$" + value["text_from_env"]
+        elif secret or _SECRET_HINT.search(str(value["into"])):
+            shown = SECRET_MASK
+        else:
+            shown = repr(value.get("text", ""))
         return f"type {shown} into {value['into']}"
     if key == "select":
         return f"select {value['option']!r} in {value['in']}"
@@ -188,6 +199,8 @@ class FlowRunner:
                 if on_step:
                     on_step(number, label, False, exc.message)
                 break
+            if next(iter(step)) == "type" and SECRET_MASK in outcome.summary:
+                label = _describe(step, secret=True)  # the field turned out to be secret: never show the text
             entry = {"step": number, "action": label, "ok": outcome.ok, "verified": outcome.verified}
             if outcome.problems:
                 entry["problems"] = outcome.problems
