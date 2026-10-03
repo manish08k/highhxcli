@@ -205,3 +205,25 @@ def test_no_device_is_a_clear_failure(device: FakeDevice, agent_project: Path, m
     executor, _ = _executor(make_app, agent_project)
     result = executor.run("android.home")
     assert not result.ok and "No Android device" in result.error
+
+
+def test_more_android_actions(device: FakeDevice, agent_project: Path, make_app) -> None:
+    device.focused_app = NOTES
+    executor, _ui = _executor(make_app, agent_project)
+    found = executor.run("android.find", {"text": "Save"})
+    assert found.ok and found.output["element"]["name"] == "Save" and found.output["point"] == [270, 470]
+    device.duplicate_delete = True
+    both = executor.run("android.find", {"text": "Delete", "role": "button"})
+    assert both.ok and both.output["status"] == "ambiguous" and len(both.output["matches"]) == 2
+    assert not executor.run("android.find", {"text": "Nowhere"}).ok
+    at = executor.run("android.inspect", {"x": 270, "y": 470})
+    assert at.output["element"]["name"] == "Save"
+    assert executor.run("android.inspect", {}).output["app"] == NOTES
+    assert executor.run("android.long_press", {"text": "Save"}).ok and device.calls[-1][-7:] == ["input", "swipe", "270", "470", "270", "470", "800"]
+    assert executor.run("android.press", {"key": "enter"}).ok  # an alias of android.key
+    assert executor.run("android.recents").ok and device.calls[-1][-1] == "187"
+    assert executor.run("android.scroll", {"direction": "up"}).ok
+    assert executor.plan("android.long_press", {"x": 1, "y": 1}).decision.risk == Risk.MEDIUM
+    assert executor.plan("android.find", {"text": "x"}).decision.risk == Risk.SAFE
+    with pytest.raises(CapabilityError):
+        AndroidDriver(AdbClient(serial=device.serial)).right_click(1, 1)

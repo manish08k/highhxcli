@@ -142,4 +142,6 @@ class AgentVerifier:
             outcome = Outcome.UNKNOWN
         if self.emit is not None:
             self.emit(ev.VERIFICATION_COMPLETED, step=step.id, outcome=str(outcome), verdict=str(report.verdict), observations=observations)
+            if outcome == Outcome.FAILED:
+                self.emit(ev.VERIFICATION_FAILED, step=step.id, detail=result.detail)
         return StepVerdict(outcome, report, after, observations, result.detail)

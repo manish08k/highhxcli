@@ -57,8 +57,8 @@ def test_text_url_title_application_process() -> None:
     assert evaluate({"process": {"name": "Finder"}}, ctx).satisfied
     assert evaluate({"process": {"name": "Slack", "running": False}}, ctx).satisfied
     desktop = ComputerState("desktop")
-    assert evaluate({"url_contains": "x"}, VerificationContext(after=desktop)).verdict == Verdict.UNKNOWN
-    assert evaluate({"process": "x"}, VerificationContext(after=desktop)).verdict == Verdict.UNKNOWN
+    assert evaluate({"url_contains": "x"}, VerificationContext(after=desktop)).verdict == Verdict.UNSUPPORTED
+    assert evaluate({"process": "x"}, VerificationContext(after=desktop)).verdict == Verdict.UNSUPPORTED
 
 
 def test_exit_code_and_files(tmp_path: Path) -> None:
@@ -130,3 +130,47 @@ def test_partial_reports() -> None:
     ctx = VerificationContext(after=_state(text="done"))
     report = verify({"all": [{"text": "done"}, {"text": "nope"}]}, ctx)
     assert report.partial and report.to_dict()["partial"] is True
+
+
+def test_unsupported_is_distinct_from_unconfirmed() -> None:
+    desktop = ComputerState("desktop", active_app="Notes")
+    ctx = VerificationContext(after=desktop)
+    assert evaluate({"url_contains": "x"}, ctx).verdict == Verdict.UNSUPPORTED
+    assert evaluate({"android": {"focused_app": "x"}}, ctx).verdict == Verdict.UNSUPPORTED
+    assert evaluate({"url_contains": "x"}, VerificationContext()).verdict == Verdict.UNKNOWN
+    assert evaluate({"all": [{"application": "Notes"}, {"url_contains": "x"}]}, ctx).verdict == Verdict.UNSUPPORTED
+    assert evaluate({"any": [{"url_contains": "x"}, {"application": "Notes"}]}, ctx).satisfied
+    assert evaluate({"not": {"url_contains": "x"}}, ctx).verdict == Verdict.UNSUPPORTED  # never flipped into success
+    assert evaluate({"http_response": {"status": 200}}, VerificationContext(result=ActionResult(True))).verdict == Verdict.UNSUPPORTED
+
+
+def test_text_changed_file_hash_http_sqlite_and_android(tmp_path: Path) -> None:
+    import hashlib
+    import sqlite3
+
+    before = _state(text="Draft saved 10:01")
+    after = _state(text="Draft saved 10:02")
+    assert evaluate({"text_changed": True}, VerificationContext(before=before, after=after)).satisfied
+    assert evaluate({"text_changed": {"from": "10:01"}}, VerificationContext(before=before, after=after)).satisfied
+    (tmp_path / "a.bin").write_bytes(b"abc")
+    digest = hashlib.sha256(b"abc").hexdigest()
+    assert evaluate({"file_hash": {"path": "a.bin", "sha256": digest}}, VerificationContext(root=tmp_path)).satisfied
+    assert evaluate({"file_hash": {"path": "a.bin", "sha256": "0" * 64}}, VerificationContext(root=tmp_path)).verdict == Verdict.UNSATISFIED
+    response = ActionResult(True, output={"status": 201, "body": '{"id": 7}', "json": {"order": {"id": 7}}})
+    ctx = VerificationContext(result=response)
+    assert evaluate({"http_response": {"status": 201, "contains": "id", "json": {"order.id": 7}}}, ctx).satisfied
+    assert evaluate({"http_response": {"status": 200}}, ctx).verdict == Verdict.UNSATISFIED
+    db = tmp_path / "app.db"
+    import contextlib
+
+    with contextlib.closing(sqlite3.connect(db)) as connection, connection:
+        connection.execute("create table orders (id integer)")
+        connection.execute("insert into orders values (1), (2)")
+    sql = VerificationContext(root=tmp_path)
+    assert evaluate({"sqlite": {"path": "app.db", "query": "select count(*) from orders", "equals": 2}}, sql).satisfied
+    assert evaluate({"sqlite": {"path": "app.db", "query": "select * from orders", "rows": 2}}, sql).satisfied
+    with pytest.raises(ValidationError):
+        evaluate({"sqlite": {"path": "app.db", "query": "delete from orders"}}, sql)
+    phone = ComputerState("android", active_app="com.example.notes", elements=(StateElement("a1", "button", "Save", sources=("android",)),))
+    assert evaluate({"android": {"focused_app": "com.example.notes", "element": {"name": "Save"}}}, VerificationContext(after=phone)).satisfied
+    assert evaluate({"ui_state": {"name": "Save", "enabled": True}}, VerificationContext(after=phone)).satisfied

@@ -128,6 +128,8 @@ class ActionRequest:
     metadata: dict[str, Any] = field(default_factory=dict)
     parent_action: str | None = None
     trace_id: str | None = None
+    session_id: str | None = None
+    task_id: str | None = None
     id: str = field(default_factory=lambda: new_id("act"))
 
     @property
@@ -165,6 +167,8 @@ class ActionRequest:
             "metadata": dict(self.metadata),
             "parent_action": self.parent_action,
             "trace_id": self.trace_id,
+            "session_id": self.session_id,
+            "task_id": self.task_id,
         }
 
     @classmethod
@@ -186,6 +190,8 @@ class ActionRequest:
             metadata=dict(data.get("metadata") or {}),
             parent_action=data.get("parent_action"),
             trace_id=data.get("trace_id"),
+            session_id=data.get("session_id"),
+            task_id=data.get("task_id"),
             id=str(data.get("id") or new_id("act")),
         )
 
@@ -263,6 +269,9 @@ class ActionResponse:
             "seconds": round(self.seconds, 3),
             "reasons": list(self.reasons),
             "trace_id": self.request.trace_id,
+            "session_id": self.request.session_id,
+            "task_id": self.request.task_id,
+            "execution_id": self.result.execution_id,
             "parent_action": self.request.parent_action,
         }
 
@@ -320,7 +329,7 @@ def classify(
             return Outcome.SUCCESS
         if report.partial:
             return Outcome.PARTIAL_SUCCESS
-        return Outcome.FAILED if report.verdict == Verdict.UNSATISFIED else Outcome.UNKNOWN
+        return Outcome.FAILED if report.verdict == Verdict.UNSATISFIED else Outcome.UNKNOWN  # unknown/unsupported: unconfirmed
     if result.verified is True:
         return Outcome.SUCCESS
     if result.verified is False:
@@ -343,7 +352,7 @@ def submit(
     for denied, blocked or failed actions (see ``outcome`` and ``status``); raises only for
     unknown actions and invalid inputs, before anything runs."""
     started = time.monotonic()
-    with trace_context(trace_id=request.trace_id, action_id=request.id):
+    with trace_context(trace_id=request.trace_id, session_id=request.session_id, task_id=request.task_id, action_id=request.id):
         prepared = prepare(executor, request)
         return _run(executor, prepared, before, observe, network, cancel, preapproved, sleep, started)
 

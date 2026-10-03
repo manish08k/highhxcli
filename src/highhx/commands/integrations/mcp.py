@@ -75,3 +75,30 @@ def mcp_tools(app: App, server: str | None) -> int:
         else out.info("No tools (no server is connected)."),
     )
     return 0 if not problems else 1
+
+
+@mcp.command("serve", short_help="Serve HighhX's tools to an MCP client over stdio.")
+@click.option(
+    "--mode",
+    type=click.Choice(["ask", "read-only", "auto-edit"]),
+    default="ask",
+    show_default=True,
+    help="read-only: observation tools only. ask/auto-edit: HighhX's approval rules.",
+)
+@click.option("--allow", multiple=True, metavar="TOOL", help="Offer only these tools (repeatable).")
+@click.option(
+    "--toolset",
+    "toolsets",
+    multiple=True,
+    type=click.Choice(["desktop", "runtime"]),
+    help="Default: both. desktop: computer.* tools; runtime: state, browser, Android, sandbox and HTTP tools.",
+)
+@pass_app
+def mcp_serve(app: App, mode: str, allow: tuple[str, ...], toolsets: tuple[str, ...]) -> int:
+    """Speak MCP (JSON-RPC over stdin/stdout). Every tool call is an action request through
+    HighhX's executor — risk, policy, approval (pre-approve non-critical actions with --yes),
+    verification, audit (source "mcp") and a trace. Register it with, e.g.:
+    claude mcp add highhx -- highhx mcp serve"""
+    from highhx.commands.computer.main import serve_mcp
+
+    return serve_mcp(app, mode, allow, toolsets or ("desktop", "runtime"))

@@ -207,3 +207,40 @@ def uninstall(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     out = driver.adb.uninstall(package)
     ok = "Success" in out and package not in driver.adb.packages()
     return ActionResult(ok, output={"message": out}, summary=f"uninstalled {package}" if ok else out, verified=ok, error="" if ok else out)
+
+
+def long_press(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return tap(ctx, {**inputs, "long": True})
+
+
+def recents(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return key(ctx, {**inputs, "key": "app_switch"})
+
+
+def scroll(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return swipe(ctx, {**inputs, "direction": str(inputs.get("direction") or "down")})
+
+
+def find(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """Where a control is (grounded in the UI hierarchy); never acts."""
+    driver = _driver(ctx, inputs)
+    result = driver.find(str(inputs["text"]), role=str(inputs.get("role") or ""))
+    if result.status == "ambiguous":
+        found = [c.element.to_dict() for c in result.alternatives if c.element]
+        return ActionResult(True, output={"status": "ambiguous", "matches": found}, summary=f"{len(found)} elements match {inputs['text']!r}", verified=True)
+    element = result.candidate.element if result.candidate else None
+    if element is None:
+        return ActionResult(False, output={"status": "not_found", "grounding": result.to_dict()}, error=f"{inputs['text']!r} is not on the screen", retryable=False)
+    return ActionResult(True, output={"status": "found", "element": element.to_dict(), "point": list(result.point or ())}, summary=f"found {element.label()}", verified=True)
+
+
+def inspect(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """The element at a point, or the whole UI hierarchy (no screenshot)."""
+    driver = _driver(ctx, inputs)
+    if inputs.get("x") is not None and inputs.get("y") is not None:
+        element = driver.inspect(int(inputs["x"]), int(inputs["y"]))
+        if element is None:
+            return ActionResult(True, output={"element": None}, summary="nothing at that point", verified=True)
+        return ActionResult(True, output={"element": element.to_dict()}, summary=element.label(), verified=True)
+    state = driver.observe()
+    return ActionResult(True, output={"app": state.active_app, "elements": [e.to_dict() for e in state.elements]}, summary=f"{state.active_app} · {len(state.elements)} element(s)", verified=True)

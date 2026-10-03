@@ -41,7 +41,9 @@ class EventRecord:
     trace_id: str = ""
     session_id: str = ""
     task_id: str = ""
+    step_id: str = ""
     action_id: str = ""
+    execution_id: str = ""
     source: str = ""
 
     def to_dict(self) -> dict[str, Any]:

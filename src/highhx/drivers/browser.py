@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from highhx.computer.providers import Capability
-from highhx.drivers.base import OPERATIONS, CapabilityError, DriverCapabilities
+from highhx.drivers.base import OPERATIONS, CapabilityError, DriverCapabilities, DriverHelpers
 
 if TYPE_CHECKING:
     from highhx.computer.browser import ChromeBrowser
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 MODIFIERS = {"cmd": "command", "command": "command", "ctrl": "control", "control": "control", "alt": "option", "option": "option", "shift": "shift"}
 
 
-class BrowserDriver:
+class BrowserDriver(DriverHelpers):
     surface = "browser"
 
     def __init__(self, browser: ChromeBrowser, *, cancel: CancellationToken | None = None) -> None:
@@ -62,6 +62,9 @@ class BrowserDriver:
 
     def double_click(self, x: int, y: int) -> None:
         self.browser.pointer("click", x, y, count=2, cancel=self.cancel)
+
+    def right_click(self, x: int, y: int) -> None:
+        self.browser.pointer("click", x, y, button="right", cancel=self.cancel)
 
     def type(self, text: str) -> None:
         self.browser.insert_text(text, cancel=self.cancel)

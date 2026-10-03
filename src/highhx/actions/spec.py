@@ -58,6 +58,8 @@ class ActionResult:
     """False for deterministic failures (invalid input, confinement): retrying cannot help."""
     attempts: int = 1
     seconds: float = 0.0
+    execution_id: str = ""
+    """The history entry (``highhx history``) the action was recorded under."""
 
     def __post_init__(self) -> None:
         if not self.status:
@@ -75,6 +77,7 @@ class ActionResult:
             "compensated": self.compensated,
             "attempts": self.attempts,
             "seconds": round(self.seconds, 3),
+            **({"execution_id": self.execution_id} if self.execution_id else {}),
         }
 
 

@@ -479,6 +479,7 @@ def replay(
     workflows: WorkflowStore | None = None,
     trajectories: Any = None,
     save_heals: bool = True,
+    traces: Any = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> ReplayReport:
     """Run ``workflow`` through the agent loop (grounding, executor, verification, recovery) and
@@ -490,7 +491,7 @@ def replay(
         executor.app.redactor.add([v for k, v in values.items() if k in workflow.variables])
     script = workflow.script(values)
     task = AgentTask(f"replay browser workflow {workflow.name}", surface="browser", max_steps=max(10, 3 * len(script)))
-    loop = AgentLoop(executor, ScriptedPlanner(script), store=trajectories, agent="workflow-replay", memory=False, sleep=sleep)
+    loop = AgentLoop(executor, ScriptedPlanner(script), store=trajectories, agent="workflow-replay", memory=False, traces=traces, sleep=sleep)
     result = loop.run(task)
     healed = heal_workflow(workflow, result.trajectory) if result.ok else []
     for entry in healed:

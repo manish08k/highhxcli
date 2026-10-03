@@ -19,11 +19,11 @@ from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
 from highhx.automation.engine.bridge import EngineError
 from highhx.computer.providers import Capability
-from highhx.drivers.base import CapabilityError, DriverCapabilities
+from highhx.drivers.base import CapabilityError, DriverCapabilities, DriverHelpers
 
 if TYPE_CHECKING:
     from highhx.computer.driver import HighhXDriver
-    from highhx.perception.state import ComputerState, ScreenshotRef
+    from highhx.perception.state import ComputerState, ScreenshotRef, StateElement
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -33,6 +33,10 @@ FEATURE_FOR = {
     "screenshot": "screenshot",
     "click": "pointer",
     "double_click": "pointer",
+    "right_click": "pointer",
+    "inspect": "element_at",
+    "find": "accessibility",
+    "wait": "",
     "move": "pointer",
     "drag": "pointer",
     "scroll": "pointer",
@@ -64,7 +68,7 @@ def _errors(fn: Callable[P, R]) -> Callable[P, R]:
     return wrapper
 
 
-class DesktopDriver:
+class DesktopDriver(DriverHelpers):
     surface = "desktop"
     platform: str | None = None
     """Set by the platform subclasses: the ``sys.platform`` prefix they run on."""
@@ -80,6 +84,9 @@ class DesktopDriver:
         features = self.driver.capabilities()
         out = {}
         for op, feature_name in FEATURE_FOR.items():
+            if not feature_name:
+                out[op] = Capability(op, True, "no engine feature needed")
+                continue
             feature = features.get(feature_name)
             out[op] = (
                 Capability(op, feature.available, feature.detail)
@@ -114,6 +121,17 @@ class DesktopDriver:
     @_errors
     def double_click(self, x: int, y: int) -> None:
         self.driver.click(x, y, count=2)
+
+    @_errors
+    def right_click(self, x: int, y: int) -> None:
+        self.driver.click(x, y, button="right")
+
+    @_errors
+    def inspect(self, x: int, y: int) -> StateElement | None:
+        from highhx.perception.state import StateElement
+
+        element = self.driver.element_at(x, y)
+        return StateElement.from_ui(element, source="ax") if element.role or element.name else None
 
     @_errors
     def type(self, text: str) -> None:

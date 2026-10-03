@@ -79,7 +79,7 @@ def test_a_scripted_browser_task_runs_verifies_and_is_recorded(kit: Kit) -> None
     assert trajectory.steps[1].grounding["candidate"]["strategy"] == "accessibility"
     assert [p["status"] for p in trajectory.plan] == ["done", "done"]
     names = kit.names()
-    for name in ("agent.started", "plan.created", "grounding.completed", "action.completed", "verification.completed", "checkpoint.saved", "agent.completed"):
+    for name in ("agent.started", "plan.created", "grounding.completed", "action.completed", "verification.completed", "checkpoint.created", "task.started", "task.completed", "agent.completed"):
         assert name in names, name
     task_events = [e for e in kit.events if e.context.get("task_id") == result.trajectory.id]
     assert task_events and all(e.context.get("trace_id") == result.trajectory.trace_id for e in task_events)
@@ -340,3 +340,29 @@ def test_text_typed_into_a_secret_field_is_never_stored(kit: Kit) -> None:
     # a resumed copy of this task asks for the text again instead of typing a placeholder
     redo = kit.loop(ScriptedPlanner([checkpoint_step])).run(AgentTask("log in again", surface="browser"))
     assert redo.status == Status.NEEDS_USER and "not stored" in redo.summary
+
+
+def test_a_task_trace_reconstructs_the_run(kit: Kit, tmp_path: Path) -> None:
+    from highhx.observability.tasktrace import TraceStore
+
+    traces = TraceStore(tmp_path / "traces")
+    kit.web.variant = "redesign"
+    script = export_script(dom={"testid": "export-invoices", "tag": "button"}, accessibility={"name": "Export", "role": "button"})
+    result = AgentLoop(kit.executor, ScriptedPlanner(script), store=kit.store, traces=traces, sleep=lambda _s: None).run(
+        AgentTask("export the invoices", surface="browser", success={"text": "Export ready"})
+    )
+    trace = traces.load(result.trajectory.trace_id)
+    assert trace.goal == "export the invoices" and trace.status == "completed" and trace.task_id == result.trajectory.id
+    assert traces.load(result.trajectory.id).trace_id == trace.trace_id  # by task id too
+    text = trace.render()
+    for expected in ("Plan", "Step", "export the invoices", "Grounding", "accessibility failed → dom success", "Healed", "Download CSV", "Action", "browser.click", "execution", "Verification", "Result"):
+        assert expected in text, (expected, text)
+    names = [r.name for r in trace.records]
+    assert "selector.healed" in names and "agent.reflection" in names and "task.completed" in names
+    assert all(r.trace_id == trace.trace_id for r in trace.records)
+    action = next(r for r in trace.records if r.name == "action.completed" and r.payload.get("action") == "browser.click")
+    assert action.execution_id and action.step_id and action.action_id
+    listed = traces.recent()
+    assert listed[0]["trace_id"] == trace.trace_id and listed[0]["status"] == "completed"
+    state = next(r for r in kit.events if r.name == "observation.created" and r.context.get("step_id"))
+    assert state.context.get("task_id") == result.trajectory.id

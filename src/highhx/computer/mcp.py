@@ -66,6 +66,34 @@ TOOLS = (
     "clipboard_write",
 )
 """Desktop tools, each the ``computer.<name>`` action (the browser has its own, separate path)."""
+RUNTIME_TOOLS = {
+    "computer_state": "computer.state",
+    "browser_open": "browser.open",
+    "browser_click": "browser.click",
+    "browser_fill": "browser.fill",
+    "browser_select": "browser.select",
+    "browser_press": "browser.press",
+    "browser_scroll": "browser.scroll",
+    "browser_extract": "browser.extract",
+    "browser_back": "browser.back",
+    "android_devices": "android.devices",
+    "android_observe": "android.observe",
+    "android_tap": "android.tap",
+    "android_type": "android.type",
+    "android_swipe": "android.swipe",
+    "android_key": "android.key",
+    "android_launch": "android.launch",
+    "android_back": "android.back",
+    "android_home": "android.home",
+    "sandbox_create": "sandbox.create",
+    "sandbox_list": "sandbox.list",
+    "sandbox_exec": "sandbox.exec",
+    "sandbox_patch": "sandbox.patch",
+    "sandbox_destroy": "sandbox.destroy",
+    "api_request": "api.request",
+}
+"""The computer-use runtime's tools (``--toolset runtime``): state, browser, Android, sandboxes, HTTP."""
+TOOLSETS = ("desktop", "runtime")
 FIXED_INPUTS = {"scroll": {"source": "desktop"}}
 """Inputs the server sets itself (and leaves out of the tool's schema)."""
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS = -32700, -32600, -32601, -32602
@@ -89,19 +117,33 @@ class McpServer:
         read_only: bool = False,
         allow: Iterable[str] = (),
         version: str = "",
+        toolsets: Iterable[str] = ("desktop",),
     ) -> None:
+        from highhx.core.events import new_id
+
         self.executor = executor
         self.version = version
         self.protocol = PROTOCOL_VERSIONS[0]
+        self.session_id = new_id("mcp")
+        sets = tuple(toolsets)
+        bad = [t for t in sets if t not in TOOLSETS]
+        if bad:
+            raise HighhXError(f"Unknown toolset(s): {', '.join(bad)}.", hint=f"Toolsets: {', '.join(TOOLSETS)}.")
+        offered: dict[str, str] = {}
+        if "desktop" in sets:
+            offered.update({name: f"computer.{name}" for name in TOOLS})
+        if "runtime" in sets:
+            offered.update(RUNTIME_TOOLS)
         allowed = set(allow)
-        unknown = allowed - set(TOOLS)
+        unknown = allowed - set(offered)
         if unknown:
             raise HighhXError(
-                f"Unknown tool(s) for --allow: {', '.join(sorted(unknown))}.", hint=f"Tools: {', '.join(TOOLS)}."
+                f"Unknown tool(s) for --allow: {', '.join(sorted(unknown))}.", hint=f"Tools: {', '.join(offered)}."
             )
+        self.known = set(offered)
         self.specs: dict[str, ActionSpec] = {}
-        for name in TOOLS:
-            spec = executor.catalog.get(f"computer.{name}")
+        for name, action in offered.items():
+            spec = executor.catalog.get(action)
             if spec is None or (allowed and name not in allowed):
                 continue
             if read_only and spec.kind != ActionKind.READ:
@@ -128,16 +170,30 @@ class McpServer:
         }
 
     def call(self, name: str, arguments: dict[str, Any]) -> ToolCall:
+        """One tool call → one ActionRequest through the action protocol and the executor
+        (classify · policy · approval · run · verify · audit), with ``tool.*`` events and a
+        trace of its own."""
+        from highhx.actions import events as ev
+        from highhx.actions.protocol import ActionRequest, submit
+        from highhx.core.events import new_id, trace_context
+
         spec = self.specs.get(name)
         if spec is None:
-            reason = "not offered by this server" if name in TOOLS else "unknown"
+            reason = "not offered by this server" if name in self.known or name in TOOLS else "unknown"
             return _failure(name, "refused", f"Tool {name!r} is {reason} (see tools/list).")
         inputs = {**arguments, **FIXED_INPUTS.get(name, {})}
-        try:
-            result = self.executor.run(spec.name, inputs)
-        except HighhXError as exc:  # unknown action or invalid input: nothing was done
-            return _failure(name, "invalid", exc.message, list(getattr(exc, "details", None) or []))
-        data = {"tool": name, **result.to_dict()}
+        request = ActionRequest(spec.name, inputs, intent=f"MCP tool {name}", metadata={"via": "mcp", "tool": name}, trace_id=new_id("tr"))
+        bus = self.executor.events
+        with trace_context(trace_id=request.trace_id, session_id=self.session_id, source="mcp"):
+            bus.emit(ev.TOOL_STARTED, tool=name, action=spec.name)
+            try:
+                response = submit(self.executor, request)
+            except HighhXError as exc:  # unknown action or invalid input: nothing was done
+                bus.emit(ev.TOOL_FAILED, tool=name, action=spec.name, status="invalid", error=exc.message)
+                return _failure(name, "invalid", exc.message, list(getattr(exc, "details", None) or []))
+            result = response.result
+            bus.emit(ev.TOOL_COMPLETED if result.ok else ev.TOOL_FAILED, tool=name, action=spec.name, status=result.status, outcome=str(response.outcome))
+        data = {"tool": name, **result.to_dict(), "outcome": str(response.outcome), "risk": response.risk.label, "trace_id": request.trace_id}
         text = result.summary or result.status
         if not result.ok:
             text = f"{result.status}: {result.error or result.summary}"

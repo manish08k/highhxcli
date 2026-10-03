@@ -46,6 +46,8 @@ class StateFusion:
         for prefix, extra in (("o", perceived.ocr), ("v", perceived.vision)):
             elements = self._merge_pixels(elements, extra, scale, prefix)
         focused = next((e.id for e in elements if e.focused), "")
+        selected = next((e.id for e in elements if e.attr("selected") == "True"), "")
+        network = {"loading": "True"} if perceived.browser is not None and perceived.browser.loading else {}
         return ComputerState(
             surface=perceived.surface,
             device=perceived.device,
@@ -55,6 +57,7 @@ class StateFusion:
             processes=tuple(perceived.processes),
             cursor=perceived.cursor,
             focused=focused,
+            selected=selected,
             viewport=perceived.viewport,
             browser=perceived.browser,
             elements=tuple(elements),
@@ -62,6 +65,7 @@ class StateFusion:
             ocr_text="\n".join(e.name for e in perceived.ocr if e.name),
             screenshot=perceived.screenshot,
             perception=tuple(perceived.records),
+            network=tuple(sorted(network.items())),
             metadata=tuple(sorted(perceived.metadata.items())),
         )
 

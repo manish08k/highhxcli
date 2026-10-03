@@ -107,6 +107,13 @@ def computer_state(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     )
     engine = engine_for(ctx, surface, inputs)
     state = _persist(engine.observe(policy=policy, query=inputs.get("query"), cancel=ctx.cancel))
+    from highhx.core.events import current_context
+
+    # every snapshot is traceable to the task, session, step, action and execution that took it
+    state = state.with_(
+        metadata=tuple(sorted({**dict(state.metadata), **current_context()}.items())),
+        cwd=state.cwd or str(ctx.app.root),
+    )
     data = state.to_dict()
     limit = int(inputs.get("limit") or 400)
     if len(data["elements"]) > limit:

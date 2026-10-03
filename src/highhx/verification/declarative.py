@@ -55,8 +55,13 @@ if TYPE_CHECKING:
 
 class Verdict(StrEnum):
     SATISFIED = "satisfied"
+    """Verified success."""
     UNSATISFIED = "unsatisfied"
+    """Verified failure."""
     UNKNOWN = "unknown"
+    """Unconfirmed: the check applies, but what it needs was not available (try observing again)."""
+    UNSUPPORTED = "unsupported"
+    """The check cannot apply here (a URL check on a desktop, an Android check in a browser)."""
 
 
 CustomCheck = Callable[["VerificationContext", dict[str, Any]], tuple[bool | None, str]]
@@ -141,6 +146,10 @@ def _ok(name: str, ok: bool | None, detail: str = "") -> CheckResult:
     return CheckResult(name, verdict, detail)
 
 
+def _unsupported(name: str, detail: str) -> CheckResult:
+    return CheckResult(name, Verdict.UNSUPPORTED, detail)
+
+
 def _norm(text: str) -> str:
     return " ".join(str(text).lower().split())
 
@@ -163,12 +172,16 @@ def evaluate(spec: Any, ctx: VerificationContext) -> CheckResult:
                 verdict = Verdict.UNSATISFIED
             elif Verdict.UNKNOWN in verdicts:
                 verdict = Verdict.UNKNOWN
+            elif Verdict.UNSUPPORTED in verdicts:
+                verdict = Verdict.UNSUPPORTED
             else:
                 verdict = Verdict.SATISFIED
         elif Verdict.SATISFIED in verdicts:
             verdict = Verdict.SATISFIED
         elif Verdict.UNKNOWN in verdicts:
             verdict = Verdict.UNKNOWN
+        elif Verdict.UNSUPPORTED in verdicts and Verdict.UNSATISFIED not in verdicts:
+            verdict = Verdict.UNSUPPORTED
         else:
             verdict = Verdict.UNSATISFIED
         held = sum(k.satisfied for k in kids)
@@ -179,6 +192,7 @@ def evaluate(spec: Any, ctx: VerificationContext) -> CheckResult:
             Verdict.SATISFIED: Verdict.UNSATISFIED,
             Verdict.UNSATISFIED: Verdict.SATISFIED,
             Verdict.UNKNOWN: Verdict.UNKNOWN,
+            Verdict.UNSUPPORTED: Verdict.UNSUPPORTED,
         }[inner.verdict]
         return CheckResult("not", flipped, inner.detail, (inner,))
     fn = CHECKS.get(name)
@@ -362,15 +376,19 @@ def _text_absent(ctx: VerificationContext, value: Any) -> CheckResult:
 
 @check("url_contains")
 def _url_contains(ctx: VerificationContext, value: Any) -> CheckResult:
-    if ctx.after is None or ctx.after.browser is None:
-        return _ok("url_contains", None, "no browser state")
+    if ctx.after is None:
+        return _ok("url_contains", None, "no observation after the action")
+    if ctx.after.browser is None:
+        return _unsupported("url_contains", f"a {ctx.after.surface} has no URL")
     return _ok("url_contains", str(value) in ctx.after.url, ctx.after.url)
 
 
 @check("url_matches")
 def _url_matches(ctx: VerificationContext, value: Any) -> CheckResult:
-    if ctx.after is None or ctx.after.browser is None:
-        return _ok("url_matches", None, "no browser state")
+    if ctx.after is None:
+        return _ok("url_matches", None, "no observation after the action")
+    if ctx.after.browser is None:
+        return _unsupported("url_matches", f"a {ctx.after.surface} has no URL")
     return _ok("url_matches", re.search(str(value), ctx.after.url) is not None, ctx.after.url)
 
 
@@ -413,8 +431,10 @@ def _screenshot(ctx: VerificationContext, value: Any) -> CheckResult:
 @check("process")
 def _process(ctx: VerificationContext, value: Any) -> CheckResult:
     value = value if isinstance(value, dict) else {"name": str(value)}
-    if ctx.after is None or not ctx.after.processes:
-        return _ok("process", None, "processes are not observed here")
+    if ctx.after is None:
+        return _ok("process", None, "no observation after the action")
+    if not ctx.after.processes:
+        return _unsupported("process", f"processes are not observed on a {ctx.after.surface}")
     running = any(_norm(value["name"]) == _norm(p) for p in ctx.after.processes)
     want = bool(value.get("running", True))
     return _ok("process", running == want, f"{value['name']} {'is' if running else 'is not'} running")
@@ -456,3 +476,102 @@ def _custom(ctx: VerificationContext, value: Any) -> CheckResult:
         return _ok("custom", None, f"no custom check named {name!r} is registered")
     ok, detail = fn(ctx, value if isinstance(value, dict) else {})
     return _ok("custom", ok, detail)
+
+
+@check("text_changed")
+def _text_changed(ctx: VerificationContext, value: Any) -> CheckResult:
+    if ctx.before is None or ctx.after is None:
+        return _ok("text_changed", None, "needs observations before and after")
+    if isinstance(value, dict) and value.get("from") is not None:
+        old = _norm(value["from"])
+        gone = old not in _norm(ctx.after.all_text)
+        return _ok("text_changed", gone, f"{value['from']!r} {'is gone' if gone else 'is still shown'}")
+    changed = _norm(ctx.before.all_text) != _norm(ctx.after.all_text)
+    return _ok("text_changed", changed == bool(value), "the text changed" if changed else "the text is the same")
+
+
+@check("file_hash")
+def _file_hash(ctx: VerificationContext, value: Any) -> CheckResult:
+    import hashlib
+
+    if not isinstance(value, dict) or not value.get("path") or not value.get("sha256"):
+        raise ValidationError("'file_hash' needs path and sha256.")
+    path = Path(str(value["path"])).expanduser()
+    if not path.is_absolute():
+        if ctx.root is None:
+            return _ok("file_hash", None, "no project root")
+        path = ctx.root / path
+    if not path.is_file():
+        return _ok("file_hash", False, f"{path.name} does not exist")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return _ok("file_hash", digest == str(value["sha256"]).lower(), f"{path.name} sha256 {digest[:12]}…")
+
+
+@check("http_response")
+def _http_response(ctx: VerificationContext, value: Any) -> CheckResult:
+    """The HTTP response of the action that ran (an ``api.request``)."""
+    if not isinstance(value, dict):
+        raise ValidationError("'http_response' needs {status, contains, json}.")
+    if ctx.result is None or "status" not in ctx.result.output:
+        return _unsupported("http_response", "the action was not an HTTP request")
+    out = ctx.result.output
+    if value.get("status") is not None and int(out["status"]) != int(value["status"]):
+        return _ok("http_response", False, f"status {out['status']}, expected {value['status']}")
+    if value.get("contains") is not None and str(value["contains"]) not in str(out.get("body", "")):
+        return _ok("http_response", False, f"the body does not contain {value['contains']!r}")
+    for key, expected in (value.get("json") or {}).items():
+        data: Any = out.get("json")
+        for part in str(key).split("."):
+            data = data.get(part) if isinstance(data, dict) else None
+        if data != expected:
+            return _ok("http_response", False, f"{key} is {data!r}, expected {expected!r}")
+    return _ok("http_response", True, f"status {out['status']}")
+
+
+@check("sqlite")
+def _sqlite(ctx: VerificationContext, value: Any) -> CheckResult:
+    """A read-only query on a local SQLite database: ``{path, query, equals}`` (the first column
+    of the first row) or ``{path, query, rows}`` (how many rows)."""
+    import sqlite3
+
+    if not isinstance(value, dict) or not value.get("path") or not value.get("query"):
+        raise ValidationError("'sqlite' needs path and query.")
+    query = str(value["query"]).strip()
+    if not query.lower().startswith(("select", "with", "pragma")):
+        raise ValidationError("'sqlite' runs read-only queries (SELECT, WITH, PRAGMA).")
+    path = Path(str(value["path"])).expanduser()
+    if not path.is_absolute() and ctx.root is not None:
+        path = ctx.root / path
+    if not path.is_file():
+        return _ok("sqlite", None, f"{path.name} does not exist")
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            rows = connection.execute(query).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        return _ok("sqlite", None, f"query failed: {exc}")
+    if "rows" in value:
+        return _ok("sqlite", len(rows) == int(value["rows"]), f"{len(rows)} row(s)")
+    first = rows[0][0] if rows and rows[0] else None
+    return _ok("sqlite", first == value.get("equals"), f"{first!r}")
+
+
+@check("android")
+def _android(ctx: VerificationContext, value: Any) -> CheckResult:
+    """Android state: ``{focused_app, element: {…}}`` on an Android observation."""
+    if not isinstance(value, dict):
+        raise ValidationError("'android' needs {focused_app, element}.")
+    if ctx.after is None:
+        return _ok("android", None, "no observation after the action")
+    if ctx.after.surface != "android":
+        return _unsupported("android", f"the observation is of a {ctx.after.surface}, not Android")
+    if value.get("focused_app") and ctx.after.active_app != value["focused_app"]:
+        return _ok("android", False, f"{ctx.after.active_app or 'nothing'} is in front")
+    if value.get("element"):
+        return CHECKS["accessibility"](ctx, value["element"])
+    return _ok("android", True, f"{ctx.after.active_app} is in front")
+
+
+CHECKS["ui_state"] = CHECKS["element"]

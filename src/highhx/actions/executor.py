@@ -30,6 +30,7 @@ from highhx.core.errors import (
     PolicyViolationError,
     ValidationError,
 )
+from highhx.core.events import trace_context
 from highhx.core.result import Status
 from highhx.execution.cancellation import CancellationToken
 from highhx.safety.actions import ActionDescriptor, ActionKind, Actor
@@ -287,8 +288,11 @@ class ActionExecutor:
             with (
                 self.app.engine.operation("action", spec.name, metadata={"actor": str(self.actor)}) as op,
                 self.gate.executing(authorization) as audit,
+                trace_context(execution_id=getattr(op, "execution_id", None)),
             ):
+                execution_id = str(getattr(op, "execution_id", "") or "")
                 result = self._attempts(spec, ctx, inputs, token, timed_out)
+                result.execution_id = execution_id
                 if result.ok and spec.verify is not None:
                     verified, detail = spec.verify(ctx, inputs, result)
                     result.verified = verified
@@ -311,10 +315,11 @@ class ActionExecutor:
         result.seconds = time.monotonic() - started
         if spec.kind != ActionKind.READ and result.status not in ("denied", "blocked", "planned"):
             self._screen_changed(spec.name)
-        if result.ok:
-            self.events.emit(ev.ACTION_COMPLETED, action=spec.name, summary=result.summary, seconds=result.seconds)
-        else:
-            self.events.emit(ev.ACTION_FAILED, action=spec.name, status=result.status, error=result.error)
+        with trace_context(execution_id=result.execution_id or None):
+            if result.ok:
+                self.events.emit(ev.ACTION_COMPLETED, action=spec.name, summary=result.summary, seconds=result.seconds, execution_id=result.execution_id)
+            else:
+                self.events.emit(ev.ACTION_FAILED, action=spec.name, status=result.status, error=result.error, execution_id=result.execution_id)
         return result
 
     def _attempts(

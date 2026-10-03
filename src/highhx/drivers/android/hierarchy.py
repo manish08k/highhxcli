@@ -86,6 +86,7 @@ def parse_hierarchy(xml: str, *, limit: int = 500) -> tuple[list[StateElement], 
             "clickable": "True" if clickable else "",
             "scrollable": "True" if a.get("scrollable") == "true" else "",
             "type": "password" if password else "",
+            "selected": "True" if a.get("selected") == "true" else "",
         }
         checkable = a.get("checkable") == "true"
         elements.append(

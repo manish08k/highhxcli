@@ -57,7 +57,8 @@ COMPUTER_TASK_CANCELLED = "computer.task.cancelled"
 MCP_CONNECTED = "mcp.connected"
 ATTACHMENTS_ADDED = "attachments.added"
 # The computer-use runtime (agent loop, perception, grounding, recovery, sandboxes).
-# ``action.proposed`` is ACTION_PLANNED and ``approval.required`` is APPROVAL_REQUESTED.
+# ``action.proposed`` is ACTION_PLANNED, ``action.retrying`` is ACTION_RETRY and
+# ``approval.required`` is APPROVAL_REQUESTED (the existing names are kept for compatibility).
 AGENT_PLANNING = "agent.planning"
 PLAN_CREATED = "plan.created"
 PLAN_UPDATED = "plan.updated"
@@ -69,8 +70,17 @@ VERIFICATION_STARTED = "verification.started"
 VERIFICATION_COMPLETED = "verification.completed"
 RECOVERY_STARTED = "recovery.started"
 RECOVERY_COMPLETED = "recovery.completed"
-REFLECTION_CREATED = "reflection.created"
-CHECKPOINT_SAVED = "checkpoint.saved"
+AGENT_REFLECTION = "agent.reflection"
+CHECKPOINT_CREATED = "checkpoint.created"
+CHECKPOINT_RESUMED = "checkpoint.resumed"
+TASK_STARTED = "task.started"
+TASK_COMPLETED = "task.completed"
+TASK_FAILED = "task.failed"
+VERIFICATION_FAILED = "verification.failed"
+SELECTOR_HEALED = "selector.healed"
+TOOL_STARTED = "tool.started"
+TOOL_COMPLETED = "tool.completed"
+TOOL_FAILED = "tool.failed"
 SANDBOX_CREATED = "sandbox.created"
 SANDBOX_EXEC = "sandbox.exec"
 SANDBOX_DESTROYED = "sandbox.destroyed"
@@ -130,8 +140,17 @@ EVENT_NAMES = (
     VERIFICATION_COMPLETED,
     RECOVERY_STARTED,
     RECOVERY_COMPLETED,
-    REFLECTION_CREATED,
-    CHECKPOINT_SAVED,
+    AGENT_REFLECTION,
+    CHECKPOINT_CREATED,
+    CHECKPOINT_RESUMED,
+    TASK_STARTED,
+    TASK_COMPLETED,
+    TASK_FAILED,
+    VERIFICATION_FAILED,
+    SELECTOR_HEALED,
+    TOOL_STARTED,
+    TOOL_COMPLETED,
+    TOOL_FAILED,
     SANDBOX_CREATED,
     SANDBOX_EXEC,
     SANDBOX_DESTROYED,
@@ -159,8 +178,10 @@ LOGGED_PREFIXES = (
     "grounding.",
     "verification.",
     "recovery.",
-    "reflection.",
     "checkpoint.",
+    "task.",
+    "selector.",
+    "tool.",
     "sandbox.",
     "runtime.",
     "model.",

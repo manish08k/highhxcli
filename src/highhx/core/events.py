@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 WILDCARD = "*"
 
 
-CONTEXT_KEYS = ("trace_id", "session_id", "task_id", "action_id", "source")
+CONTEXT_KEYS = ("trace_id", "session_id", "task_id", "step_id", "action_id", "execution_id", "source")
 """The envelope every event carries when it is emitted inside :func:`trace_context`."""
 
 _context: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar("highhx_event_context", default=None)
@@ -57,7 +57,7 @@ class Event:
     data: dict[str, Any] = field(default_factory=dict)
     timestamp: str = field(default_factory=iso_now)
     context: dict[str, str] = field(default_factory=dict)
-    """trace_id, session_id, task_id, action_id, source — whichever were set when it was emitted."""
+    """trace_id, session_id, task_id, step_id, action_id, execution_id, source — whichever were set."""
 
     def to_dict(self) -> dict[str, Any]:
         return {"name": self.name, "timestamp": self.timestamp, **self.context, "payload": dict(self.data)}

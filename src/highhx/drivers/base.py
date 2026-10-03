@@ -1,8 +1,8 @@
 """ComputerDriver: one interface for every computer HighhX can operate.
 
-    observe() · screenshot() · get_state()
-    click(x, y) · double_click(x, y) · type(text) · key(name) · hotkey(keys)
-    scroll(direction) · drag(x1, y1, x2, y2) · move(x, y)
+    observe() · screenshot() · get_state() · inspect(x, y) · find(target)
+    click(x, y) · double_click(x, y) · right_click(x, y) · type(text) · key(name) · hotkey(keys)
+    scroll(direction) · drag(x1, y1, x2, y2) · move(x, y) · wait(seconds)
     launch(app) · close(app) · focus(app)
     capabilities()                    which of these work here, and why not
 
@@ -24,19 +24,24 @@ from highhx.computer.providers import Capability
 from highhx.core.errors import HighhXError
 
 if TYPE_CHECKING:
-    from highhx.perception.state import ComputerState, ScreenshotRef
+    from highhx.grounding.hybrid import GroundingResult
+    from highhx.perception.state import ComputerState, ScreenshotRef, StateElement
 
 OPERATIONS = (
     "observe",
     "screenshot",
+    "inspect",
+    "find",
     "click",
     "double_click",
+    "right_click",
     "type",
     "key",
     "hotkey",
     "scroll",
     "drag",
     "move",
+    "wait",
     "launch",
     "close",
     "focus",
@@ -88,6 +93,14 @@ class ComputerDriver(Protocol):
 
     def double_click(self, x: int, y: int) -> None: ...
 
+    def right_click(self, x: int, y: int) -> None: ...
+
+    def inspect(self, x: int, y: int) -> StateElement | None: ...
+
+    def find(self, target: str, *, role: str = "") -> GroundingResult: ...
+
+    def wait(self, seconds: float) -> None: ...
+
     def type(self, text: str) -> None: ...
 
     def key(self, key: str) -> None: ...
@@ -109,3 +122,24 @@ class ComputerDriver(Protocol):
 
 def unsupported(driver: str, detail: str) -> dict[str, Capability]:
     return {op: Capability(op, False, detail) for op in OPERATIONS}
+
+
+class DriverHelpers:
+    """``inspect``, ``find`` and ``wait`` for any driver with ``observe()``: the element at a point,
+    a target grounded on a fresh observation (hybrid grounding, never a guess), a pause."""
+
+    def observe(self, *, screenshot: bool = False) -> ComputerState:  # pragma: no cover - provided by the driver
+        raise NotImplementedError
+
+    def inspect(self, x: int, y: int) -> StateElement | None:
+        return self.observe().at((x, y))
+
+    def find(self, target: str, *, role: str = "") -> GroundingResult:
+        from highhx.grounding import HybridGrounder, Target
+
+        return HybridGrounder().ground(self.observe(), Target.of(target, role), strategies=("accessibility", "dom", "text"))
+
+    def wait(self, seconds: float) -> None:
+        import time
+
+        time.sleep(max(0.0, min(float(seconds), 300.0)))

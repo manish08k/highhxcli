@@ -301,7 +301,9 @@ class ComputerState:
     processes: tuple[str, ...] = ()
     cursor: tuple[int, int] | None = None
     focused: str = ""
-    """The id of the element with keyboard focus."""
+    """The id of the element with keyboard focus (where typed keys go)."""
+    selected: str = ""
+    """The id of the selected element (a chosen tab, row or option), when the source reports it."""
     viewport: tuple[int, int] | None = None
     browser: BrowserState | None = None
     elements: tuple[StateElement, ...] = ()
@@ -309,6 +311,10 @@ class ComputerState:
     ocr_text: str = ""
     screenshot: ScreenshotRef | None = None
     perception: tuple[PerceptionRecord, ...] = ()
+    network: tuple[tuple[str, str], ...] = ()
+    """Network hints: the page still loading, an offline device …"""
+    cwd: str = ""
+    """The filesystem context of the task (the project or sandbox workspace)."""
     metadata: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
@@ -402,6 +408,7 @@ class ComputerState:
             "processes": list(self.processes),
             "cursor": list(self.cursor) if self.cursor else None,
             "focused": self.focused,
+            "selected": self.selected,
             "viewport": list(self.viewport) if self.viewport else None,
             "browser": self.browser.to_dict() if self.browser else None,
             "elements": [e.to_dict() for e in self.elements],
@@ -409,6 +416,8 @@ class ComputerState:
             "ocr_text": self.ocr_text,
             "screenshot": self.screenshot.to_dict() if self.screenshot else None,
             "perception": [p.to_dict() for p in self.perception],
+            "network": dict(self.network),
+            "cwd": self.cwd,
             "metadata": dict(self.metadata),
         }
 
@@ -445,6 +454,7 @@ class ComputerState:
             processes=tuple(str(p) for p in data.get("processes") or ()),
             cursor=_pair(data.get("cursor")),
             focused=str(data.get("focused", "")),
+            selected=str(data.get("selected", "")),
             viewport=_pair(data.get("viewport")),
             browser=BrowserState(
                 str(browser.get("url", "")),
@@ -481,6 +491,8 @@ class ComputerState:
                 )
                 for p in data.get("perception") or ()
             ),
+            network=tuple(sorted((str(k), str(v)) for k, v in (data.get("network") or {}).items())),
+            cwd=str(data.get("cwd", "")),
             metadata=tuple(sorted((str(k), str(v)) for k, v in (data.get("metadata") or {}).items())),
         )
 

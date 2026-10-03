@@ -11,18 +11,19 @@ from typing import TYPE_CHECKING
 
 from highhx.computer.providers import Capability
 from highhx.drivers.android.adb import AdbClient
-from highhx.drivers.base import OPERATIONS, CapabilityError, DriverCapabilities
+from highhx.drivers.base import OPERATIONS, CapabilityError, DriverCapabilities, DriverHelpers
 
 if TYPE_CHECKING:
     from highhx.perception.state import ComputerState, ScreenshotRef
 
 NOT_ON_ANDROID = {
     "move": "Android has no pointer to move",
+    "right_click": "Android has no right button; use long_press",
     "hotkey": "Android has no modifier-key shortcuts; send key events instead",
 }
 
 
-class AndroidDriver:
+class AndroidDriver(DriverHelpers):
     surface = "android"
 
     def __init__(self, adb: AdbClient) -> None:
@@ -35,7 +36,7 @@ class AndroidDriver:
             op: Capability(op, False, NOT_ON_ANDROID[op]) if op in NOT_ON_ANDROID else Capability(op, cap.available, cap.detail)
             for op in OPERATIONS
         }
-        for extra in ("long_press", "swipe", "back", "home", "install", "packages"):
+        for extra in ("long_press", "swipe", "back", "home", "recents", "install", "packages"):
             features[extra] = Capability(extra, cap.available, cap.detail)
         return DriverCapabilities(self.name, self.surface, features)
 
@@ -62,6 +63,9 @@ class AndroidDriver:
     def double_click(self, x: int, y: int) -> None:
         self.adb.tap(x, y)
         self.adb.tap(x, y)
+
+    def right_click(self, x: int, y: int) -> None:
+        raise CapabilityError(NOT_ON_ANDROID["right_click"])
 
     def long_press(self, x: int, y: int, ms: int = 800) -> None:
         self.adb.long_press(x, y, ms)
@@ -113,3 +117,6 @@ class AndroidDriver:
 
     def home(self) -> None:
         self.adb.keyevent("home")
+
+    def recents(self) -> None:
+        self.adb.keyevent("app_switch")

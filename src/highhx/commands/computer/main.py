@@ -627,14 +627,26 @@ def computer_engine() -> int:
     help="read-only: observation tools only. ask/auto-edit: the approval rules of `highhx computer`.",
 )
 @click.option("--allow", multiple=True, metavar="TOOL", help="Offer only these tools (repeatable): a bounded set.")
+@click.option(
+    "--toolset",
+    "toolsets",
+    multiple=True,
+    type=click.Choice(["desktop", "runtime"]),
+    help="desktop (default): computer.* tools. runtime: state, browser, Android, sandbox and HTTP tools.",
+)
 @pass_app
-def computer_mcp(app: App, mode: str, allow: tuple[str, ...]) -> int:
+def computer_mcp(app: App, mode: str, allow: tuple[str, ...], toolsets: tuple[str, ...]) -> int:
     """Speak MCP (JSON-RPC over stdin/stdout) so an MCP client can observe and operate this
     computer through HighhX: every tool is a computer.* action — classified, approved, audited
     (source "mcp") and verified. Nobody can be asked over stdio, so an action that needs a
     confirmation is refused unless you start the server with --yes (`highhx --yes computer mcp`),
     which pre-approves non-critical actions as your own --yes does. Register it with, e.g.:
     claude mcp add highhx-computer -- highhx computer mcp"""
+    return serve_mcp(app, mode, allow, toolsets or ("desktop",))
+
+
+def serve_mcp(app: App, mode: str, allow: tuple[str, ...], toolsets: tuple[str, ...]) -> int:
+    """The HighhX MCP server on stdin/stdout (shared by `highhx computer mcp` and `highhx mcp serve`)."""
     import sys
 
     from highhx import __version__
@@ -656,7 +668,7 @@ def computer_mcp(app: App, mode: str, allow: tuple[str, ...]) -> int:
     )
     executor = ActionExecutor(app, gate, actor=Actor.USER, catalog=catalog_for(app))
     try:
-        server = McpServer(executor, read_only=mode == "read-only", allow=allow, version=__version__)
+        server = McpServer(executor, read_only=mode == "read-only", allow=allow, version=__version__, toolsets=toolsets)
         return server.serve(sys.stdin, sys.stdout)
     finally:
         executor.close()

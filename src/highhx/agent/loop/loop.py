@@ -43,6 +43,7 @@ from highhx.verification.declarative import Verdict, VerificationContext, verify
 if TYPE_CHECKING:
     from highhx.actions.executor import ActionExecutor
     from highhx.grounding import HybridGrounder
+    from highhx.observability.tasktrace import TraceStore
     from highhx.perception.state import ComputerState
     from highhx.trajectories.store import TrajectoryStore
 
@@ -110,10 +111,12 @@ class AgentLoop:
         agent: str = "agent",
         session_id: str | None = None,
         memory: bool = True,
+        traces: TraceStore | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.executor = executor
+        self.traces = traces
         self.planner = planner
         self.store = store
         self.grounder = grounder
@@ -137,8 +140,22 @@ class AgentLoop:
         trajectory.surface = surface
         checkpoint = trajectory.metrics.get("checkpoint") or {}
         counters = Counters.from_dict(checkpoint.get("counters") or {})
+        recorder = None
+        if self.traces is not None:
+            from highhx.observability.tasktrace import TaskTraceRecorder
+
+            recorder = TaskTraceRecorder(self.events, self.traces, redactor=self.executor.app.redactor)
+        try:
+            return self._traced(task, surface, trajectory, counters, resumed)
+        finally:
+            if recorder is not None:
+                recorder.save(trajectory.trace_id)
+                recorder.recorder.close()
+
+    def _traced(self, task: AgentTask, surface: str, trajectory: Trajectory, counters: Counters, resumed: bool) -> LoopResult:
         with trace_context(trace_id=trajectory.trace_id, task_id=trajectory.id, session_id=self.session_id, source=self.agent):
             self.events.emit(ev.AGENT_STARTED, task=task.goal, surface=surface, planner=self.planner.name, resumed=resumed, agent=self.agent)
+            self.events.emit(ev.TASK_STARTED, task=task.goal, surface=surface, resumed=resumed)
             try:
                 status, summary = self._run(task, surface, trajectory, counters, resumed)
             except (KeyboardInterrupt, OperationCancelledError):
@@ -148,6 +165,12 @@ class AgentLoop:
             trajectory.ended = time.time()
             trajectory.metrics.update(self._metrics(counters, trajectory))
             self._checkpoint(task, trajectory, counters)
+            self.events.emit(
+                ev.TASK_COMPLETED if status == Status.COMPLETED else ev.TASK_FAILED,
+                task=task.goal,
+                status=str(status),
+                summary=summary,
+            )
             self.events.emit(
                 ev.AGENT_COMPLETED,
                 task=task.goal,
@@ -216,9 +239,10 @@ class AgentLoop:
             if step.parameters.get("__redacted__"):
                 return Status.NEEDS_USER, f"the text for '{step.describe()}' went into a secret field and was not stored; provide it again"
             counters.steps += 1
-            self._plan_progress(trajectory, step, "running")
-            outcome, reflection, state = self._step(step, state, task, trajectory, counters, worker, observer, verifier, reflector)
-            self._plan_progress(trajectory, step, "done" if outcome == Outcome.SUCCESS else "failed")
+            with trace_context(step_id=step.id):
+                self._plan_progress(trajectory, step, "running")
+                outcome, reflection, state = self._step(step, state, task, trajectory, counters, worker, observer, verifier, reflector)
+                self._plan_progress(trajectory, step, "done" if outcome == Outcome.SUCCESS else "failed")
             self._checkpoint(task, trajectory, counters)
             if reflection.decision == "continue":
                 continue
@@ -290,10 +314,11 @@ class AgentLoop:
             counters.observations += verdict.observations
             counters.outcomes[str(verdict.outcome)] = counters.outcomes.get(str(verdict.outcome), 0) + 1
             reflection = reflector.after_step(step.id, work.last, verdict.outcome, step.label)
-            self.events.emit(ev.REFLECTION_CREATED, step=step.id, **reflection.to_dict())
+            self.events.emit(ev.AGENT_REFLECTION, step=step.id, **reflection.to_dict())
             grounding = work.grounding.to_dict() if work.grounding else None
             if grounding is not None:
                 grounding["target"] = work.recorded_target() or grounding["target"]
+                self._healed(step, grounding, verdict.outcome)
             self._record(trajectory, step, state, work, verdict, reflection, grounding, started)
             after = verdict.after if verdict.after is not None else (state if not observer.active else self._observe(observer, counters))
             return verdict.outcome, reflection, after
@@ -305,6 +330,24 @@ class AgentLoop:
         state = observer.observe()
         counters.observations += 1
         return state
+
+    def _healed(self, step: StepIntent, grounding: dict[str, Any], outcome: Outcome) -> None:
+        """A recorded target found by another representation than its first one: a healed selector."""
+        attempts = grounding.get("attempts") or []
+        recorded = bool(step.target.get("accessibility") or step.target.get("dom"))
+        if not recorded or not attempts or attempts[0].get("result") != "failed" or outcome != Outcome.SUCCESS:
+            return
+        candidate = grounding.get("candidate") or {}
+        fresh = grounding.get("target") or {}
+        self.events.emit(
+            ev.SELECTOR_HEALED,
+            step=step.id,
+            was=step.target.get("label"),
+            now=fresh.get("label"),
+            strategy=candidate.get("strategy"),
+            confidence=candidate.get("score"),
+            reason=f"{attempts[0].get('strategy')} no longer matched",
+        )
 
     def _protect_secret(self, step: StepIntent, work: WorkResult) -> None:
         """Text typed into a secret field (password, card, one-time code) is registered with the
@@ -365,7 +408,7 @@ class AgentLoop:
             items.append(PlanItem(step.describe(), status).to_dict())
         elif items:
             items[-1]["status"] = status
-        self.events.emit(ev.PLAN_UPDATED, items=[dict(i) for i in items])
+        self.events.emit(ev.PLAN_UPDATED, items=[dict(i) for i in items], current=step.describe(), status=status)
 
     def _record(
         self,
@@ -419,7 +462,7 @@ class AgentLoop:
         }
         if self.store is not None:
             self.store.save(trajectory)
-            self.events.emit(ev.CHECKPOINT_SAVED, task_id=trajectory.id, steps=len(trajectory.steps))
+            self.events.emit(ev.CHECKPOINT_CREATED, task_id=trajectory.id, steps=len(trajectory.steps), status=trajectory.status)
 
 
 RESUMABLE = ("running", "interrupted", "needs_user", "failed", "cancelled")
@@ -450,4 +493,6 @@ def resume(
     task.surface = str(checkpoint.get("surface") or task.surface)
     planner = planner or planner_from_state(checkpoint["planner"], catalog=executor.catalog)
     trajectory.status = "running"
+    with trace_context(trace_id=trajectory.trace_id, task_id=trajectory.id):
+        executor.events.emit(ev.CHECKPOINT_RESUMED, task_id=trajectory.id, steps=len(trajectory.steps), cursor=checkpoint["planner"].get("cursor"))
     return AgentLoop(executor, planner, store=store, **loop_kwargs).run(task, trajectory=trajectory)
