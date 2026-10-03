@@ -12,7 +12,7 @@ from highhx.computer.model import Observation, UIElement
 from highhx.computer.providers import Capability
 from highhx.execution.cancellation import CancellationToken
 from tests.unit.actions.conftest import repo  # noqa: F401
-from tests.unit.agent.conftest import agent_project  # noqa: F401
+from tests.unit.agent.conftest import agent_project, make_app  # noqa: F401
 from tests.unit.computer.test_browser_recovery import browser, chrome  # noqa: F401
 
 

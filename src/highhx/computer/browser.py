@@ -162,6 +162,9 @@ OBSERVE_JS = r"""
         autocomplete: e.getAttribute('autocomplete') || '',
         download: e.hasAttribute('download') ? 'True' : '',
         name: e.getAttribute('name') || '',
+        dom_id: (e.id || '').slice(0, 80),
+        testid: (e.getAttribute('data-testid') || e.getAttribute('data-test') || e.getAttribute('data-cy') || '').slice(0, 80),
+        placeholder: (e.getAttribute('placeholder') || '').slice(0, 80),
       },
       bounds: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
     });
