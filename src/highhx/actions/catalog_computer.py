@@ -183,5 +183,6 @@ def computer_use_specs() -> list[ActionSpec]:
         ),
     ]
     from highhx.actions.catalog_android import android_specs
+    from highhx.actions.catalog_sandbox import sandbox_specs
 
-    return [*specs, *android_specs()]
+    return [*specs, *android_specs(), *sandbox_specs()]

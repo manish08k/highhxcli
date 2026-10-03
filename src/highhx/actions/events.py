@@ -74,6 +74,8 @@ CHECKPOINT_SAVED = "checkpoint.saved"
 SANDBOX_CREATED = "sandbox.created"
 SANDBOX_EXEC = "sandbox.exec"
 SANDBOX_DESTROYED = "sandbox.destroyed"
+RUNTIME_STARTED = "runtime.started"
+RUNTIME_STOPPED = "runtime.stopped"
 MODEL_USAGE = "model.usage"
 BENCHMARK_STARTED = "benchmark.started"
 BENCHMARK_TASK = "benchmark.task"
@@ -133,6 +135,8 @@ EVENT_NAMES = (
     SANDBOX_CREATED,
     SANDBOX_EXEC,
     SANDBOX_DESTROYED,
+    RUNTIME_STARTED,
+    RUNTIME_STOPPED,
     MODEL_USAGE,
     BENCHMARK_STARTED,
     BENCHMARK_TASK,
@@ -158,6 +162,7 @@ LOGGED_PREFIXES = (
     "reflection.",
     "checkpoint.",
     "sandbox.",
+    "runtime.",
     "model.",
     "benchmark.",
 )

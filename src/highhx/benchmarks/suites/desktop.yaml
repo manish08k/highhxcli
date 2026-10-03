@@ -1,0 +1,30 @@
+suite: desktop
+description: Desktop tasks through the HighhX Computer API on a simulated desktop (accessibility tree, pointer, keyboard).
+tasks:
+  - id: fill-note
+    description: Write a title and a body in the note
+    environment: {kind: desktop}
+    planner:
+      kind: scripted
+      steps:
+        - {action: type, target: {label: Title, role: textbox}, parameters: {text: Plan}, intent: write the title}
+        - {action: type, target: {label: Body, role: textbox}, parameters: {text: Ship on Friday}, intent: write the body}
+    evaluate:
+      - desktop:
+          - {field_value: {app: Notes, name: Title, equals: Plan}}
+          - {field_value: {app: Notes, name: Body, equals: Ship on Friday}}
+    ground_truth: {Title: Title, Body: Body}
+    risk_level: medium
+
+  - id: unverifiable-press-is-not-done
+    description: Press Increment — its effect is not visible to accessibility, so it must not be reported verified
+    environment: {kind: desktop}
+    planner:
+      kind: scripted
+      steps:
+        - {action: click, target: {label: Increment, role: button}, intent: press increment}
+    evaluate:
+      - desktop:
+          - {pressed: {app: Notes, name: Increment, times: 99}}
+    expect_completion: false
+    risk_level: medium

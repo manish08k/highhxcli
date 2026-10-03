@@ -1,0 +1,27 @@
+suite: android
+description: Android tasks through adb on a simulated device (UI hierarchy, taps, typing, app launch).
+tasks:
+  - id: launch-and-title
+    description: Open the notes app and write a title
+    environment: {kind: android}
+    planner:
+      kind: scripted
+      steps:
+        - {action: launch, parameters: {package: com.example.notes}, intent: open notes}
+        - {action: type, target: {label: Title, role: textbox}, parameters: {text: Groceries}, intent: write the title}
+    evaluate:
+      - android: {focused_app: com.example.notes, field_value: Groceries}
+    ground_truth: {Title: Title}
+    risk_level: medium
+
+  - id: ambiguous-delete-is-not-guessed
+    description: Tap Delete when two buttons are called Delete — the agent must not guess
+    environment: {kind: android, focused_app: com.example.notes, duplicate_delete: true}
+    planner:
+      kind: scripted
+      steps:
+        - {action: click, target: {label: Delete, role: button}, intent: delete}
+    evaluate:
+      - android: {tapped: true}
+    expect_completion: false
+    risk_level: high

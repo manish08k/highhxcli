@@ -339,6 +339,12 @@ class ActionExecutor:
                 raise
             except ToolError as exc:
                 result = ActionResult(False, error=str(exc), summary=str(exc), retryable=False)
+            except ApprovalDeniedError as exc:
+                # a confirmation inside the action (e.g. the browser runtime's per-element check)
+                # was declined: that is the person's answer, final, never a failure to retry
+                return ActionResult(False, status="denied", error=exc.message, summary="not approved", retryable=False, attempts=attempt)
+            except PolicyViolationError as exc:
+                return ActionResult(False, status="blocked", error=exc.message, summary="blocked by policy", retryable=False, attempts=attempt)
             except HighhXError as exc:
                 result = ActionResult(
                     False, error=exc.message + (f" ({exc.hint})" if exc.hint else ""), summary=exc.message

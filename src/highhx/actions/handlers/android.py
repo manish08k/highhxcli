@@ -21,8 +21,13 @@ from highhx.drivers.android.driver import AndroidDriver
 LAUNCH_WAIT = 6.0
 
 
+def _adb(ctx: ActionContext, serial: str | None = None) -> AdbClient:
+    factory = getattr(ctx.computer(), "android_client", None)
+    return factory(serial or None, ctx.cancel) if factory is not None else AdbClient(serial=serial or None, cancel=ctx.cancel)
+
+
 def _driver(ctx: ActionContext, inputs: Inputs) -> AndroidDriver:
-    adb = AdbClient(serial=inputs.get("device") or None, cancel=ctx.cancel)
+    adb = _adb(ctx, inputs.get("device"))
     if not adb.capability().available:
         raise ToolError(adb.capability().detail)
     try:
@@ -47,7 +52,7 @@ def _ground(driver: AndroidDriver, text: str, role: str | None) -> tuple[int, in
 
 
 def devices(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    adb = AdbClient(cancel=ctx.cancel)
+    adb = _adb(ctx)
     capability = adb.capability()
     if not capability.available:
         return ActionResult(True, output={"available": False, "detail": capability.detail, "devices": []}, summary=capability.detail)
@@ -60,7 +65,7 @@ def devices(ctx: ActionContext, inputs: Inputs) -> ActionResult:
 
 
 def connect(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    adb = AdbClient(cancel=ctx.cancel)
+    adb = _adb(ctx)
     out = adb.connect(str(inputs["address"]))
     ready = any(d.serial == inputs["address"] and d.ready for d in adb.devices())
     return ActionResult(ready, output={"message": out}, summary=out, verified=ready, error="" if ready else out)

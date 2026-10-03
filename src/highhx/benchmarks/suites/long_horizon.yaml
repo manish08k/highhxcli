@@ -1,0 +1,20 @@
+suite: long_horizon
+description: A longer task mixing surfaces and steps — navigate, search, fill a form, export — with final verification.
+tasks:
+  - id: shop-session
+    description: Search the shop, open the account form, sign up, then export the invoices
+    environment: {kind: web}
+    planner:
+      kind: scripted
+      steps:
+        - {action: type, target: {label: Search, role: searchbox}, parameters: {text: adele}, intent: type the search}
+        - {action: click, target: {label: Go, role: button}, intent: search}
+        - {action: click, target: {label: Account form, role: link}, intent: open the account form}
+        - {action: type, target: {label: Email, role: textbox}, parameters: {text: me@example.com}, intent: enter the email}
+        - {action: click, target: {label: Submit, role: button}, intent: submit the form}
+        - {action: open, parameters: {url: "https://shop.test/invoices"}, intent: open the invoices}
+        - {action: click, target: {label: Export, role: button}, intent: export the invoices}
+    success: {text: Export ready}
+    evaluate: [{state: {query: adele, submitted: true, exported: true}}]
+    risk_level: high
+    timeout: 300

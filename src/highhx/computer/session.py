@@ -21,6 +21,7 @@ from highhx.utils.paths import user_data_dir
 
 if TYPE_CHECKING:
     from highhx.computer.driver import HighhXDriver
+    from highhx.drivers.android.adb import AdbClient
 
 SOURCES = ("browser", "desktop")
 """Sources that can be observed *and* acted on."""
@@ -94,6 +95,12 @@ class ComputerSession:
 
             self._driver = HighhXDriver(open_bridge(runner, cancel=self.cancel, target=self.target), target=self.target)
         return self._driver
+
+    def android_client(self, serial: str | None = None, cancel: CancellationToken | None = None) -> AdbClient:
+        """The adb client for an Android device (a benchmark or test session supplies a simulated one)."""
+        from highhx.drivers.android.adb import AdbClient
+
+        return AdbClient(serial=serial or None, cancel=cancel or self.cancel)
 
     # ------------------------------------------------------------- providers
     @property

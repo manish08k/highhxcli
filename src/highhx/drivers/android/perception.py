@@ -61,7 +61,9 @@ class AndroidScreenshots:
 
 
 def adb_for(ctx: ActionContext, inputs: Inputs) -> AdbClient:
-    return AdbClient(serial=inputs.get("device") or None, cancel=ctx.cancel)
+    factory = getattr(ctx.computer(), "android_client", None)
+    serial = inputs.get("device") or None
+    return factory(serial, ctx.cancel) if factory is not None else AdbClient(serial=serial, cancel=ctx.cancel)
 
 
 def android_engine(

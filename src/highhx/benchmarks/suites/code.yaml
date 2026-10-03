@@ -1,0 +1,29 @@
+suite: code
+description: Developer tasks without a screen — files and commands in a temporary project.
+tasks:
+  - id: write-config
+    description: Write the release notes file
+    environment:
+      kind: workspace
+      files: {README.md: "# demo\n"}
+    planner:
+      kind: scripted
+      steps:
+        - {action: filesystem.write, parameters: {path: NOTES.md, content: "release 1.0\n"}, intent: write the notes}
+        - {action: filesystem.read, parameters: {path: NOTES.md}, intent: read them back}
+    success: {file: {path: NOTES.md, contains: release 1.0}}
+    evaluate: [{file: {path: NOTES.md, contains: release 1.0}}]
+    risk_level: medium
+
+  - id: run-a-script
+    description: Run the project's script and keep its output
+    environment:
+      kind: workspace
+      files: {calc.py: "import pathlib\npathlib.Path('out.txt').write_text(str(sum(range(10))))\n"}
+    planner:
+      kind: scripted
+      steps:
+        - {action: shell.run, parameters: {command: "python3 calc.py"}, intent: run the script}
+    success: {file: {path: out.txt, contains: "45"}}
+    evaluate: [{file: {path: out.txt, contains: "45"}}]
+    risk_level: medium

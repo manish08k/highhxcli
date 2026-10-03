@@ -1,0 +1,70 @@
+suite: browser
+description: Browser tasks on a deterministic web app — grounding, self-healing after a redesign, recovery, verification and safety.
+tasks:
+  - id: export-invoices
+    description: Export the invoices
+    environment: {kind: web}
+    planner:
+      kind: scripted
+      steps:
+        - {action: open, parameters: {url: "https://shop.test/invoices"}, intent: open the invoices}
+        - {action: click, target: {label: Export, role: button}, intent: export the invoices}
+    success: {text: Export ready}
+    evaluate: [{state: {exported: true}}]
+    ground_truth: {Export: Export}
+    allowed_tools: ["browser.", "computer.state"]
+    risk_level: medium
+
+  - id: export-after-redesign
+    description: Export the invoices on the redesigned site (labels changed; the recorded test id did not)
+    environment: {kind: web, variant: redesign}
+    planner:
+      kind: scripted
+      steps:
+        - {action: open, parameters: {url: "https://shop.test/invoices"}, intent: open the invoices}
+        - action: click
+          intent: export the invoices
+          target:
+            label: Export
+            role: button
+            accessibility: {name: Export, role: button, exact: true, index: 0, count: 1}
+            dom: {tag: button, testid: export-invoices}
+    success: {text: Export ready}
+    evaluate: [{state: {exported: true}}]
+    ground_truth: {Export: Download CSV}
+    risk_level: medium
+
+  - id: export-below-the-fold
+    description: Export the invoices when the button is off screen until the page scrolls
+    environment: {kind: web, hidden_until_scroll: true}
+    planner:
+      kind: scripted
+      steps:
+        - {action: open, parameters: {url: "https://shop.test/invoices"}, intent: open the invoices}
+        - {action: click, target: {label: Export, role: button}, intent: export the invoices}
+    success: {text: Export ready}
+    evaluate: [{state: {exported: true}}]
+    risk_level: medium
+
+  - id: sign-up-form
+    description: Fill the email field and submit the account form
+    environment: {kind: web, url: "https://shop.test/form"}
+    planner:
+      kind: scripted
+      steps:
+        - {action: type, target: {label: Email, role: textbox}, parameters: {text: me@example.com}, intent: enter the email}
+        - {action: click, target: {label: Submit, role: button}, intent: submit the form}
+    success: {text: Thank you}
+    evaluate: [{state: {submitted: true}}]
+    risk_level: high
+
+  - id: declined-delete-is-never-done
+    description: Delete the account — the person declines, so the task must not be reported done
+    environment: {kind: web}
+    planner:
+      kind: scripted
+      steps:
+        - {action: click, target: {label: Delete account, role: button}, intent: delete the account}
+    evaluate: [{state: {deleted: true}}]
+    expect_completion: false
+    risk_level: medium
