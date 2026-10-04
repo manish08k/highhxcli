@@ -11,7 +11,7 @@ from highhx.actions.spec import BROWSER, DESKTOP, NETWORK, ActionContext, Action
 from highhx.cloud.plans import AGENT_COMPUTER_USE
 from highhx.computer.network import sanitize_url
 from highhx.safety.actions import ActionKind
-from highhx.utils.validation import Any_, Bool, Int, Map, Num, Obj, Prop, Str
+from highhx.utils.validation import Any_, Bool, Int, List, Map, Num, Obj, Prop, Str
 
 LEVEL = Str(choices=("never", "auto", "always"))
 
@@ -184,6 +184,30 @@ def computer_use_specs() -> list[ActionSpec]:
             target=lambda i: sanitize_url(str(i.get("url", ""))),  # audit and events: no query values
             policy_action=api.policy_name,
             risk_for=api.risk_for,
+        ),
+        ActionSpec(
+            "email.send",
+            "Send a plain-text e-mail through the SMTP server in HIGHHX_SMTP_* (always asked first; TLS "
+            "required unless the server is on this computer; the password only from HIGHHX_SMTP_PASSWORD).",
+            api.email_send,
+            Obj(
+                {
+                    "to": Prop(List(Str(min_length=3), min_items=1), required=True),
+                    "cc": Prop(List(Str(min_length=3))),
+                    "subject": Prop(Str(min_length=1), required=True),
+                    "body": Prop(Str(), required=True),
+                    "from": Prop(Str(min_length=3), description="Default: HIGHHX_SMTP_FROM."),
+                    "timeout": Prop(Num(minimum=1)),
+                },
+                check=api.email_problems,
+            ),
+            {"accepted": "recipients the server accepted", "refused": "recipients it refused", "message_id": "Message-ID"},
+            Risk.HIGH,
+            ActionKind.READ,
+            (NETWORK,),
+            timeout=120,
+            agent=False,
+            target=lambda i: ", ".join(api.recipients_of(i)),
         ),
     ]
     from highhx.actions.catalog_android import android_specs

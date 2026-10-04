@@ -31,7 +31,7 @@ from highhx.core.errors import HighhXError
 from highhx.execution.retry import RetryPolicy
 from highhx.project.index import KINDS as FILE_KINDS
 from highhx.safety.actions import ActionKind
-from highhx.utils.validation import Bool, Int, List, Map, Num, Obj, Prop, Str
+from highhx.utils.validation import Any_, Bool, Int, List, Map, Num, Obj, Prop, Str
 
 if TYPE_CHECKING:
     from highhx.commands import App
@@ -242,6 +242,33 @@ def _specs() -> list[ActionSpec]:
             idempotent=True,
             retry=READ_RETRY,
             timeout=60,
+        ),
+        ActionSpec(
+            "filesystem.parse",
+            "Read a project file as data: CSV/TSV rows, JSON, JSON Lines, YAML, text, or a PDF/Office document's text.",
+            files.parse,
+            Obj(
+                {
+                    "path": Prop(Str(min_length=1), required=True),
+                    "format": Prop(Str(choices=("auto", *files.PARSERS))),
+                    "limit": Prop(Int(minimum=1, maximum=100000), description="Rows, records or lines."),
+                    "max_text": Prop(Int(minimum=1, maximum=2000000)),
+                }
+            ),
+            {
+                "path": "relative path",
+                "format": "the parser used",
+                "data": "rows / parsed value",
+                "rows": "row count",
+                "columns": "CSV header",
+                "text": "text (text, documents)",
+            },
+            permissions=(READ_PROJECT,),
+            target=lambda i: str(i.get("path", "")),
+            idempotent=True,
+            retry=READ_RETRY,
+            timeout=120,
+            aliases=("file.parse",),
         ),
         ActionSpec(
             "filesystem.write",
@@ -864,7 +891,7 @@ def _specs() -> list[ActionSpec]:
         ),
         ActionSpec(
             "browser.wait",
-            "Wait for seconds, or until text / a URL / a control appears.",
+            "Wait for seconds, until text / a URL / a control appears, until the network is idle, or until a request finishes.",
             native.browser_wait,
             Obj(
                 {
@@ -873,31 +900,59 @@ def _specs() -> list[ActionSpec]:
                     "url_contains": Prop(Str()),
                     "title_contains": Prop(Str()),
                     "element": Prop(Str()),
+                    "network_idle": Prop(Bool(), description="No request in flight for idle_ms."),
+                    "idle_ms": Prop(Int(minimum=50, maximum=60000)),
+                    "request": Prop(
+                        Obj(
+                            {
+                                "url_contains": Prop(Str(min_length=1)),
+                                "method": Prop(Str(min_length=1)),
+                                "status": Prop(Int(minimum=100, maximum=599)),
+                            }
+                        ),
+                        description="A request that finished (matched on the sanitized URL: no query values).",
+                    ),
                     "timeout": Prop(Num(minimum=0)),
                 }
             ),
-            {"waited": "seconds", "step": "outcome"},
+            {"waited": "seconds", "step": "outcome", "network": "the matching request"},
             permissions=(BROWSER,),
             timeout=3700,
             agent=False,
         ),
         ActionSpec(
             "browser.extract",
-            "Read the current page (or open url first): title, text and controls as structured data.",
+            "Read the current page (or open url first): title, text and controls — or, with schema, the fields a JSON Schema asks for.",
             native.browser_extract,
             Obj(
                 {
                     "url": Prop(Str(min_length=1)),
+                    "schema": Prop(
+                        Any_(),
+                        description="A JSON Schema (object of string/number/integer/boolean/array/object) to fill from the page's labels, tables and lists.",
+                    ),
                     "roles": Prop(List(Str(min_length=1))),
                     "limit": Prop(Int(minimum=1, maximum=2000)),
                     "max_text": Prop(Int(minimum=0, maximum=200000)),
                 }
             ),
-            {"url": "page URL", "title": "title", "text": "visible text", "elements": "[{role, name, value}]"},
+            {
+                "url": "page URL",
+                "title": "title",
+                "text": "visible text",
+                "elements": "[{role, name, value}]",
+                "data": "with schema: the extracted fields",
+                "missing": "with schema: required fields not found",
+                "problems": "with schema: ambiguous or unconvertible fields",
+            },
             permissions=(BROWSER,),
             timeout=120,
             agent=False,
             aliases=("browser.read",),
+            # opening a URL first is navigation, classified exactly like browser.open
+            kind_for=lambda i: ActionKind.NAVIGATE if i.get("url") else ActionKind.READ,
+            risk_for=lambda i: Risk.LOW if i.get("url") else Risk.SAFE,
+            target=lambda i: str(i.get("url") or ""),
         ),
         ActionSpec(
             "browser.screenshot",

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from highhx.perception.state import ComputerState
     from highhx.trajectories.store import TrajectoryStore
 
-GROUNDED_VERBS = frozenset({"click", "double_click", "type", "select"})
+GROUNDED_VERBS = frozenset({"click", "double_click", "right_click", "type", "select"})
 STRUCTURED_SOURCES = frozenset({"dom", "ax", "android"})
 
 
@@ -189,6 +189,13 @@ class AgentWorker:
         params = dict(step.parameters)
         if verb in ("click", "double_click"):
             return [self._click(step, surface, state, grounding, count=2 if verb == "double_click" else 1)]
+        if verb == "right_click":
+            return [self._click(step, surface, state, grounding, button="right")]
+        if verb == "hotkey":
+            keys = str(params.get("keys") or step.label)
+            if surface != "desktop":
+                raise UnsupportedStep("hotkey (a key combination) works on the desktop; use press for one key")
+            return [self._request("computer.hotkey", {"keys": keys, **({"app": self.task.app} if self.task.app else {})}, step, None)]
         if verb == "type":
             text = str(params.get("text", ""))
             if surface == "browser":
@@ -242,7 +249,14 @@ class AgentWorker:
         return {"device": self.task.device} if surface == "android" and self.task.device else {}
 
     def _click(
-        self, step: StepIntent, surface: str, state: ComputerState | None, grounding: GroundingResult | None, *, count: int = 1
+        self,
+        step: StepIntent,
+        surface: str,
+        state: ComputerState | None,
+        grounding: GroundingResult | None,
+        *,
+        count: int = 1,
+        button: str = "left",
     ) -> ActionRequest:
         if grounding is None or grounding.candidate is None:
             point = step.parameters
@@ -258,6 +272,11 @@ class AgentWorker:
             if where is None:
                 raise UnsupportedStep("the target has no position")
             x, y = where
+        if button == "right":  # a context menu: by position (Android's equivalent is a long press)
+            if surface == "android":
+                return self._request("android.long_press", {"x": x, "y": y, **self._device(surface)}, step, grounding)
+            name = "browser.click_at" if surface == "browser" else "computer.click_at"
+            return self._request(name, {"x": x, "y": y, "button": "right"}, step, grounding)
         if surface == "browser":
             if element is not None and set(element.sources) & STRUCTURED_SOURCES and state is not None and count == 1:
                 return self._request("browser.click", {"target": _browser_selector(element, state)}, step, grounding)

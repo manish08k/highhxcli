@@ -2717,6 +2717,17 @@ environment variables, permissions and service ports.
 highhx doctor [OPTIONS]
 ```
 
+### `highhx capabilities`
+
+Browser, desktop, Android, OCR, sandboxes, remote computers, models, MCP, workflows:
+each one available, unavailable (and what to install), not configured, or not implemented —
+decided by looking, without starting a browser or contacting a model. "Experimental" marks
+what is implemented but not validated on a real platform in this build.
+
+```
+highhx capabilities [OPTIONS]
+```
+
 ### `highhx diagnose`
 
 Find concrete failures: invalid config or workflows, tools missing for

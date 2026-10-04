@@ -99,7 +99,7 @@ class ActionGate:
     def _event(self, action: ActionDescriptor, verdict: SafetyVerdict, decision: str) -> AuditEvent:
         return AuditEvent(
             self.source,
-            action,
+            _for_audit(action),
             decision,
             verdict=verdict,
             session_id=self.session_id,
@@ -173,12 +173,12 @@ class ActionGate:
             return Authorization(action, verdict, "confirmed", ticket, self._event(action, verdict, "confirmed"))
         except PolicyViolationError as exc:
             event = self._event(action, verdict, "blocked" if verdict.blocked or verdict.agent_blocked else "policy")
-            event.status, event.error = "skipped", exc.message
+            event.status, event.error = "skipped", _audit_text(action, exc.message)
             self._record(event)
             raise
         except ApprovalDeniedError as exc:
             event = self._event(action, verdict, "denied")
-            event.status, event.error = "skipped", exc.message
+            event.status, event.error = "skipped", _audit_text(action, exc.message)
             self._record(event)
             raise
 
@@ -226,3 +226,22 @@ class ActionGate:
             raise
         finally:
             self._record(event)
+
+
+def _for_audit(action: ActionDescriptor) -> ActionDescriptor:
+    """What the audit log keeps of ``action``. A navigation's URL keeps its query parameter names
+    only (``?token=…``): classification, the approval prompt and the ticket saw the whole URL."""
+    if action.kind != ActionKind.NAVIGATE or "?" not in action.target:
+        return action
+    import dataclasses
+
+    from highhx.computer.network import sanitize_url
+
+    clean = sanitize_url(action.target)
+    return dataclasses.replace(action, target=clean, summary=action.summary.replace(action.target, clean))
+
+
+def _audit_text(action: ActionDescriptor, text: str) -> str:
+    """``text`` (an error that quotes the action) with a navigation's URL as the audit keeps it."""
+    cleaned = _for_audit(action)
+    return text.replace(action.target, cleaned.target) if cleaned is not action else text

@@ -261,7 +261,63 @@ def browser_press(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     return _flow_step(ctx, {"press": str(inputs["key"])})
 
 
+NETWORK_LOOKBACK = 2.0
+"""Seconds before a wait began that still count for ``request`` (the click that sent it came first)."""
+
+
+def _wait_for_network(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """``network_idle``: no request in flight and none started or finished for ``idle_ms``.
+    ``request``: a request matching ``url_contains`` / ``method`` / ``status`` finished during
+    the wait or in the :data:`NETWORK_LOOKBACK` seconds before it. Evidence comes from the
+    sanitized journal only; without one the wait fails rather than guessing."""
+    browser = getattr(ctx.computer(), "browser", None)
+    journal: Any = getattr(browser, "network", None)
+    if browser is None or journal is None or not callable(getattr(journal, "inflight", None)):
+        return ActionResult(False, error="network evidence is not available for this browser")
+    if getattr(browser, "_conn", None) is None:
+        _runtime(ctx).observe()  # connect (the journal fills only while connected)
+    timeout = float(inputs.get("timeout") or 30)
+    deadline = time.monotonic() + timeout
+    began = time.monotonic()
+    wanted = dict(inputs.get("request") or {})
+    idle = float(inputs.get("idle_ms") or 500) / 1000
+    while True:
+        browser.pump_events(0.1, cancel=ctx.cancel)
+        if wanted:
+            status = wanted.get("status")
+            found = journal.find(
+                0,
+                url_contains=str(wanted.get("url_contains") or ""),
+                method=str(wanted.get("method") or ""),
+                status=int(status) if status is not None else None,
+                finished_after=began - NETWORK_LOOKBACK,
+            )
+            if found is not None:
+                return ActionResult(
+                    True,
+                    output={"network": [found], "waited": round(time.monotonic() - began, 3)},
+                    summary=f"{found['method']} {found['url']} → {found.get('status') or found.get('error')}",
+                    verified=True,
+                )
+        elif journal.inflight() == 0 and journal.idle_for() >= idle:
+            waited = round(time.monotonic() - began, 3)
+            return ActionResult(
+                True, output={"waited": waited}, summary=f"network idle after {waited:g}s", verified=True
+            )
+        if ctx.cancel.cancelled:
+            from highhx.core.errors import OperationCancelledError
+
+            raise OperationCancelledError("Wait cancelled.")
+        if time.monotonic() > deadline:
+            what = (
+                f"a request matching {wanted}" if wanted else f"the network to be idle ({journal.inflight()} in flight)"
+            )
+            return ActionResult(False, error=f"timed out after {timeout:g}s waiting for {what}")
+
+
 def browser_wait(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    if inputs.get("network_idle") or inputs.get("request"):
+        return _wait_for_network(ctx, inputs)
     expect = {k: inputs[k] for k in ("text", "url_contains", "title_contains", "element") if inputs.get(k)}
     if expect:
         return _flow_step(ctx, {"expect": expect}, float(inputs.get("timeout") or 10))
@@ -276,6 +332,8 @@ def browser_extract(ctx: ActionContext, inputs: Inputs) -> ActionResult:
         outcome = runtime.navigate(str(inputs["url"]))
         if not outcome.ok:
             return ActionResult(False, error="; ".join(outcome.problems), summary="could not open the page")
+    if inputs.get("schema") is not None:
+        return _extract_structured(ctx, inputs["schema"])
     observation = runtime.observe()
     roles = set(inputs.get("roles") or [])
     elements = [
@@ -292,6 +350,36 @@ def browser_extract(ctx: ActionContext, inputs: Inputs) -> ActionResult:
             "elements": elements,
         },
         summary=f"{observation.title or observation.url} · {len(elements)} element(s)",
+    )
+
+
+def _extract_structured(ctx: ActionContext, schema: Any) -> ActionResult:
+    """The page as data shaped by ``schema`` (see :mod:`highhx.computer.extract`): explicit labels,
+    tables and lists only; missing required or ambiguous fields fail instead of being guessed."""
+    from highhx.computer.extract import STRUCTURE_JS, check_schema, extract
+
+    problems = check_schema(schema)
+    if not problems and schema.get("type") != "object":
+        problems = ["schema: the top level must be an object"]
+    if problems:
+        return ActionResult(False, error="unsupported schema: " + "; ".join(problems[:5]))
+    page = ctx.computer().browser.evaluate(STRUCTURE_JS, cancel=ctx.cancel, retry_safe=True) or {}
+    found = extract(schema, page)
+    detail = "; ".join([*(f"missing {m}" for m in found.missing), *found.problems][:8])
+    return ActionResult(
+        found.ok,
+        output={
+            "url": str(page.get("url") or ""),
+            "title": str(page.get("title") or ""),
+            "data": found.data,
+            "sources": found.sources,
+            "missing": found.missing,
+            "problems": found.problems,
+        },
+        summary=f"extracted {len(found.data)} of {len(schema['properties'])} field(s)"
+        + (f" — {detail}" if detail else ""),
+        verified=found.ok,
+        error="" if found.ok else detail,
     )
 
 

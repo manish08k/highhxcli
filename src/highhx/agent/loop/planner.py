@@ -117,7 +117,8 @@ Answer with exactly one JSON object and nothing else:
   {"thought": "...", "done": true, "summary": "<what was achieved, with evidence>"}
   {"thought": "...", "ask_user": "<the question>"}
 
-Verbs: click, double_click, type (parameters.text; target = the field), press (parameters.key),
+Verbs: click, double_click, right_click (a context menu), type (parameters.text; target = the field),
+press (parameters.key), hotkey (parameters.keys, e.g. "cmd+c"; desktop only),
 scroll (parameters.direction), open (parameters.url), launch (parameters.name or package),
 back, home, select (parameters.option), wait.
 Other actions (exact catalog names) when allowed: {actions}

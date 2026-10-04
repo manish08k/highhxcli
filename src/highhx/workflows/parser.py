@@ -99,6 +99,8 @@ def _step(data: dict[str, Any]) -> StepSpec:
         approval=_approval(data.get("approval")),
         continue_on_error=bool(data.get("continue_on_error", False)),
         shell=data.get("shell"),  # nosec B604 - parses the user's workflow `shell` setting; no execution here
+        for_each=data.get("for_each"),
+        verify=dict(data["verify"]) if isinstance(data.get("verify"), dict) else None,
     )
 
 

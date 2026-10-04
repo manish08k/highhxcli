@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from highhx.computer.browser import ChromeBrowser
 from highhx.computer.desktop import TesseractOCR, app_installed, launch_command, resolve_app
@@ -101,6 +101,12 @@ class ComputerSession:
         from highhx.drivers.android.adb import AdbClient
 
         return AdbClient(serial=serial or None, cancel=cancel or self.cancel)
+
+    def android_emulator(self, cancel: CancellationToken | None = None) -> Any:
+        """The Android emulator controller (a test session supplies a simulated one)."""
+        from highhx.drivers.android.emulator import Emulator
+
+        return Emulator(adb=self.android_client(None, cancel), cancel=cancel or self.cancel)
 
     # ------------------------------------------------------------- providers
     @property

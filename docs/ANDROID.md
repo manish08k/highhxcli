@@ -36,10 +36,37 @@ has been driven by this build.**
 | `android.stop` | medium | force-stop |
 | `android.install` / `uninstall` | high | policy names `android:install` / `android:delete` |
 | `android.connect` | low | `adb connect host:port` |
+| `android.emulators` | safe | the SDK emulator's AVDs |
+| `android.emulator_start` | medium; high with `wipe` | starts an AVD detached (`-no-window`, `-grpc 8554` by default, `-no-snapshot-save`) and waits for `sys.boot_completed` |
+| `android.emulator_stop` | medium | `adb emu kill`; refuses serials that are not emulators |
 
 Safety details: every adb call is an argv list (no host shell). Text for `input text` is quoted
 for the device shell (`; rm -rf /` stays text). Package names, activities, serials and property
 names are validated.
+
+## Emulators and AndroidWorld-style tasks
+
+The emulator is found as `$HIGHHX_EMULATOR`, `emulator` on `PATH`, or
+`$ANDROID_HOME`/`$ANDROID_SDK_ROOT``/emulator/emulator`; its log goes to the user data
+directory. AndroidWorld expects an emulator with gRPC on 8554, the default here.
+
+[`benchmarks/environments/android_world.py`](../src/highhx/benchmarks/environments/android_world.py)
+mirrors AndroidWorld's task contract with adb as the environment: `initialize_task`,
+`is_successful` (0.0–1.0, read from the device), `tear_down`, `complexity`, `params`. Tasks are
+Python classes registered by name (`open_app`, `screen_shows_text` are built in), and a
+benchmark suite refers to them by name, so a YAML file never imports code:
+
+```yaml
+- id: open-settings
+  environment: {kind: android_device, task: open_app, params: {package: com.android.settings}}
+  planner: {kind: scripted, steps: [{action: launch, parameters: {name: com.android.settings}}]}
+```
+
+The agent loop acts through the executor; the task's own `is_successful` decides. Without adb or
+a ready device the task is listed under `skipped` with the reason: neither passed nor failed.
+
+**Status:** implemented and tested with a fake emulator binary and simulated adb only. It is
+experimental until it has run against a real emulator.
 
 ## Driver
 

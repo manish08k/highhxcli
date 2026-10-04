@@ -36,6 +36,11 @@ steps:                           # required, at least one
   - id: reuse
     uses: tests                  # run another workflow as this step
     with: {marker: "not slow"}   # its inputs
+  - id: notify
+    action: email.send           # any catalog action (see `highhx actions`)
+    for_each: [ops@example.com, dev@example.com]   # or an expression giving a list
+    with: {to: ["${{ item }}"], subject: "build ${{ execution.id }}", body: done}
+    verify: {exit_code: 0}       # a declarative check after the step succeeds
 outputs:
   image: ${{ steps.build.outputs.image }}
 ```
@@ -69,10 +74,39 @@ with a one-second initial delay.
 | Operators | `==` `!=` `<` `<=` `>` `>=` `&&`/`and` `\|\|`/`or` `!`/`not`, parentheses |
 | Literals | `'text'`, `"text"`, `42`, `true`, `false`, `null` |
 | Status functions | `success()`, `failure()`, `always()`, `cancelled()` |
-| Functions | `contains(a, b)`, `startsWith(a, b)`, `endsWith(a, b)`, `format('{0}-{1}', a, b)`, `toJSON(x)`, `exists('path')` |
+| Functions | `contains(a, b)`, `startsWith(a, b)`, `endsWith(a, b)`, `format('{0}-{1}', a, b)`, `toJSON(x)`, `fromJSON(text)`, `exists('path')` |
+| Loop contexts | `item`, `loop.index` (from 0), `loop.number` (from 1), `loop.count`, `loop.first`, `loop.last` — only in a `for_each` step |
 
 String comparison is case-insensitive. A condition without a status function is
 implicitly `success() && (…)`.
+
+## Loops, validation and data blocks
+
+These came from comparing HighhX with Skyvern's workflow blocks (see
+[REFERENCE_AUDIT.md](REFERENCE_AUDIT.md)); each is an ordinary step, so every iteration and
+every block is classified, approved, audited and recorded like any other action.
+
+- **`for_each`**: a list, or one `${{ … }}` expression giving a list (or a JSON list, e.g.
+  `${{ fromjson(steps.rows.outputs.data) }}`), at most 1000 items. Items run in order; the
+  step's own `approval` is asked once; the first failure stops the loop. Outputs: `results` (a
+  JSON list of each iteration's outputs), `count`, and `failed_index` on failure. Runtime items
+  spliced into a `run:` command line are flagged by `workflow validate` (pass them through
+  `env:`), and the resulting command is still classified, so an injected `; rm -rf ~` is asked
+  for, never run silently.
+- **`verify`**: a declarative check (`file`, `text`, `exit_code`, `network`, `http_response`,
+  `all`/`any` …, defined in
+  [`verification/declarative.py`](../src/highhx/verification/declarative.py)) evaluated after
+  the step succeeds. Strings may use expressions. Not satisfied, or undecidable, fails the step.
+- **`filesystem.parse`**: CSV/TSV (rows keyed by the header), JSON, JSON Lines, YAML (safe
+  loader), text, and the text of PDFs (needs `pdftotext`) and Office documents. Read-only,
+  confined to the project, secret files refused.
+- **`api.request`**: one HTTP(S) request (changes and credentials are high risk and asked).
+- **`email.send`**: plain-text mail through `HIGHHX_SMTP_*`: high risk (always asked), the
+  password only from `HIGHHX_SMTP_PASSWORD`, TLS required unless the server is on this
+  computer, recipients and subject checked for header injection, the body logged only as its
+  length. Partial delivery is reported as a failure listing the refused recipients.
+- **`browser.extract` with `schema`**: page data shaped by a JSON Schema
+  ([BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md#structured-extraction)).
 
 ## Step outputs
 

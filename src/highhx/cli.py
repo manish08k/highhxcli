@@ -31,7 +31,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Workflows & automation", ("workflow", "actions", "schedule", "hook", "trigger", "watchers")),
     ("Observability", ("logs", "history", "events", "audit", "report", "trace", "runs")),
     ("Extensibility & team", ("plugin", "mcp", "config", "policy", "workspace", "profile")),
-    ("Diagnostics", ("doctor", "diagnose", "repair", "debug")),
+    ("Diagnostics", ("doctor", "capabilities", "diagnose", "repair", "debug")),
 )
 
 GLOBAL_EPILOG = (

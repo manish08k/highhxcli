@@ -63,7 +63,7 @@ def default_check(step: StepIntent, before: ComputerState | None) -> dict[str, A
         if element is not None and element.secret:
             return None
         return {"any": [{"element": {"name": step.label, "value": str(step.parameters["text"])}}, {"text": str(step.parameters["text"])}]}
-    if verb in ("click", "double_click", "press", "select", "back", "home", "scroll"):
+    if verb in ("click", "double_click", "right_click", "press", "hotkey", "select", "back", "home", "scroll"):
         return {"changed": True} if before is not None else None
     if verb == "open":
         host = urlparse(str(step.parameters.get("url") or step.label)).hostname

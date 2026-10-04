@@ -22,13 +22,13 @@ from highhx.execution.command import CommandSpec
 from highhx.utils.hashing import new_id
 from highhx.utils.platform import system_name
 from highhx.workflows import running
-from highhx.workflows.conditions import EvalContext, ExpressionError, evaluate_condition
+from highhx.workflows.conditions import EvalContext, ExpressionError, evaluate, evaluate_condition
 from highhx.workflows.dependency_graph import DependencyGraph
 from highhx.workflows.loader import WorkflowLoader
 from highhx.workflows.resolver import resolve_inputs, reusable_workflows
-from highhx.workflows.schema import StepSpec, WorkflowSpec
+from highhx.workflows.schema import MAX_ITERATIONS, StepSpec, WorkflowSpec
 from highhx.workflows.validator import validate_spec
-from highhx.workflows.variables import interpolate, interpolate_mapping, try_interpolate
+from highhx.workflows.variables import INTERPOLATION_RE, interpolate, interpolate_mapping, try_interpolate
 
 if TYPE_CHECKING:
     from highhx.actions.executor import ActionExecutor, Planned
@@ -153,6 +153,7 @@ class WorkflowEngine:
         extra_env: Mapping[str, str] | None = None,
         status: Mapping[str, bool] | None = None,
         strict: bool = True,
+        extra: Mapping[str, Any] | None = None,
     ) -> EvalContext:
         env = {**os.environ, **self.engine.ctx.env, **(extra_env or {})}
         data: dict[str, Any] = {
@@ -167,6 +168,7 @@ class WorkflowEngine:
             "execution": {"id": execution_id},
             "platform": system_name(),
             "project": {"root": str(self.root), "name": self.project_name},
+            **(extra or {}),
         }
         return EvalContext(
             data=data,
@@ -418,20 +420,162 @@ class WorkflowEngine:
         depth: int,
         completed_actions: list[tuple[str, Planned, ActionResult]] | None = None,
     ) -> StepResult:
+        if step.for_each is None:
+            return self._execute_once(
+                spec, step, token, scheduler, inputs, workflow_env, execution_id, depth, completed_actions
+            )
+        return self._execute_loop(
+            spec, step, token, scheduler, inputs, workflow_env, execution_id, depth, completed_actions
+        )
+
+    def _loop_items(self, step: StepSpec, ctx: EvalContext) -> list[Any]:
+        raw = step.for_each
+        value: Any = raw
+        if isinstance(raw, str):
+            match = INTERPOLATION_RE.fullmatch(raw.strip())
+            value = evaluate(match.group(1), ctx) if match else interpolate(raw, ctx)
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    raise ExpressionError("for_each must give a list (or a JSON list)") from None
+        if not isinstance(value, list):
+            raise ExpressionError(f"for_each must give a list, not {type(value).__name__}")
+        if len(value) > MAX_ITERATIONS:
+            raise ExpressionError(f"for_each gives {len(value)} items (at most {MAX_ITERATIONS})")
+        return value
+
+    def _execute_loop(
+        self,
+        spec: WorkflowSpec,
+        step: StepSpec,
+        token: CancellationToken,
+        scheduler: Any,
+        inputs: Mapping[str, Any],
+        workflow_env: Mapping[str, str],
+        execution_id: str,
+        depth: int,
+        completed_actions: list[tuple[str, Planned, ActionResult]] | None,
+    ) -> StepResult:
+        """Run the step once per item, in order. Every iteration is a full step (its action or
+        commands are classified, approved, audited and verified like any other); the step's own
+        ``approval`` is asked once. The first failure stops the loop."""
+        began = time.monotonic()
+        ctx = self._base_context(spec, inputs, scheduler.snapshot(), execution_id, workflow_env)
+        try:
+            items = self._loop_items(step, ctx)
+        except ExpressionError as exc:
+            return StepResult(step.id, Status.FAILED, message=f"for_each: {exc}", duration=time.monotonic() - began)
+        commands: list[CommandResult] = []
+        collected: list[dict[str, str]] = []
+        for index, item in enumerate(items):
+            if token.cancelled:
+                return StepResult(step.id, Status.CANCELLED, commands, message=f"cancelled at item {index + 1}")
+            loop = {
+                "index": index,
+                "number": index + 1,
+                "count": len(items),
+                "first": index == 0,
+                "last": index == len(items) - 1,
+            }
+            try:
+                result = self._execute_once(
+                    spec,
+                    step,
+                    token,
+                    scheduler,
+                    inputs,
+                    workflow_env,
+                    execution_id,
+                    depth,
+                    completed_actions,
+                    extra={"item": item, "loop": loop},
+                    preapproved=index > 0,
+                )
+            except HighhXError as exc:  # a refused approval keeps its meaning; it says which item
+                exc.message = f"item {index + 1} of {len(items)}: {exc.message}"
+                raise
+            commands += result.commands
+            collected.append(result.outputs)
+            if result.status != Status.SUCCESS:
+                return StepResult(
+                    step.id,
+                    result.status,
+                    commands,
+                    outputs={"results": json.dumps(collected), "count": str(index), "failed_index": str(index)},
+                    message=f"item {index + 1} of {len(items)}: {result.message}",
+                    duration=time.monotonic() - began,
+                    allowed_failure=step.continue_on_error and result.status in (Status.FAILED, Status.TIMEOUT),
+                )
+        return StepResult(
+            step.id,
+            Status.SUCCESS,
+            commands,
+            outputs={"results": json.dumps(collected), "count": str(len(items))},
+            message=f"{len(items)} item(s)",
+            duration=time.monotonic() - began,
+        )
+
+    def _verify(self, step: StepSpec, ctx: EvalContext, outcome: StepResult, result: ActionResult | None) -> StepResult:
+        """The step's ``verify`` check, after it succeeded (a validation block). Strings in the check
+        may use expressions. A check that is not satisfied — or cannot be decided — fails the step."""
+        if step.verify is None or outcome.status != Status.SUCCESS:
+            return outcome
+        from highhx.verification.declarative import Verdict, VerificationContext, verify
+
+        try:
+            check = self._action_inputs(step.verify, ctx)
+        except ExpressionError as exc:
+            outcome.status, outcome.message = Status.FAILED, f"verify: variable error: {exc}"
+            return outcome
+        if result is None:
+            from highhx.actions.spec import ActionResult as Result
+
+            code = outcome.exit_code
+            result = Result(True, output={**outcome.outputs, **({"exit_code": code} if code is not None else {})})
+        network = result.output.get("network")
+        report = verify(
+            check,
+            VerificationContext(result=result, root=self.root, network=network if isinstance(network, list) else None),
+        )
+        self.engine.ctx.events.emit(
+            "verification.completed", step=step.id, verdict=str(report.verdict), source="workflow"
+        )
+        if report.verdict != Verdict.SATISFIED:
+            outcome.status = Status.FAILED
+            outcome.message = f"verification {report.verdict}: {report.result.detail}"
+            outcome.allowed_failure = step.continue_on_error
+        return outcome
+
+    def _execute_once(
+        self,
+        spec: WorkflowSpec,
+        step: StepSpec,
+        token: CancellationToken,
+        scheduler: Any,
+        inputs: Mapping[str, Any],
+        workflow_env: Mapping[str, str],
+        execution_id: str,
+        depth: int,
+        completed_actions: list[tuple[str, Planned, ActionResult]] | None = None,
+        *,
+        extra: Mapping[str, Any] | None = None,
+        preapproved: bool = False,
+    ) -> StepResult:
         began = time.monotonic()
         results = scheduler.snapshot()
-        ctx = self._base_context(spec, inputs, results, execution_id, workflow_env)
+        ctx = self._base_context(spec, inputs, results, execution_id, workflow_env, extra=extra)
         try:
             step_env = {**workflow_env, **interpolate_mapping(step.env, ctx)}
-            ctx = self._base_context(spec, inputs, results, execution_id, step_env)
+            ctx = self._base_context(spec, inputs, results, execution_id, step_env, extra=extra)
             cwd = self._resolve_cwd(spec, step, ctx)
         except ExpressionError as exc:
             return StepResult(
                 step.id, Status.FAILED, message=f"variable error: {exc}", duration=time.monotonic() - began
             )
 
-        approved = False
-        if step.approval is not None:
+        approved = preapproved and step.approval is not None
+        if step.approval is not None and not preapproved:
             details = [step.approval.message] if step.approval.message else []
             details += [try_interpolate(c, ctx) for c in step.run] or [f"runs workflow '{step.uses}'"]
             self.engine.approve(
@@ -444,7 +588,8 @@ class WorkflowEngine:
             approved = True
 
         if step.action:
-            return self._action_step(step, token, ctx, began, completed_actions)
+            outcome, action_result = self._action_step(step, token, ctx, began, completed_actions)
+            return self._verify(step, ctx, outcome, action_result)
 
         if step.uses:
             try:
@@ -453,13 +598,18 @@ class WorkflowEngine:
                 return StepResult(step.id, Status.FAILED, message=f"variable error: {exc}")
             child = self.run(step.uses, inputs=child_inputs, env=step_env, cancel=token, _depth=depth + 1)
             child_status = child.status if child.status != Status.SKIPPED else Status.SUCCESS
-            return StepResult(
-                step.id,
-                child_status,
-                outputs=child.outputs,
-                message=f"workflow '{step.uses}' {child.status}",
-                duration=time.monotonic() - began,
-                allowed_failure=step.continue_on_error and child_status in (Status.FAILED, Status.TIMEOUT),
+            return self._verify(
+                step,
+                ctx,
+                StepResult(
+                    step.id,
+                    child_status,
+                    outputs=child.outputs,
+                    message=f"workflow '{step.uses}' {child.status}",
+                    duration=time.monotonic() - began,
+                    allowed_failure=step.continue_on_error and child_status in (Status.FAILED, Status.TIMEOUT),
+                ),
+                None,
             )
 
         commands: list[CommandResult] = []
@@ -514,7 +664,7 @@ class WorkflowEngine:
         else:
             status = last.status
             message = last.error or f"exit code {last.exit_code}"
-        return StepResult(
+        outcome = StepResult(
             step.id,
             status,
             commands,
@@ -523,6 +673,7 @@ class WorkflowEngine:
             duration=time.monotonic() - began,
             allowed_failure=step.continue_on_error and status in (Status.FAILED, Status.TIMEOUT),
         )
+        return self._verify(step, ctx, outcome, None)
 
     def _action_inputs(self, values: Mapping[str, Any], ctx: EvalContext) -> dict[str, Any]:
         def expand(value: Any) -> Any:
@@ -543,17 +694,17 @@ class WorkflowEngine:
         ctx: EvalContext,
         began: float,
         completed_actions: list[tuple[str, Planned, ActionResult]] | None,
-    ) -> StepResult:
+    ) -> tuple[StepResult, ActionResult | None]:
         assert step.action is not None
         try:
             inputs = self._action_inputs(step.with_, ctx)
         except ExpressionError as exc:
-            return StepResult(step.id, Status.FAILED, message=f"variable error: {exc}")
+            return StepResult(step.id, Status.FAILED, message=f"variable error: {exc}"), None
         try:
             planned = self.actions.plan(step.action, inputs)
         except HighhXError as exc:
             detail = "; ".join(exc.details[:3])
-            return StepResult(step.id, Status.FAILED, message=exc.message + (f": {detail}" if detail else ""))
+            return StepResult(step.id, Status.FAILED, message=exc.message + (f": {detail}" if detail else "")), None
         result = self.actions.execute(planned, cancel=token)
         if result.ok and completed_actions is not None:
             with self._lock:
@@ -571,7 +722,7 @@ class WorkflowEngine:
             message=result.summary if result.ok else (result.error or result.summary or result.status),
             duration=time.monotonic() - began,
             allowed_failure=step.continue_on_error and status in (Status.FAILED, Status.TIMEOUT),
-        )
+        ), result
 
     def _rollback(
         self,

@@ -64,6 +64,48 @@ def devices(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     )
 
 
+def _emulator(ctx: ActionContext) -> Any:
+    factory = getattr(ctx.computer(), "android_emulator", None)
+    if factory is not None:
+        return factory(ctx.cancel)
+    from highhx.drivers.android.emulator import Emulator
+
+    return Emulator(cancel=ctx.cancel)
+
+
+def emulators(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    emulator = _emulator(ctx)
+    if not emulator.emulator:
+        from highhx.drivers.android.emulator import INSTALL_HINT
+
+        detail = f"The Android emulator was not found. {INSTALL_HINT}"
+        return ActionResult(True, output={"available": False, "detail": detail, "avds": []}, summary=detail)
+    avds = emulator.avds()
+    return ActionResult(True, output={"available": True, "emulator": emulator.emulator, "avds": avds}, summary=f"{len(avds)} AVD(s)")
+
+
+def emulator_start(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    from highhx.utils.paths import user_data_dir
+
+    avd = str(inputs["avd"])
+    log = user_data_dir() / "android" / f"emulator-{avd}.log"
+    started = _emulator(ctx).start(
+        avd,
+        log=log,
+        grpc_port=int(inputs.get("grpc_port") or 8554),
+        headless=not inputs.get("window"),
+        wipe=bool(inputs.get("wipe")),
+        timeout=float(inputs.get("timeout") or 300),
+    )
+    return ActionResult(True, output=started, summary=f"{avd} booted as {started['serial']}", verified=True)
+
+
+def emulator_stop(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    serial = str(inputs["device"])
+    _emulator(ctx).stop(serial)
+    return ActionResult(True, output={"serial": serial}, summary=f"stopped {serial}")
+
+
 def connect(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     adb = _adb(ctx)
     out = adb.connect(str(inputs["address"]))

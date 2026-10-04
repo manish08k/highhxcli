@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -105,4 +106,98 @@ def request(ctx: ActionContext, inputs: Inputs) -> ActionResult:
         verified=ok,
         error="" if ok else f"{method} {url} returned {status}",
         retryable=method in SAFE_METHODS,
+    )
+
+
+# ------------------------------------------------------------------- email
+SMTP_ENV = {
+    "host": "HIGHHX_SMTP_HOST",
+    "port": "HIGHHX_SMTP_PORT",
+    "user": "HIGHHX_SMTP_USER",
+    "password": "HIGHHX_SMTP_PASSWORD",
+    "sender": "HIGHHX_SMTP_FROM",
+}
+MAX_RECIPIENTS = 20
+MAX_BODY = 200_000
+_ADDRESS = re.compile(r"^[^@\s<>,;\"]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}$|^[^@\s<>,;\"]{1,64}@localhost$")
+
+
+def recipients_of(inputs: Inputs) -> list[str]:
+    return [str(a) for key in ("to", "cc") for a in (inputs.get(key) or [])]
+
+
+def email_problems(inputs: Inputs) -> list[str]:
+    """Addresses that are not single plain addresses, header injection, oversized mail."""
+    problems = [f"not a single e-mail address: {a[:60]!r}" for a in recipients_of(inputs) if not _ADDRESS.match(a)]
+    if len(recipients_of(inputs)) > MAX_RECIPIENTS:
+        problems.append(f"at most {MAX_RECIPIENTS} recipients")
+    if any(c in str(inputs.get("subject") or "") for c in "\r\n"):
+        problems.append("the subject may not contain line breaks")
+    if len(str(inputs.get("body") or "")) > MAX_BODY:
+        problems.append("the body is too large")
+    return problems
+
+
+def email_send(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """Send a plain-text e-mail through the SMTP server in ``HIGHHX_SMTP_*``. The password comes only
+    from the environment (never an input, so never in history or audit). TLS is required — port
+    465 (implicit) or STARTTLS — unless the server is on this computer (a local relay or test
+    server). Always asked first (high risk); the body is shown and logged only as its length."""
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+    from email.utils import make_msgid
+
+    problems = email_problems(inputs)
+    if problems:
+        raise ToolError("; ".join(problems[:3]))
+    env = {k: os.environ.get(v, "") for k, v in SMTP_ENV.items()}
+    if not env["host"]:
+        raise ToolError(
+            f"No SMTP server is configured: set {SMTP_ENV['host']}, {SMTP_ENV['port']}, {SMTP_ENV['user']},"
+            f" {SMTP_ENV['password']} and {SMTP_ENV['sender']}."
+        )
+    sender = str(inputs.get("from") or env["sender"] or env["user"])
+    if not _ADDRESS.match(sender):
+        raise ToolError(f"Set {SMTP_ENV['sender']} to the sender's address.")
+    port = int(env["port"] or 587)
+    local = is_loopback(f"smtp://{env['host']}")
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = ", ".join(str(a) for a in inputs["to"])
+    if inputs.get("cc"):
+        message["Cc"] = ", ".join(str(a) for a in inputs["cc"])
+    message["Subject"] = str(inputs["subject"])
+    message["Message-ID"] = make_msgid(domain=sender.rsplit("@", 1)[-1])
+    message.set_content(str(inputs.get("body") or ""))
+    timeout = float(inputs.get("timeout") or 30)
+    context = ssl.create_default_context()
+    try:
+        if port == 465:
+            client: smtplib.SMTP = smtplib.SMTP_SSL(env["host"], port, timeout=timeout, context=context)
+        else:
+            client = smtplib.SMTP(env["host"], port, timeout=timeout)
+        with client:
+            client.ehlo()
+            if port != 465:
+                if client.has_extn("starttls"):
+                    client.starttls(context=context)
+                    client.ehlo()
+                elif not local:
+                    raise ToolError(
+                        f"{env['host']} does not offer TLS (STARTTLS); refusing to send the password and mail in clear text."
+                    )
+            if env["user"] and env["password"]:
+                client.login(env["user"], env["password"])
+            refused = client.send_message(message, from_addr=sender, to_addrs=recipients_of(inputs))
+    except (smtplib.SMTPException, OSError) as exc:
+        detail = str(exc).replace(env["password"], "…") if env["password"] else str(exc)
+        return ActionResult(False, error=f"the mail server refused or failed: {detail[:200]}")
+    delivered = [a for a in recipients_of(inputs) if a not in refused]
+    return ActionResult(
+        bool(delivered) and not refused,
+        output={"accepted": delivered, "refused": sorted(refused), "message_id": message["Message-ID"]},
+        summary=f"sent to {len(delivered)} recipient(s)" + (f", {len(refused)} refused" if refused else ""),
+        verified=not refused,
+        error="" if not refused else f"refused: {', '.join(sorted(refused))}",
     )

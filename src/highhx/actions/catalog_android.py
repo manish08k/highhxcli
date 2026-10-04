@@ -48,6 +48,36 @@ def _spec(name: str, description: str, handler, inputs: Obj, risk: Risk, kind: A
 def android_specs() -> list[ActionSpec]:
     return [
         _spec("android.devices", "List connected Android devices and emulators (adb).", android.devices, Obj({}), Risk.SAFE, ActionKind.READ, idempotent=True),
+        _spec("android.emulators", "List the Android emulator's virtual devices (AVDs).", android.emulators, Obj({}), Risk.SAFE, ActionKind.READ, idempotent=True),
+        _spec(
+            "android.emulator_start",
+            "Start an Android emulator (AVD) headless with gRPC (AndroidWorld uses 8554) and wait until it has booted.",
+            android.emulator_start,
+            Obj(
+                {
+                    "avd": Prop(Str(min_length=1), required=True),
+                    "grpc_port": Prop(Int(minimum=1024, maximum=65535)),
+                    "window": Prop(Bool(), description="Show the emulator window."),
+                    "wipe": Prop(Bool(), description="Wipe the AVD's data first (factory reset)."),
+                    "timeout": Prop(Int(minimum=10, maximum=1800)),
+                }
+            ),
+            Risk.MEDIUM,
+            ActionKind.APP_LAUNCH,
+            target=lambda i: str(i.get("avd", "")),
+            risk_for=lambda i: Risk.HIGH if i.get("wipe") else Risk.MEDIUM,
+            timeout=1900,
+            outputs={"serial": "the emulator's adb serial", "pid": "emulator process", "log": "its log file"},
+        ),
+        _spec(
+            "android.emulator_stop",
+            "Stop a running emulator (adb emu kill).",
+            android.emulator_stop,
+            Obj({"device": Prop(Str(min_length=1), required=True, description="e.g. emulator-5554")}),
+            Risk.MEDIUM,
+            ActionKind.EXEC,
+            target=lambda i: str(i.get("device", "")),
+        ),
         _spec(
             "android.connect",
             "Connect to a device over the network (adb connect host:port).",

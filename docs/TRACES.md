@@ -16,6 +16,7 @@ Task          'Export the invoices'  [completed]  — tr_0c04e059d287 · task_a0
 ├── Step          2  export the invoices  [done]
 │   ├── Grounding     'Export'  [grounded]  — accessibility failed → dom success
 │   ├── Action        browser.click  [ok]  — risk low · not asked · 0.31s (execution …)
+│   ├── Network       1 request(s)  — POST https://shop.test/api/export → 201 84ms
 │   ├── Verification  success
 │   └── Healed        'Export' → 'Download CSV'  — dom, accessibility no longer matched
 ├── Verification  satisfied
@@ -34,3 +35,6 @@ directory). They are written by `highhx agent loop`, browser replays, `highhx re
 and any `AgentLoop` given a `TraceStore`, including on interruption. The execution ids in a trace
 link to `highhx history` and `highhx trace EXECUTION_ID`, and the task id links to `highhx
 trajectories show`.
+
+Network evidence appears as a `Network` node in the step that caused it (count, failures, the
+first requests with status and duration; URLs without query values).

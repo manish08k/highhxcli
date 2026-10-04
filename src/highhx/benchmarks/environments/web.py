@@ -162,7 +162,8 @@ class FakeWebApp:
         return self.url
 
     def pointer(self, kind: str, x: float, y: float, **kw: Any) -> None:
-        self.log.append(("pointer", (kind, x, y)))
+        button = kw.get("button") or "left"
+        self.log.append(("pointer", (kind, x, y) if button == "left" else (kind, x, y, button)))
 
     def insert_text(self, text: str, **kw: Any) -> None:
         self.log.append(("insert_text", text))

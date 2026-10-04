@@ -8,7 +8,7 @@ cancellation, verifies the result, records it and can undo it where that is poss
 
 | | |
 |---|---|
-| **HighhX Free — deterministic developer and computer automation** | Plain language → a **deterministic resolver** (no AI) → a JSON action plan → verified automation of websites, applications, the keyboard, files, git and your project (*open Gmail and search internship*, *play lofi on YouTube*, *switch to Slack*, *open my project and run the tests*). The interactive session and the full developer CLI: 99 actions (files, git, packages, docker, databases, services, browser, deployments, security, workflows, shell), workflows with rollback, resume and cancel, `/plan` + `/approve`, `/undo`, voice with local speech-to-text. No AI, no account. |
+| **HighhX Free — deterministic developer and computer automation** | Plain language → a **deterministic resolver** (no AI) → a JSON action plan → verified automation of websites, applications, the keyboard, files, git and your project (*open Gmail and search internship*, *play lofi on YouTube*, *switch to Slack*, *open my project and run the tests*). The interactive session and the full developer CLI: 138 catalog actions (files, git, packages, docker, databases, services, browser, desktop, Android, sandboxes, deployments, security, workflows, shell, HTTP, e-mail), workflows with rollback, resume and cancel, `/plan` + `/approve`, `/undo`, voice with local speech-to-text. No AI, no account. |
 | **HighhX Pro — deterministic automation + AI developer agent** | The same session with the AI agent attached: open-ended requests, planning, repository-wide changes, debugging, refactoring, AI computer use — proposed as action graphs that the same executor validates, rates, approves and runs. Autonomous tasks: *"fix the login bug and make sure all tests pass"* runs until HighhX itself has verified the tests. |
 
 Run `highhx` in a terminal and describe what you want. Free and Pro share one interface and
@@ -371,10 +371,13 @@ Guides: [docs/agent.md](docs/agent.md) · [docs/computer-use.md](docs/computer-u
 
 ## Computer use
 
-HighhX observes and operates browsers, desktops and Android devices through one action
+HighhX observes and operates **browsers, desktops and Android devices** through one action
 protocol and the same executor as everything else: risk, policy, approval, verification, audit.
+There is no second way to act: the agent, workflows, recordings, benchmarks and MCP clients all
+submit actions to the one `ActionExecutor`.
 
 ```bash
+highhx capabilities                                                           # what works on this machine (detected)
 highhx agent loop "export the invoices" --surface browser --plan steps.yaml   # plan → act → verify → recover
 highhx browser record invoices --url https://app.example.com                  # record once …
 highhx browser replay invoices                                                # … replay; drifted selectors heal
@@ -385,9 +388,209 @@ highhx benchmark run browser desktop                                          # 
 highhx tui                                                                    # the console with a live dashboard
 ```
 
-Targets are found by accessibility, DOM attributes, text, OCR, a vision model and, last,
-coordinates, and ambiguity is reported instead of guessed. Every step is verified, and an
-unconfirmed one is never reported done. See [COMPUTER_USE_ARCHITECTURE.md](docs/COMPUTER_USE_ARCHITECTURE.md).
+### Architecture
+
+```text
+person / HighhX agent / workflow / recording / MCP client
+        │
+        ▼
+Planner / model ─ proposes ONE step (data, never a way to run anything)
+        │
+        ▼
+Grounding ─ accessibility → DOM → text → relative → OCR → vision → coordinates (ambiguity is reported)
+        │
+        ▼
+ActionExecutor ─ classify risk → policy → approval → run (timeout, cancel) → verify → audit · history · events
+        │
+        ├── Browser (Chrome DevTools: DOM, accessibility, network evidence)
+        ├── Desktop (macOS Accessibility; Windows UI Automation; Linux AT-SPI/X11)
+        ├── Android (adb; emulator)
+        └── Remote computer (SSH) · remote browser (wss) · sandbox runtimes
+        │
+        ▼
+Observation + network evidence → Verification (UNKNOWN is never success) → Recovery / reflection (bounded)
+        │
+        ▼
+Trajectory · task trace · benchmark metrics  →  CLI · TUI · JSON · MCP
+```
+
+Details: [COMPUTER_USE_ARCHITECTURE.md](docs/COMPUTER_USE_ARCHITECTURE.md) ·
+[AGENT_LOOP.md](docs/AGENT_LOOP.md) · [GROUNDING.md](docs/GROUNDING.md) ·
+[REFERENCE_AUDIT.md](docs/REFERENCE_AUDIT.md) (this phase's comparison with UI-TARS Desktop,
+Agent S, Browser Use, Skyvern, AndroidWorld and Cua).
+
+### Capability matrix
+
+Filled from the repository and its test runs at the end of the October 2026 phase on macOS
+(Apple silicon). Status words:
+
+- **Validated**: implemented and exercised against the real thing in this environment.
+- **Implemented, not validated here**: code and automated tests exist, but the real platform,
+  tool or model was not available (or the opt-in test was not run) on the build machine.
+- **Experimental**: implemented, never validated on a real platform in this build.
+- **Optional dependency**: needs something HighhX does not install.
+- **Unavailable**: no backend in this build.
+
+| Capability | Status | Platform | Dependency | Tested |
+|---|---|---|---|---|
+| Browser automation (DOM + accessibility) | Validated | macOS; any OS with Chrome | a Chromium-family browser | unit + real Chrome (opt-in) |
+| Computer use: agent loop, verification, recovery | Validated (scripted planner) | all | — | unit + simulated web/desktop + real Chrome |
+| Visual grounding (vision model) | Implemented, not validated here | all | a vision model (local, or Pro / key + consent) | unit with a scripted model |
+| DOM grounding | Validated | — | browser | unit + real Chrome |
+| Network evidence, network waits, timing | Validated | — | browser | unit + real Chrome |
+| JSON-schema extraction | Validated | — | browser | unit + real Chrome |
+| Desktop control | Implemented, not validated here (macOS opt-in input tests not run this phase); Windows/Linux experimental | macOS, Windows, Linux | Accessibility permission (macOS) | unit + simulated desktop |
+| Android | Implemented, **unavailable here** (no adb) | any with adb | Android platform tools; SDK emulator | unit with simulated adb only |
+| AndroidWorld-style tasks, emulator lifecycle | Experimental | — | adb, emulator | simulated adb / fake SDK only |
+| macOS sandbox (Seatbelt) | Validated | macOS | `sandbox-exec` (built in) | real Seatbelt |
+| Docker sandbox | Experimental, unavailable here | any | Docker | runs only where installed |
+| bubblewrap sandbox | Experimental, unavailable here | Linux | `bwrap` | runs only where installed |
+| Virtual machines / isolated desktop | Unavailable | — | — | capability error tested |
+| OCR | Optional dependency, unavailable here | all | tesseract | opt-in test skipped |
+| Local model | Optional dependency, not validated here | all | an OpenAI-compatible local server | scripted model only |
+| Remote model | Requires HighhX Pro, not validated here | all | HighhX Pro (through the platform; no provider key on this machine), plus consent | scripted model |
+| MCP (client and server) | Validated (automated) | all | — | unit + stdio integration |
+| Remote computer (SSH) | Experimental | — | ssh, HighhX on the other side | unit |
+| Remote browser (wss DevTools) | Implemented, not validated here | — | a browser you run | unit |
+| Workflow engine (loops, verify, rollback, resume) | Validated (automated) | all | — | unit + integration |
+| File parsing (CSV/JSON/YAML/text) / PDF text | Validated / Validated (pdftotext present) | all | poppler for PDF | unit |
+| E-mail block | Implemented, not validated against a real server | all | an SMTP server | fake local SMTP |
+| Recording / replay | Validated (browser) | — | browser | unit + real Chrome |
+| Trajectories, search, traces | Validated (automated) | all | — | unit |
+| Benchmarks (8 metrics + diagnostics) | Validated (simulated environments + real browser) | all | — | unit + real Chrome |
+
+`highhx capabilities` prints the same picture for *your* machine, detected without starting a
+browser or contacting a model (`--json` for scripts).
+
+### What it can do
+
+- **Browser**: open, tabs, back/forward/refresh, click, fill, select, press, hover, scroll,
+  drag, upload, download, screenshots, page extraction, **schema extraction**, waits for text,
+  URLs, controls, **network idle or a specific request**; visual clicks for targets found by OCR
+  or vision; recording and replay with healing; HighhX's own persistent profile; remote
+  browsers over wss. [BROWSER_AUTOMATION.md](docs/BROWSER_AUTOMATION.md)
+- **Desktop**: observe (accessibility, OCR, vision), click (left/right/middle, double), type,
+  hotkeys, scroll, drag, windows, apps, clipboard, menus. [COMPUTER_RUNTIME.md](docs/COMPUTER_RUNTIME.md)
+- **Android**: devices, connect, observe (hierarchy, screenshot), tap, long press, swipe, type,
+  keys, back, home, recents, launch/stop apps, packages, install/uninstall (asked),
+  **emulators**. [ANDROID.md](docs/ANDROID.md)
+- **Sandboxes**: Seatbelt (macOS), bubblewrap (Linux), Docker; a workspace copy, patches,
+  apply. [SANDBOX.md](docs/SANDBOX.md)
+- **Network observability**: per action, the requests it caused: method, sanitized URL (no
+  query values), status, duration, redirects, failures. Never headers, cookies or bodies.
+- **Trajectories**: every step with its observation, grounding, verification and reflection;
+  hybrid search (stems, synonyms, fuzzy, host/app/label, outcome); lessons for the model as
+  bounded data. [TRAJECTORIES.md](docs/TRAJECTORIES.md)
+- **Workflows**: YAML graphs with actions, commands, `for_each` loops, `verify` checks,
+  file parsing, HTTP, e-mail, retries, rollback, resume. [workflows.md](docs/workflows.md)
+- **Models**: local OpenAI-compatible endpoints (Ollama, llama.cpp, vLLM) on Free and Pro;
+  HighhX Pro's platform models (upstream Anthropic, OpenAI or Gemini — no provider key on your
+  machine); separate planner and vision/grounding models; remote models need consent each time.
+  Deterministic features never need a model. [PROVIDERS.md](docs/PROVIDERS.md)
+- **MCP**: HighhX as an MCP server (a fixed set of computer tools, through the executor) and
+  as a client of other servers (their tools go through the agent's approval and audit). [MCP.md](docs/MCP.md)
+- **Benchmarks**: task success, grounding accuracy, selector healing, recovery success,
+  verification accuracy, average retries, completion time, token/tool cost — computed from
+  trajectories; diagnostics beside them. [BENCHMARKS.md](docs/BENCHMARKS.md)
+- **Human intervention**: the loop stops and asks you for CAPTCHAs, secret fields and
+  unconfirmable success; `highhx agent --resume task_…` continues.
+
+### Example tasks
+
+```yaml
+# steps.yaml for `highhx agent loop "place the order" --surface browser --plan steps.yaml`
+- action: open
+  parameters: {url: https://shop.example.com/cart}
+- action: click
+  target: {label: Place order, role: button}
+  verify: {network: {url_contains: /api/orders, method: POST, status: 201}}
+```
+
+```yaml
+# .highhx/workflows/invoices.yaml — parse, loop, act, verify
+name: invoices
+steps:
+  - id: rows
+    action: filesystem.parse
+    with: {path: invoices.csv}
+  - id: notes
+    depends_on: rows
+    for_each: ${{ fromjson(steps.rows.outputs.data) }}
+    action: filesystem.write
+    with: {path: "out/${{ item.id }}.txt", content: "${{ item.customer }} owes ${{ item.amount }}\n"}
+    verify: {file: {path: "out/${{ item.id }}.txt", contains: "${{ item.customer }}"}}
+```
+
+```yaml
+# read.yaml for `highhx agent loop "read the order" --surface browser --plan read.yaml`
+- action: open
+  parameters: {url: https://shop.example.com/orders/7}
+- action: browser.extract   # any catalog action can be a step
+  parameters:
+    schema: {type: object, properties: {order_id: {type: string}, total: {type: number}}, required: [order_id, total]}
+```
+
+### Optional dependencies and how to enable them
+
+| Feature | Install / configure |
+|---|---|
+| Browser | Chrome, Chromium, Edge or Brave (`HIGHHX_BROWSER` to choose a binary) |
+| OCR | `brew install tesseract` / `apt install tesseract-ocr` |
+| PDF text | `brew install poppler` / `apt install poppler-utils` |
+| Android | Android platform tools (`adb`); the SDK emulator for `android.emulator_*` |
+| Linux sandbox | `apt install bubblewrap` |
+| Docker sandbox | Docker |
+| Local planner model | `HIGHHX_PLANNER_BASE_URL=http://127.0.0.1:11434/v1 HIGHHX_PLANNER_MODEL=qwen2.5:14b` |
+| Local vision model | `HIGHHX_VISION_BASE_URL=… HIGHHX_VISION_MODEL=qwen2.5vl:7b` |
+| Remote models | HighhX Pro (`highhx login`; the platform chooses the upstream: Anthropic, OpenAI or Gemini), and `--remote-model` / `--remote-vision` per run |
+| Remote computer | `HIGHHX_COMPUTER_TARGET=ssh://user@host` (HighhX installed there) |
+| Remote browser | `HIGHHX_BROWSER_ENDPOINT=wss://…` (or `http://127.0.0.1:9222` through `ssh -L`) |
+| E-mail | `HIGHHX_SMTP_HOST`, `HIGHHX_SMTP_PORT`, `HIGHHX_SMTP_USER`, `HIGHHX_SMTP_PASSWORD`, `HIGHHX_SMTP_FROM` |
+
+### Experimental and unavailable
+
+- **Experimental**: Windows and Linux desktop backends, bubblewrap and Docker sandboxes,
+  Android emulator lifecycle and AndroidWorld-style tasks, remote computers over SSH.
+- **Unavailable in this build**: virtual machines and isolated desktops, cloud runtimes,
+  CAPTCHA solving (deliberately: challenges are handed to the person), password-manager and
+  TOTP integration, a viewport video stream, best-of-N rollouts, model-assisted extraction.
+
+### Known limitations
+
+- Android was never run against a real device or emulator here (no Android SDK on the build
+  machine); its tests use simulated adb.
+- Seatbelt cannot limit the number of processes (Docker can).
+- No real model was executed in this phase; model planning and vision grounding are tested
+  with scripted models.
+- The desktop input tests drive the real mouse and keyboard and are opt-in; they were not run
+  in this phase.
+- Schema extraction reads what a page states explicitly (labels, definition lists, tables,
+  lists, `Label: value` lines). It does not infer values from prose, and reports ambiguity
+  instead of choosing.
+- Browser key presses are single keys; key combinations work on the desktop.
+
+### What this phase added
+
+Schema extraction, network waits and request timing/redirect evidence, network lines in traces
+and the TUI, workflow `for_each` and `verify`, `filesystem.parse`, `email.send`, the agent's
+`right_click` and `hotkey` verbs, CAPTCHA hand-over, `highhx capabilities`, benchmark
+diagnostics and environment capability records, Android emulator lifecycle, AndroidWorld-style
+tasks and real-device benchmark environments, and a security fix (`browser.extract` with a URL
+is classified like opening it). See [REFERENCE_AUDIT.md](docs/REFERENCE_AUDIT.md).
+
+### Testing
+
+```bash
+pytest                                        # everything that needs no real platform (2,400+ tests)
+HIGHHX_TEST_BROWSER=1 pytest tests/unit/computer tests/unit/benchmarks   # + real Chrome
+HIGHHX_TEST_OCR=1 pytest tests/unit/computer/test_live_ocr.py            # + tesseract
+HIGHHX_TEST_DESKTOP_INPUT=1 pytest tests/e2e/test_desktop_live.py        # drives YOUR mouse and keyboard
+HIGHHX_TEST_LIVE_PROVIDERS=1 pytest tests/unit/agent/test_live_providers.py  # the platform's provider adapters (vendor keys)
+```
+
+Sandbox tests run against the real backend wherever it exists (Seatbelt on macOS; bubblewrap or
+Docker when installed). Opt-in tests skip with the reason when their platform is missing; a skip
+is never counted as a pass.
 
 ## Commands
 
@@ -410,7 +613,7 @@ Full reference with every option: [docs/commands.md](docs/commands.md).
 | Workflows & automation | `workflow list/validate/create/graph` `schedule` `hook` `trigger` `watchers` |
 | Observability | `logs [--follow]` `history [id]` `audit` `report` `trace` |
 | Extensibility & team | `plugin list/install/remove/update/search/trust` `config` `policy` `workspace` `profile` |
-| Diagnostics | `doctor` `diagnose` `repair` `debug` |
+| Diagnostics | `doctor` `capabilities` `diagnose` `repair` `debug` |
 
 Global options (work before or after the command): `--json`, `--dry-run`, `--yes/-y`,
 `--force`, `--quiet/-q`, `--verbose/-v`, `--debug`, `--no-color`, `--cwd/-C DIR`,

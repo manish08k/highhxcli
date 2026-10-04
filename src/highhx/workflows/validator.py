@@ -16,7 +16,7 @@ from highhx.workflows.dependency_graph import DependencyGraph
 from highhx.workflows.loader import WorkflowLoader
 from highhx.workflows.parser import normalize_document, parse_workflow, schema_errors
 from highhx.workflows.resolver import reusable_workflows
-from highhx.workflows.schema import StepSpec, WorkflowSpec
+from highhx.workflows.schema import MAX_ITERATIONS, StepSpec, WorkflowSpec
 from highhx.workflows.variables import find_expressions
 
 SHELL_BUILTINS = frozenset(
@@ -70,6 +70,13 @@ def _duplicate_ids(data: dict[str, Any]) -> list[str]:
     return sorted({i for i in ids if i is not None and ids.count(i) > 1})
 
 
+def _refs(expr: str) -> list[tuple[str, ...]]:
+    try:
+        return list(conditions.references(expr))
+    except conditions.ExpressionError:
+        return []
+
+
 def _check_expression(
     expr: str, where: str, spec: WorkflowSpec, step_id: str | None, graph: DependencyGraph, report: ValidationReport
 ) -> None:
@@ -85,6 +92,9 @@ def _check_expression(
             report.errors.append(
                 f"{where}: unknown context '{root}'{did_you_mean(root, sorted(conditions.KNOWN_ROOTS))}"
             )
+            continue
+        if root in conditions.LOOP_ROOTS and (step_id is None or spec.step(step_id).for_each is None):
+            report.errors.append(f"{where}: '{root}' is only available in a step with for_each")
             continue
         if root == "inputs" and len(parts) > 1 and parts[1] not in spec.inputs:
             report.errors.append(f"{where}: unknown input '{parts[1]}'")
@@ -182,6 +192,11 @@ def validate_spec(
                         f"{label}: '${{{{ {expr} }}}}' inserts runtime output into the command line; "
                         "pass it through `env:` and use the variable instead to avoid shell injection"
                     )
+                elif isinstance(step.for_each, str) and any(parts[0] in conditions.LOOP_ROOTS for parts in _refs(expr)):
+                    report.warnings.append(
+                        f"{label}: '${{{{ {expr} }}}}' inserts loop items computed at run time into the command "
+                        "line; pass them through `env:` and use the variable instead to avoid shell injection"
+                    )
             _check_command(command, label, report, check_tools=check_tools, needs_approval=step.approval is not None)
         for key, value in {**step.env, **{f"with.{k}": str(v) for k, v in step.with_.items()}}.items():
             for expr in find_expressions(value):
@@ -194,6 +209,21 @@ def validate_spec(
                     report,
                 )
         _check_action_step(step, where, report, check_tools=check_tools)
+        if isinstance(step.for_each, list) and len(step.for_each) > MAX_ITERATIONS:
+            report.errors.append(f"{where}.for_each: at most {MAX_ITERATIONS} items")
+        if isinstance(step.for_each, str):
+            exprs = find_expressions(step.for_each)
+            if not exprs:
+                report.errors.append(f"{where}.for_each: a list or a '${{{{ … }}}}' expression")
+            for expr in exprs:
+                if any(parts[0] in conditions.LOOP_ROOTS for parts in _refs(expr)):
+                    report.errors.append(f"{where}.for_each: cannot refer to item or loop")
+                else:
+                    _check_expression(expr, f"{where}.for_each", spec, step.id, graph, report)
+        if step.verify is not None:
+            from highhx.verification.declarative import validate as validate_check
+
+            report.errors.extend(f"{where}.verify: {problem}" for problem in validate_check(step.verify))
         if step.cwd and base_dir is not None and "${{" not in step.cwd and not (base_dir / step.cwd).is_dir():
             report.warnings.append(f"{where}.cwd: directory '{step.cwd}' does not exist")
         if step.timeout is not None and step.timeout == 0:

@@ -31,7 +31,7 @@ import yaml
 
 from highhx.core.errors import ValidationError
 
-ENVIRONMENTS = ("web", "desktop", "android", "workspace", "browser")
+ENVIRONMENTS = ("web", "desktop", "android", "workspace", "browser", "android_device")
 """web / desktop / android: deterministic simulations (CI). workspace: a temporary project for
 code, file and shell tasks. browser: the real HighhX browser (optional)."""
 RISK_LEVELS = ("safe", "low", "medium", "high", "critical")
@@ -99,6 +99,11 @@ def validate_task(data: Any) -> list[str]:
     env = data.get("environment") or {"kind": "workspace"}
     if not isinstance(env, dict) or env.get("kind", "workspace") not in ENVIRONMENTS:
         problems.append(f"environment.kind must be one of: {', '.join(ENVIRONMENTS)}")
+    if isinstance(env, dict) and env.get("kind") == "android_device" and env.get("task") is not None:
+        from highhx.benchmarks.environments.android_world import registered
+
+        if env["task"] not in registered():
+            problems.append(f"environment.task must be a registered Android task: {', '.join(registered())}")
     planner = data.get("planner") or {}
     if planner and planner.get("kind") not in ("scripted", "model", "resolver"):
         problems.append("planner.kind must be scripted, resolver or model")
@@ -152,6 +157,9 @@ class RunMetrics:
     status: str = ""
     summary: str = ""
     trajectory_id: str = ""
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+    """Detail beside the eight metrics (per-action success, latency, attempts, failure categories,
+    grounding confidence) — see :func:`highhx.benchmarks.runner.diagnostics`. Not a metric."""
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
@@ -194,6 +202,43 @@ def aggregate(runs: list[RunMetrics]) -> dict[str, Any]:
     }
 
 
+def aggregate_diagnostics(runs: list[RunMetrics]) -> dict[str, Any]:
+    """The runs' diagnostics combined (sums for counts, latency over every step of every run)."""
+    from highhx.benchmarks.runner import latency
+
+    per_action: dict[str, dict[str, int]] = {}
+    failures: dict[str, int] = {}
+    attempts: dict[str, int] = {}
+    steps: list[float] = []
+    actions: list[float] = []
+    confidences: list[float] = []
+    for run in runs:
+        d = run.diagnostics or {}
+        for kind, counts in (d.get("per_action") or {}).items():
+            entry = per_action.setdefault(kind, {"runs": 0, "succeeded": 0})
+            entry["runs"] += int(counts.get("runs") or 0)
+            entry["succeeded"] += int(counts.get("succeeded") or 0)
+        for name, count in (d.get("failure_categories") or {}).items():
+            failures[name] = failures.get(name, 0) + int(count)
+        for n, count in (d.get("attempts_per_intent") or {}).items():
+            attempts[n] = attempts.get(n, 0) + int(count)
+        steps += [float(v) for v in d.get("step_seconds") or []]
+        actions += [float(v) for v in d.get("action_seconds") or []]
+        if d.get("grounding_confidence") is not None:
+            confidences.append(float(d["grounding_confidence"]))
+    return {
+        "per_action": {
+            k: {**v, "success_rate": round(v["succeeded"] / v["runs"], 4) if v["runs"] else None}
+            for k, v in sorted(per_action.items())
+        },
+        "step_latency": latency(steps),
+        "action_latency": latency(actions),
+        "attempts_per_intent": dict(sorted(attempts.items(), key=lambda kv: int(kv[0]))),
+        "failure_categories": dict(sorted(failures.items())),
+        "grounding_confidence": _mean(confidences),
+    }
+
+
 @dataclass
 class BenchmarkResult:
     benchmark_id: str
@@ -202,6 +247,10 @@ class BenchmarkResult:
     runs: list[RunMetrics]
     provider: str = "scripted"
     runtime: str = "local"
+    environment: dict[str, Any] = field(default_factory=dict)
+    """Platform and capability availability where it ran (comparable across machines)."""
+    skipped: list[dict[str, str]] = field(default_factory=list)
+    """Tasks that could not run here (``{task, reason}``): neither passed nor failed."""
 
     def by_task(self) -> dict[str, dict[str, Any]]:
         tasks: dict[str, list[RunMetrics]] = {}
@@ -216,7 +265,10 @@ class BenchmarkResult:
             "started": self.started,
             "provider": self.provider,
             "runtime": self.runtime,
+            "environment": self.environment,
+            "skipped": self.skipped,
             "summary": aggregate(self.runs),
+            "diagnostics": aggregate_diagnostics(self.runs),  # beside the metrics, never among them
             "tasks": self.by_task(),
             "runs": [r.to_dict() for r in self.runs],
         }
@@ -230,4 +282,6 @@ class BenchmarkResult:
             [RunMetrics.from_dict(r) for r in data.get("runs") or []],
             str(data.get("provider") or "scripted"),
             str(data.get("runtime") or "local"),
+            dict(data.get("environment") or {}),
+            list(data.get("skipped") or []),
         )

@@ -400,6 +400,56 @@
           "shell": {
             "type": "boolean",
             "description": "Force (true) or forbid (false) running through a shell"
+          },
+          "for_each": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "string",
+                "minLength": 1
+              }
+            ],
+            "description": "Run the step once per item: a list, or an expression giving one (${{ item }}, ${{ loop.index }})"
+          },
+          "verify": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "A declarative check after the step succeeds (file, text, exit_code, network \u2026)"
           }
         },
         "additionalProperties": false,

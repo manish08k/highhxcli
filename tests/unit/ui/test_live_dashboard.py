@@ -114,3 +114,31 @@ def test_the_live_dashboard_prints_its_final_state_without_a_terminal() -> None:
         run_events(bus)
         assert live.state.task == "export the invoices"
     assert "export the invoices" in out.getvalue()
+
+
+def test_network_activity_and_human_intervention_are_shown() -> None:
+    """This phase: the requests browser actions caused (sanitized) and why the task waits for you."""
+    from highhx.observability.tasktrace import TaskTrace
+
+    bus = EventBus()
+    recorder = EventRecorder.attach(bus)
+    state = DashboardState()
+    recorder.listen(state.apply)
+    with trace_context(trace_id="tr_net", task_id="task_net", step_id="s1"):
+        bus.emit("task.started", task="place the order")
+        bus.emit(
+            "network.observed",
+            requests=2,
+            failed=1,
+            entries=[
+                {"method": "POST", "url": "https://shop.test/api/orders?token=…", "status": 201, "ms": 84},
+                {"method": "GET", "url": "https://cdn.test/app.js", "status": None, "error": "net::ERR_FAILED"},
+            ],
+        )
+        bus.emit("agent.reflection", decision="ask_user", reason="a human-verification challenge (CAPTCHA) is on the screen")
+    text = text_of(state)
+    assert "NETWORK" in text and "POST https://shop.test/api/orders?token=… 201" in text and "(1 failed)" in text
+    assert "YOU" in text and "CAPTCHA" in text and state.agent_state == "waiting for you"
+    trace = TaskTrace("tr_net", recorder.for_trace("tr_net")).render()
+    assert "Network       2 request(s)  [1 failed]  — POST https://shop.test/api/orders?token=… → 201 84ms" in trace
+    assert "cdn.test/app.js → net::ERR_FAILED" in trace

@@ -59,6 +59,82 @@ def read(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     )
 
 
+MAX_PARSE_BYTES = 20_000_000
+PARSERS = ("csv", "tsv", "json", "jsonl", "yaml", "text", "document")
+_BY_SUFFIX = {
+    ".csv": "csv",
+    ".tsv": "tsv",
+    ".json": "json",
+    ".jsonl": "jsonl",
+    ".ndjson": "jsonl",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".pdf": "document",
+    ".docx": "document",
+    ".pptx": "document",
+    ".xlsx": "document",
+}
+
+
+def parse(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """A project file as data: CSV/TSV rows (objects keyed by the header), JSON, JSON Lines, YAML
+    (safe loader), plain text, or the text of a PDF (needs ``pdftotext``) / Office document.
+    Read-only, confined to the project, secret files refused like ``filesystem.read``."""
+    import csv
+    import io
+    import json
+
+    import yaml
+
+    path = _confine(ctx, str(inputs["path"]), must_exist=True)
+    if path.is_dir():
+        raise ToolError(f"{_rel(ctx, path)} is a directory")
+    if path.stat().st_size > MAX_PARSE_BYTES:
+        raise ToolError(f"{_rel(ctx, path)} is larger than {MAX_PARSE_BYTES // 1_000_000} MB")
+    kind = str(inputs.get("format") or "auto")
+    if kind == "auto":
+        kind = _BY_SUFFIX.get(path.suffix.lower(), "text")
+    limit = int(inputs.get("limit") or 1000)
+    output: dict[str, Any] = {"path": _rel(ctx, path), "format": kind}
+    if kind == "document":
+        from highhx.attachments import attach, read_text
+
+        text = read_text(attach(path, "parse"), limit=int(inputs.get("max_text") or 200_000))
+        output.update(text=text, chars=len(text))
+        return ActionResult(True, output=output, summary=f"{_rel(ctx, path)} · {len(text)} characters")
+    raw = path.read_text(encoding="utf-8-sig", errors="replace")
+    try:
+        if kind in ("csv", "tsv"):
+            reader = csv.DictReader(io.StringIO(raw), delimiter="\t" if kind == "tsv" else ",")
+            rows = []
+            for index, row in enumerate(reader):
+                if index >= limit:
+                    output["truncated"] = True
+                    break
+                rows.append({str(k): v for k, v in row.items() if k is not None})
+            output.update(data=rows, rows=len(rows), columns=list(reader.fieldnames or []))
+            summary = f"{len(rows)} row(s) · {len(reader.fieldnames or [])} column(s)"
+        elif kind == "json":
+            data = json.loads(raw)
+            output["data"] = data
+            summary = f"JSON {type(data).__name__}" + (f" of {len(data)}" if isinstance(data, list | dict) else "")
+        elif kind == "jsonl":
+            items = [json.loads(line) for line in raw.splitlines() if line.strip()]
+            output.update(data=items[:limit], rows=min(len(items), limit), truncated=len(items) > limit)
+            summary = f"{min(len(items), limit)} record(s)"
+        elif kind == "yaml":
+            data = yaml.safe_load(raw)
+            output["data"] = data
+            summary = f"YAML {type(data).__name__}"
+        else:
+            lines = raw.splitlines()
+            output.update(text="\n".join(lines[:limit]), lines=len(lines))
+            summary = f"{len(lines)} line(s)"
+    except (ValueError, yaml.YAMLError, csv.Error) as exc:
+        return ActionResult(False, output=output, error=f"not valid {kind}: {str(exc).splitlines()[0][:160]}")
+    return ActionResult(True, output=output, summary=f"{_rel(ctx, path)} · {summary}")
+
+
 def write(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     path = _confine(ctx, str(inputs["path"]), write=True)
     content = str(inputs["content"])

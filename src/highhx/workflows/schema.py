@@ -29,6 +29,9 @@ def _identifier(value: str) -> str | None:
     return None if is_identifier(value) else "must contain only letters, digits, '_' and '-' and start with a letter"
 
 
+MAX_ITERATIONS = 1000
+"""The most items one ``for_each`` step runs over."""
+
 ENV_MAP = Map(OneOf([Str(), Num(), Bool()]), key_check=is_env_name, key_hint="invalid environment variable name")
 SCALAR = OneOf([Str(), Num(), Bool()])
 
@@ -104,6 +107,13 @@ STEP_SCHEMA = Obj(
         "approval": Prop(APPROVAL_SCHEMA),
         "continue_on_error": Prop(Bool()),
         "shell": Prop(Bool(), description="Force (true) or forbid (false) running through a shell"),
+        "for_each": Prop(
+            OneOf([List(OneOf([SCALAR, Map(SCALAR)])), Str(min_length=1)]),
+            description="Run the step once per item: a list, or an expression giving one (${{ item }}, ${{ loop.index }})",
+        ),
+        "verify": Prop(
+            Map(Any_()), description="A declarative check after the step succeeds (file, text, exit_code, network …)"
+        ),
     },
     check=_step_check,
 )
@@ -199,6 +209,10 @@ class StepSpec:
     approval: ApprovalSpec | None = None
     continue_on_error: bool = False
     shell: bool | None = None
+    for_each: list[Any] | str | None = None
+    """Items to run the step for (a list, or an expression evaluated when the step starts)."""
+    verify: dict[str, Any] | None = None
+    """A declarative check (``highhx.verification.declarative``) the step must pass after it succeeds."""
 
     @property
     def label(self) -> str:

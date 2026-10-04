@@ -11,6 +11,7 @@ COMMANDS = [
     ["status"],
     ["info"],
     ["doctor"],
+    ["capabilities"],
     ["dev", "--dry-run"],
     ["start", "--dry-run"],
     ["stop"],

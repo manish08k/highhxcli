@@ -13,7 +13,21 @@ if TYPE_CHECKING:
     from highhx.trajectories.store import Trajectory
 
 SURFACES = ("auto", "desktop", "browser", "android", "none")
-VERBS = ("click", "double_click", "type", "press", "scroll", "open", "launch", "back", "home", "select", "wait")
+VERBS = (
+    "click",
+    "double_click",
+    "right_click",
+    "type",
+    "press",
+    "hotkey",
+    "scroll",
+    "open",
+    "launch",
+    "back",
+    "home",
+    "select",
+    "wait",
+)
 """Surface-neutral verbs a planner may use. The worker maps them to catalog actions for the surface."""
 
 

@@ -249,6 +249,7 @@ ANDROID_ACTIONS = {
     "android.inspect": {},
     "android.install": {"apk": "app.apk"},
     "android.uninstall": {"package": "com.example.app"},
+    "android.emulator_stop": {"device": "emulator-5554"},
 }
 
 
@@ -256,10 +257,16 @@ def test_every_android_action_fails_clearly_without_adb(agent_project: Path, mak
     from highhx.actions.catalog import default_catalog
 
     monkeypatch.setenv("HIGHHX_ADB", "/nonexistent/adb")
+    monkeypatch.setenv("HIGHHX_EMULATOR", "/nonexistent/emulator")
     monkeypatch.setattr("shutil.which", lambda name: None)
     executor, _ = _executor(make_app, agent_project)
     catalog_actions = {s.name for s in default_catalog() if s.name.startswith("android.")}
-    assert catalog_actions - {"android.devices"} == set(ANDROID_ACTIONS)  # every action is covered here
+    listings = {"android.devices", "android.emulators", "android.emulator_start"}  # checked below
+    assert catalog_actions - listings == set(ANDROID_ACTIONS)  # every action is covered here
+    avds = executor.run("android.emulators")
+    assert avds.ok and avds.output["available"] is False and avds.output["avds"] == [] and "emulator" in avds.output["detail"]
+    start = executor.run("android.emulator_start", {"avd": "Pixel_6"})
+    assert not start.ok and "emulator was not found" in start.error.lower()
     for name, inputs in ANDROID_ACTIONS.items():
         result = executor.run(name, inputs)
         assert not result.ok, name

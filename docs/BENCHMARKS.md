@@ -28,6 +28,26 @@ highhx benchmark -- COMMAND        # unchanged: time a command over several runs
 A rate that does not apply to a run (nothing to ground, nothing to heal) is left out of the
 averages: never counted as 0 or 1.
 
+## Diagnostics (beside the metrics, not among them)
+
+The metric summary stays exactly the eight metrics above. A separate `diagnostics` section of
+each result (and of each run) adds detail read from the same trajectories:
+
+| Diagnostic | From |
+|---|---|
+| per-action success | each step's action type and verified outcome |
+| step latency, action latency | step wall time; the executor's time per action (count, mean, p50, p95, max) |
+| attempts per intent | how many steps each intent needed (a retry distribution) |
+| failure categories | the recorded status, outcome and error of each unsuccessful step: `declined`, `blocked_by_policy`, `timeout`, `cancelled`, `target_not_found`, `ambiguous_target`, `not_run`, `verification_failed`, `unverified`, `action_error` |
+| grounding confidence | the mean confidence of the chosen grounding candidates |
+
+Not available: per-call model latency (trajectories do not time model calls individually).
+
+Every result also records **where it ran**: `environment` (platform, Python, and the
+`highhx capabilities` status of each capability), so results from different machines can be
+compared honestly. Tasks that cannot run here (an `android_device` task without a device) are
+listed under `skipped` with the reason and never counted as passed or failed.
+
 ## Task format
 
 ```yaml
@@ -35,7 +55,7 @@ suite: browser
 tasks:
   - id: export-after-redesign
     description: Export the invoices on the redesigned site
-    environment: {kind: web, variant: redesign}        # web · desktop · android · workspace · browser
+    environment: {kind: web, variant: redesign}        # web · desktop · android · workspace · browser · android_device (real, ANDROID.md)
     planner: {kind: scripted, steps: [...]}            # scripted · resolver · model
     success: {text: Export ready}                      # what the agent checks before saying done
     evaluate: [{state: {exported: true}}]              # the benchmark's own check

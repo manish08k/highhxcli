@@ -8,6 +8,7 @@
     │ GROUND accessibility ✗  dom ✓ 0.95                           │
     │ VERIFY success          RECOVERY 0 / 10                      │
     │ TOOLS  ✓ browser.open 0.3s  ✓ browser.click 0.3s             │
+    │ NETWORK POST https://shop.test/api/export 201                 │
     │ COST   1,240 tokens · 4 actions · avg 0.31s                  │
     │ ⚠ warnings / ✗ errors                         trace tr_9c1… │
     └──────────────────────────────────────────────────────────────┘
@@ -75,6 +76,11 @@ class DashboardState:
     errors: deque[str] = field(default_factory=lambda: deque(maxlen=4))
     healed: int = 0
     summary: str = ""
+    network: deque[str] = field(default_factory=lambda: deque(maxlen=3))
+    """The latest requests browser actions caused (sanitized: no query values)."""
+    network_failed: int = 0
+    intervention: str = ""
+    """Why the task is waiting for the person (a CAPTCHA, a secret field …)."""
 
     # --------------------------------------------------------------- events
     def apply(self, record: EventRecord) -> None:
@@ -140,6 +146,14 @@ class DashboardState:
             self.recoveries += 1
             self.recovery_reason = f"{p.get('kind', '')}: {p.get('reason', '')}"
             self.agent_state = "recovering"
+        elif name == "network.observed":
+            for entry in (p.get("entries") or [])[-3:]:
+                status = entry.get("status") or entry.get("error") or "…"
+                self.network.append(f"{entry.get('method', '')} {entry.get('url', '')} {status}")
+            self.network_failed += int(p.get("failed") or 0)
+        elif name == "agent.reflection" and p.get("decision") == "ask_user":
+            self.intervention = str(p.get("reason", ""))
+            self.agent_state = "waiting for you"
         elif name == "agent.reflection" and p.get("decision") not in (None, "continue"):
             self.recovery_reason = f"{p.get('decision')}: {p.get('reason', '')}"
             if p.get("decision") in ("retry", "replan"):
@@ -220,6 +234,13 @@ def render(state: DashboardState) -> RenderableType:
         for ok, name, seconds in state.tools:
             tools.append(f"{'✓' if ok else '✗'} {name} {seconds:.1f}s  ", style="green" if ok else "red")
         grid.add_row("TOOLS", tools)
+    if state.network:
+        net = Text("  ·  ".join(state.network), style="dim")
+        if state.network_failed:
+            net.append(f"  ({state.network_failed} failed)", style="red")
+        grid.add_row("NETWORK", net)
+    if state.intervention:
+        grid.add_row("YOU", Text(state.intervention, style="bold yellow"))
     average = state.action_seconds / state.actions if state.actions else 0.0
     cost = f" · ${state.cost:.4f}" if state.cost is not None else ""
     grid.add_row("COST", Text(f"{state.tokens:,} tokens{cost} · {state.actions} action(s) · avg {average:.2f}s · runtime {state.runtime}", style="dim"))

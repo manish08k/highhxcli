@@ -39,6 +39,7 @@ def all_commands() -> list[click.Command]:
     from highhx.commands.deployment.deploy import deploy
     from highhx.commands.deployment.environments import environments
     from highhx.commands.deployment.rollback import rollback
+    from highhx.commands.diagnostics.capabilities import capabilities
     from highhx.commands.diagnostics.debug import debug
     from highhx.commands.diagnostics.diagnose import diagnose
     from highhx.commands.diagnostics.repair import repair
@@ -87,6 +88,7 @@ def all_commands() -> list[click.Command]:
         restart,
         check,
         doctor,
+        capabilities,
         run,
         exec_command,
         script,

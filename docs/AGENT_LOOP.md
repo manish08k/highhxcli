@@ -28,8 +28,8 @@ policy, approval, the action's own verification, audit, history.
 | Verifier | `AgentVerifier` | The step's `verify` check, or a default per verb. `UNKNOWN` triggers more observations before it stands |
 | Reflector | `AgentReflector` + `RecoveryManager` | Decides what happens next and why, within bounds |
 
-Step verbs: `click`, `double_click`, `type`, `press`, `scroll`, `open`, `launch`, `back`,
-`home`, `select`, `wait`, or any catalog action name (`shell.run`, `filesystem.write`,
+Step verbs: `click`, `double_click`, `right_click`, `type`, `press`, `hotkey`, `scroll`, `open`,
+`launch`, `back`, `home`, `select`, `wait`, or any catalog action name (`shell.run`, `filesystem.write`,
 `api.request`, `android.launch` …) that the task allows.
 
 | Verb on … | browser | desktop | android |
@@ -37,6 +37,8 @@ Step verbs: `click`, `double_click`, `type`, `press`, `scroll`, `open`, `launch`
 | click (found in DOM/AX) | `browser.click 'role:"name"#k'` | `computer.click_at text=…` (re-grounded and window-checked at click time) | `android.tap x,y` |
 | click (found by OCR/vision) | `browser.click_at x,y` | `computer.click_at x,y` | `android.tap x,y` |
 | type | `browser.fill` (or click + `browser.insert_text`) | click + `computer.type` | tap + `android.type` |
+| right_click | `browser.click_at x,y button=right` | `computer.click_at x,y button=right` | `android.long_press x,y` |
+| hotkey | — (the browser presses one key at a time) | `computer.hotkey keys` | — |
 
 Every request carries the target's **label**, so the executor rates `Delete account` as a
 destructive control, whatever coordinates grounding produced.
@@ -69,6 +71,12 @@ success check decides. Without a success check, such a task ends as `needs_user`
 | Failed or timed out, may have run, riskier than SAFE | never repeated silently: re-plan from a fresh observation |
 | Verified failure, LOW risk | retry once, then re-plan |
 | UNKNOWN after extra observations | re-plan |
+
+**Human-verification challenges.** Before each planning step the screen is checked for a
+CAPTCHA (provider endpoints such as `google.com/recaptcha`, `hcaptcha.com`,
+`challenges.cloudflare.com`, and the providers' own wording such as "I'm not a robot"). When one
+is there the task stops as `needs_user` with the evidence and the resume command; the person
+solves it. Ordinary pages that mention robots do not trigger it.
 
 Limits: steps, failures, re-plans, recoveries per step (3) and in total, wall-clock time, and a
 no-progress detector (the same screen three times while steps keep failing). Every recovery

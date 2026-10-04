@@ -221,3 +221,70 @@ def test_rates_that_do_not_apply_are_never_averaged_as_numbers(field: str) -> No
     applies = RunMetrics("b", "t", 1, "web", "local", "s", True, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0, 0)
     not_applicable = RunMetrics("b", "t", 2, "web", "local", "s", True, None, None, None, 1.0, 0.0, 1.0, 0, 0)
     assert aggregate([applies, not_applicable])[field] == 1.0  # not (1.0 + 0) / 2
+
+
+# ------------------------------------------- diagnostics (beside the metrics, not among them)
+def test_diagnostics_are_computed_from_the_trajectory() -> None:
+    from highhx.benchmarks.model import BenchmarkResult, aggregate_diagnostics
+    from highhx.benchmarks.runner import diagnostics, failure_category
+
+    def recorded(
+        index: int, intent: str, kind: str, result: dict[str, Any], seconds: float, confidence: float | None = None
+    ) -> TrajectoryStep:
+        s = step(index, intent, str(result.get("outcome") or "failed"))
+        s.action["action_type"] = kind
+        s.result = {**result, "seconds": seconds / 2}
+        s.seconds = seconds
+        if confidence is not None:
+            s.grounding = {"candidate": {"confidence": confidence}}
+        return s
+
+    t = trajectory(
+        "completed",
+        [
+            recorded(1, "open", "browser.open", {"outcome": "success", "status": "ok"}, 1.0),
+            recorded(
+                2,
+                "export",
+                "browser.click",
+                {"outcome": "failed", "status": "not_run", "error": "Target not found: Export"},
+                2.0,
+            ),
+            recorded(3, "export", "browser.click", {"outcome": "failed", "status": "ok"}, 3.0, 0.6),
+            recorded(4, "export", "browser.click", {"outcome": "success", "status": "ok"}, 4.0, 1.0),
+            recorded(5, "delete", "browser.click", {"outcome": "failed", "status": "denied"}, 5.0),
+        ],
+    )
+    d = diagnostics(t)
+    assert d["per_action"] == {
+        "browser.open": {"runs": 1, "succeeded": 1},
+        "browser.click": {"runs": 4, "succeeded": 1},
+    }
+    assert d["attempts_per_intent"] == {"1": 2, "3": 1}  # open and delete once, export three times
+    assert d["failure_categories"] == {"target_not_found": 1, "verification_failed": 1, "declined": 1}
+    assert d["grounding_confidence"] == 0.8 and d["step_seconds"] == [1.0, 2.0, 3.0, 4.0, 5.0]
+    assert d["action_seconds"] == [0.5, 1.0, 1.5, 2.0, 2.5]
+    assert failure_category(recorded(9, "x", "k", {"outcome": "unknown", "status": "ok"}, 1)) == "unverified"
+    assert failure_category(recorded(9, "x", "k", {"outcome": "failed", "status": "blocked"}, 1)) == "blocked_by_policy"
+    assert failure_category(recorded(9, "x", "k", {"outcome": "failed", "status": "failed"}, 1)) == "action_error"
+
+    run = metrics(t, True)
+    assert run.diagnostics == d  # recorded with the run
+    combined = aggregate_diagnostics([run, run])
+    assert combined["per_action"]["browser.click"] == {"runs": 8, "succeeded": 2, "success_rate": 0.25}
+    assert combined["step_latency"] == {"count": 10, "mean": 3.0, "p50": 3.0, "p95": 5.0, "max": 5.0}
+    assert combined["failure_categories"] == {"declined": 2, "target_not_found": 2, "verification_failed": 2}
+    result = BenchmarkResult("b", "s", 0.0, [run], environment={"platform": "test"})
+    data = result.to_dict()
+    assert set(data["summary"]) == set(aggregate([run]))  # the metric summary is unchanged by diagnostics
+    assert "diagnostics" not in data["summary"] and data["diagnostics"]["failure_categories"]["declined"] == 1
+    assert BenchmarkResult.from_dict(data).environment == {"platform": "test"}
+
+
+def test_diagnostics_move_with_the_data() -> None:
+    from highhx.benchmarks.runner import diagnostics
+
+    empty = diagnostics(trajectory("completed", []))
+    assert empty["per_action"] == {} and empty["failure_categories"] == {} and empty["grounding_confidence"] is None
+    one = diagnostics(trajectory("completed", [step(1, "a", "success")]))
+    assert one["per_action"] == {"browser.click": {"runs": 1, "succeeded": 1}} and one["failure_categories"] == {}

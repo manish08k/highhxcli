@@ -169,7 +169,11 @@ audit ([COMPUTER_USE_ARCHITECTURE.md](COMPUTER_USE_ARCHITECTURE.md)).
   with an instruction never to follow it. Notes from past trajectories are given as data, not
   instructions, and truncated.
 - **URLs.** Query values never reach audit rows, events, network evidence or trajectories:
-  URLs there keep parameter names only (`?api_key=…`).
+  URLs there keep parameter names only (`?api_key=…`). For navigations (`browser.open`,
+  `browser.extract {url}`) the classifier, the approval prompt and the approval ticket see the
+  whole URL; the audit row, its error text and the action's recorded error and summary keep the
+  names only (tightened in the October 2026 phase: before, only secret-looking values such as
+  `token=` were redacted from navigation audit rows).
 - **Where computer-use data lives.** Trajectories, task traces and benchmark results are in
   `.highhx/state/` (git-ignored by `highhx init`, not readable or writable by the agent's file
   tools). State screenshots are kept in the user data directory, at most the 20 most recent.
@@ -178,6 +182,24 @@ audit ([COMPUTER_USE_ARCHITECTURE.md](COMPUTER_USE_ARCHITECTURE.md)).
 - **Audit (tested).** Every new path was checked for driver, adb, browser-input or subprocess
   calls outside action handlers: drivers are instantiated only inside handlers, and the one
   exception found (the recorder navigating by itself) was fixed.
+- **Classification follows the inputs.** An action whose nature depends on its inputs says so
+  (`ActionSpec.kind_for`): `browser.extract` with a `url` navigates and is classified exactly
+  like `browser.open` (privileged schemes such as `file:` and `javascript:` are high risk).
+  Before this phase it was rated a plain read (found in the October 2026 audit, regression
+  test in `tests/unit/actions/test_state_and_api_actions.py`).
+- **Human-verification challenges** (CAPTCHAs) are detected and handed to the person: the agent
+  loop stops with `needs_user`. HighhX does not solve, click through, outsource or evade them.
+- **Schema extraction** never reads password, card, one-time-code or hidden fields; its
+  output is data and passes the redactor like any action output.
+- **E-mail** (`email.send`) is high risk and always asked; the password comes only from the
+  environment; TLS is required unless the server is on this computer; recipients and subject
+  are checked for header injection; the body appears in events and audit only as its length.
+- **Workflow loops**: items computed at run time and spliced into a `run:` command line are
+  flagged by `workflow validate`, and the resulting command is still classified and asked.
+- **Capability report** (`highhx capabilities`) looks only at PATH, the platform and
+  configuration: it never contacts a model or the platform and never reads a provider key.
+- **Emulators**: starting one is medium risk (high with `wipe`); stopping refuses anything
+  that is not an emulator serial.
 
 ## Data
 

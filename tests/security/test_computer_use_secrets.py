@@ -131,3 +131,49 @@ def test_query_string_values_never_reach_audit_or_events(agent_project: Path, ma
 
     written = everything_written(tmp_path) + everything_written(user_data_dir()) + everything_written(agent_project / ".highhx")
     assert "qk-77aa-secret" not in written and "api_key=…" in written
+
+
+def test_query_values_of_opened_and_extracted_urls_never_reach_audit_or_events(agent_project: Path, make_app, tmp_path: Path) -> None:
+    """browser.open and browser.extract {url}: the classifier sees the whole URL (sensitive-URL rules),
+    but audit rows and events keep parameter names only."""
+    app = make_app(agent_project)
+    EventLog(app.redactor, directory=tmp_path / "events").attach(app.ctx.events)
+    gate = ActionGate(app.engine, RecordingUI(default_action_answer=False, default_permission="no"), source="test", mode=ApprovalMode.ASK, audit=AuditLog(app.db, app.redactor))
+    executor = ActionExecutor(app, gate, actor=Actor.AGENT)  # the agent's actions are asked; declined: nothing runs
+    for action in ("browser.open", "browser.extract"):
+        result = executor.run(action, {"url": "https://shop.example.com/reset?token=rt-91zz-secret&step=2"})
+        assert result.status == "denied", (action, result.status, result.error)
+    app.close()
+    from highhx.utils.paths import user_data_dir
+
+    written = everything_written(tmp_path) + everything_written(user_data_dir()) + everything_written(agent_project / ".highhx")
+    assert "rt-91zz-secret" not in written
+    assert "reset?token=…&step=…" in written  # the audit row keeps parameter names only
+    assert "step=2" not in written  # not only secret-looking values: every query value
+
+
+def test_a_failed_navigation_does_not_carry_its_query_values_into_records(agent_project: Path, make_app, tmp_path: Path, monkeypatch) -> None:
+    """The handler's error quotes the URL ("Could not open …?token=…"): history, audit and events
+    keep parameter names only."""
+    import dataclasses
+
+    from highhx.actions.spec import ActionResult
+
+    url = "https://shop.example.com/reset?token=rt-55qq-secret&q=private-words"
+
+    def failing(ctx, inputs):  # type: ignore[no-untyped-def]
+        return ActionResult(False, error=f"Could not open {inputs['url']}: net::ERR_NAME_NOT_RESOLVED", summary=f"open {inputs['url']}")
+
+    app = make_app(agent_project)
+    EventLog(app.redactor, directory=tmp_path / "events").attach(app.ctx.events)
+    gate = ActionGate(app.engine, RecordingUI(), source="test", mode=ApprovalMode.ASK, audit=AuditLog(app.db, app.redactor))
+    executor = ActionExecutor(app, gate, actor=Actor.USER)
+    real = executor.catalog.get("browser.open")
+    monkeypatch.setattr(executor.catalog, "get", lambda name: dataclasses.replace(real, handler=failing) if name == "browser.open" else type(executor.catalog).get(executor.catalog, name))
+    result = executor.run("browser.open", {"url": url})
+    assert not result.ok and "token=…&q=…" in result.error
+    app.close()
+    from highhx.utils.paths import user_data_dir
+
+    written = everything_written(tmp_path) + everything_written(user_data_dir()) + everything_written(agent_project / ".highhx")
+    assert "rt-55qq-secret" not in written and "private-words" not in written

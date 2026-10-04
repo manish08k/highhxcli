@@ -219,7 +219,7 @@ class ActionExecutor:
         if problems:
             raise ValidationError(f"Invalid input for {spec.name}.", details=problems)
         descriptor = ActionDescriptor(
-            kind=spec.kind,
+            kind=spec.kind_for(data) if spec.kind_for is not None else spec.kind,
             summary=spec.describe(data),
             tool=spec.name,
             target=spec.target_for(data),
@@ -309,6 +309,7 @@ class ActionExecutor:
                 execution_id = str(getattr(op, "execution_id", "") or "")
                 result = self._attempts(spec, ctx, inputs, token, timed_out)
                 result.execution_id = execution_id
+                _mask_url(planned.descriptor, result)
                 if result.ok and spec.verify is not None:
                     verified, detail = spec.verify(ctx, inputs, result)
                     result.verified = verified
@@ -514,3 +515,16 @@ def _topological_ids(nodes: Sequence[ActionNode]) -> list[str]:
             done.append(node.id)
             pending.remove(node)
     return done
+
+
+def _mask_url(descriptor: ActionDescriptor, result: ActionResult) -> None:
+    """A navigation's error and summary quote its URL; history, audit and events keep the query
+    parameter names only (the person saw the whole URL when it was planned)."""
+    target = descriptor.target
+    if descriptor.kind != ActionKind.NAVIGATE or "?" not in target:
+        return
+    from highhx.computer.network import sanitize_url
+
+    clean = sanitize_url(target)
+    result.error = result.error.replace(target, clean)
+    result.summary = result.summary.replace(target, clean)

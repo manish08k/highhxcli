@@ -13,6 +13,7 @@ highhx tui
 │ GROUND 'Export'  accessibility ✗  dom ✓ 0.95                                       │
 │ VERIFY success     recovery 0/10 · 1 healed                                        │
 │ TOOLS  ✓ browser.open 0.3s  ✓ browser.click 0.3s                                   │
+│ NETWORK POST https://shop.test/api/export 201                                      │
 │ COST   0 tokens · 2 action(s) · avg 0.31s · runtime browser                        │
 │ ⚠ healed 'Export' → 'Download CSV' (dom)                                          │
 ╰──────────────────────────────────────────────────────────────── trace tr_9c1… ──╯
@@ -29,6 +30,9 @@ highhx tui
   resumable with `/resume`; Ctrl-D leaves.
 - **Approvals** are asked in the console. The live view pauses first so the full request (risk,
   reasons, target) is visible.
+- **NETWORK** shows the latest requests browser actions caused (sanitized URLs, status, and how
+  many failed); **YOU** appears when the task is waiting for you (a CAPTCHA, a secret field, an
+  unconfirmable result) with the reason.
 - Output stays in the terminal's scrollback. `/history` lists past tasks and `/trace` opens the
   last task's trace.
 

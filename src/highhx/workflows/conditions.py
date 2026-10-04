@@ -26,7 +26,11 @@ from pathlib import Path
 from typing import Any
 
 STATUS_FUNCTIONS = frozenset({"success", "failure", "always", "cancelled"})
-KNOWN_ROOTS = frozenset({"env", "vars", "inputs", "steps", "workflow", "execution", "platform", "project"})
+KNOWN_ROOTS = frozenset(
+    {"env", "vars", "inputs", "steps", "workflow", "execution", "platform", "project", "item", "loop"}
+)
+LOOP_ROOTS = frozenset({"item", "loop"})
+"""Only defined inside a ``for_each`` step."""
 
 _TOKEN_RE = re.compile(
     r"""
@@ -264,6 +268,16 @@ class EvalContext:
     """Unknown references raise when strict; otherwise they evaluate to None."""
 
 
+def _fromjson(value: Any) -> Any:
+    """Parse a step output that holds JSON (outputs are strings)."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError as exc:
+        raise ExpressionError(f"fromjson(): not JSON ({exc.args[0][:60]})") from exc
+
+
 def _truthy(value: Any) -> bool:
     if isinstance(value, str):
         return value != "" and value.lower() not in ("false", "0")
@@ -308,6 +322,7 @@ class Evaluator:
             "endswith": lambda a, b: str(a).lower().endswith(str(b).lower()),
             "format": self._format,
             "tojson": lambda v: json.dumps(v, default=str),
+            "fromjson": _fromjson,
             "exists": self._exists,
         }
 

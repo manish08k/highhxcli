@@ -157,6 +157,15 @@ class TaskTrace:
                 parent.add(TraceNode("reflection", str(p.get("decision", "")), str(p.get("reason", ""))))
             elif name == "checkpoint.resumed":
                 root.add(TraceNode("resumed", f"after {p.get('steps', 0)} step(s)"))
+            elif name == "network.observed":
+                entries = p.get("entries") or []
+                shown = " · ".join(
+                    f"{e.get('method', '')} {e.get('url', '')} → {e.get('status') or e.get('error') or '…'}"
+                    + (f" {e['ms']}ms" if e.get("ms") is not None else "")
+                    for e in entries[:5]
+                )
+                failed = int(p.get("failed") or 0)
+                parent.add(TraceNode("network", f"{p.get('requests', len(entries))} request(s)", shown[:400], f"{failed} failed" if failed else ""))
             elif name == "model.usage":
                 parent.add(TraceNode("model", str(p.get("model", "")), f"{p.get('input_tokens', 0)} in / {p.get('output_tokens', 0)} out"))
             elif name in ("task.completed", "task.failed"):

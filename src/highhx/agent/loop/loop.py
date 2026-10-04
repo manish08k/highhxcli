@@ -37,6 +37,7 @@ from highhx.agent.loop.verifier import AgentVerifier, StepVerdict
 from highhx.agent.loop.worker import AgentWorker, GroundingFailed, UnsupportedStep, WorkResult
 from highhx.core.errors import HighhXError, OperationCancelledError, ValidationError
 from highhx.core.events import trace_context
+from highhx.perception.challenges import detect as detect_challenge
 from highhx.trajectories.store import Trajectory, TrajectoryStep
 from highhx.verification.declarative import Verdict, VerificationContext, verify
 
@@ -216,6 +217,14 @@ class AgentLoop:
             last_fingerprint = fingerprint
             if same_screen >= NO_PROGRESS:
                 return Status.FAILED, "no progress: the screen stopped changing while steps kept failing"
+            challenge = detect_challenge(state)
+            if challenge is not None:  # a person must answer it: never solved or clicked through
+                reason = (
+                    f"a human-verification challenge (CAPTCHA) is on the screen — {challenge.evidence}. "
+                    f"Solve it yourself, then resume with `highhx agent --resume {trajectory.id}`"
+                )
+                self.events.emit(ev.AGENT_REFLECTION, decision="ask_user", reason=reason, challenge=challenge.kind)
+                return Status.NEEDS_USER, reason
             try:
                 decision = self.planner.next(task, state, trajectory.steps, feedback=feedback, lessons=lessons)
             except HighhXError as exc:  # a model that is down or refuses: the task stops, resumable

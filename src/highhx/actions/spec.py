@@ -133,6 +133,9 @@ class ActionSpec:
     aliases: tuple[str, ...] = ()
     risk_for: Callable[[Inputs], Risk] | None = field(default=None, repr=False, compare=False)
     """A higher floor for some inputs (e.g. pressing Enter is riskier than pressing Escape)."""
+    kind_for: Callable[[Inputs], ActionKind] | None = field(default=None, repr=False, compare=False)
+    """How the classifier sees these inputs, when it depends on them (``browser.extract`` with a
+    ``url`` navigates, and is classified as navigation: privileged schemes, sensitive URLs)."""
     preview: Callable[[App, Inputs], list[str]] | None = field(default=None, repr=False, compare=False)
     """What exactly will change, shown before approval (a diff for file writes …)."""
 

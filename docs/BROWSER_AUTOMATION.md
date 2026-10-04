@@ -40,8 +40,52 @@ step, and used by the `network` verification check:
   verify: {network: {url_contains: /api/orders, method: POST, status: 201}}
 ```
 
+Each entry also has its duration (`ms`, from DevTools' own timestamps; absent rather than
+invented when they are missing) and `redirect: true` on a hop answered with a redirect. Task
+traces show a `Network` node per step and the live dashboard a `NETWORK` line.
+
 Without a journal (for example, a remote browser that is not HighhX's), `network` stays
 `unknown`, never guessed. Tested in real Chrome: `tests/unit/computer/test_live_network.py`.
+
+### Waiting on the network
+
+```yaml
+- action: browser.wait
+  parameters: {network_idle: true, idle_ms: 500, timeout: 30}           # nothing in flight for 500 ms
+- action: browser.wait
+  parameters: {request: {url_contains: /api/orders, method: POST, status: 201}, timeout: 10}
+```
+
+A `request` wait matches the sanitized URL (so never a query value), and also counts a request
+that finished up to 2 seconds before the wait began (the click that sent it came first). Without
+a journal the wait fails instead of guessing. Tested in real Chrome with a delayed, slow POST.
+
+## Structured extraction
+
+`browser.extract` with `schema` fills a JSON Schema (an object of string, number, integer,
+boolean, array and object properties) from what the page states explicitly: `<label>` and its
+control, `<dt>`/`<dd>`, a table row whose first cell is a header, `aria-label` on outputs,
+`Label: value` lines, tables (arrays of objects, matched by their headers) and lists (arrays of
+strings, matched by the heading before them). Properties match labels by their terms (snake_case
+or camelCase names, or `title`, stemmed, with synonyms): every term of the property must be in
+the label, so `total` matches "Order total" and not "Subtotal".
+
+```yaml
+- action: browser.extract
+  parameters:
+    schema:
+      type: object
+      properties:
+        order_id: {type: string}
+        total: {type: number}
+        items: {type: array, items: {type: object, properties: {name: {type: string}, price: {type: number}}}}
+      required: [order_id, total]
+```
+
+Output: `data`, `sources` (where each value came from), `missing` and `problems`. It never
+guesses: two different values for one property are *ambiguous*, `"3 of 5"` is not a number, and
+a missing required property fails the action. No model is used. Password, card, one-time-code
+and hidden fields are never read. Tested in real Chrome (`tests/unit/computer/test_extract.py`).
 
 ## Recording and replay
 
