@@ -25,6 +25,16 @@ class Tab:
     """When HighhX last worked in this tab (0: never)."""
     requested: str = ""
     """The address HighhX last opened here (the tab may show where that redirected)."""
+    landed: str = ""
+    """Where that request ended up. ``requested`` stands for this tab only while it still shows
+    ``landed``: once the page moves elsewhere (a click, a script, the person), the request no
+    longer describes it."""
+
+    def opened(self, requested: str, landed: str) -> None:
+        self.requested, self.landed = requested, landed or requested
+
+    def showing_request(self) -> bool:
+        return bool(self.requested) and same_document(self.landed or self.requested, self.url)
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "url": self.url, "title": self.title, "opener": self.opener}
@@ -57,6 +67,8 @@ class TabRegistry:
             tab = self.tabs[target] = Tab(target, opener=str(info.get("openerId") or ""))
         tab.url = str(info.get("url") or tab.url)
         tab.title = str(info.get("title") or tab.title)
+        if tab.requested and not tab.showing_request() and not same_document(tab.requested, tab.url):
+            tab.requested = tab.landed = ""  # the page moved on: the old request no longer describes it
         if info.get("openerId"):
             tab.opener = str(info["openerId"])
         return tab
@@ -97,7 +109,7 @@ class TabRegistry:
     def find(self, url: str) -> Tab | None:
         """A tab showing ``url`` — or where HighhX opened ``url`` and it redirected."""
         return next(
-            (t for t in self.pages() if same_document(url, t.url) or (t.requested and same_document(url, t.requested))),
+            (t for t in self.pages() if same_document(url, t.url) or (t.showing_request() and same_document(url, t.requested))),
             None,
         )
 

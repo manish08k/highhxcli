@@ -366,3 +366,25 @@ def test_a_task_trace_reconstructs_the_run(kit: Kit, tmp_path: Path) -> None:
     assert listed[0]["trace_id"] == trace.trace_id and listed[0]["status"] == "completed"
     state = next(r for r in kit.events if r.name == "observation.created" and r.context.get("step_id"))
     assert state.context.get("task_id") == result.trajectory.id
+
+
+def test_routing_weighs_success_history_and_risk() -> None:
+    goal = "click the export button on the page and run the tests"
+    plain = ToolRouter().route(goal)
+    assert [r.tool for r in plain] == ["shell", "browser"] and plain[0].cost < plain[1].cost  # a tie: the cheaper first
+    remembered = ToolRouter(history={"browser": 1.0, "shell": 0.0}).route(goal)
+    assert remembered[0].tool == "browser" and "100% of past tasks succeeded" in remembered[0].reason
+    from highhx.agent.loop.routing import success_history
+    from highhx.trajectories import Trajectory
+
+    class Store:
+        def recent(self, limit: int = 0) -> list[Trajectory]:
+            return [Trajectory("t", "browser", status="completed")] * 3 + [Trajectory("t", "none", status="failed")] * 3
+
+    assert success_history(Store()) == {"browser": 1.0, "shell": 0.0}
+
+
+def test_testing_and_debugging_specialists_are_read_mostly() -> None:
+    assert SPECIALISTS["testing"].task("x", AgentTask("y")).permits("project.test")
+    assert not SPECIALISTS["testing"].task("x", AgentTask("y")).permits("filesystem.write")
+    assert not SPECIALISTS["debugging"].task("x", AgentTask("y")).permits("git.push")

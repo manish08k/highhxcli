@@ -31,9 +31,11 @@ class AgentReflector:
     def __init__(self, recovery: RecoveryManager) -> None:
         self.recovery = recovery
 
-    def after_step(self, step_id: str, response: ActionResponse | None, outcome: Outcome, label: str = "") -> Reflection:
+    def after_step(self, step_id: str, response: ActionResponse | None, outcome: Outcome, label: str = "", *, unobservable: bool = False) -> Reflection:
         if outcome == Outcome.SUCCESS:
             return Reflection("continue", "verified")
+        if unobservable and response is not None and response.result.ok:
+            return Reflection("continue", "unconfirmed: its effect cannot be observed (secret field); the task's own check decides")
         action = self.recovery.after_action(step_id, response, outcome)
         lesson = ""
         if response is not None and response.result.error:

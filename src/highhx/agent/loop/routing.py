@@ -6,9 +6,10 @@
     "Run the tests"                                 → shell
     "Create a contact on the Android phone"         → android
 
-Each route has a cost (structured tools are cheaper and more reliable than screens, and screens
-read by a vision model are the most expensive). Unavailable tools (no adb, no browser) are
-ranked last with the reason. The agent loop uses the first route's surface unless the task names
+Each route has a cost (structured tools are cheaper and more reliable than screens, screens read
+by a vision model are the most expensive) plus how much it can touch (risk). Past success on a
+tool (trajectory memory) breaks ties. Unavailable tools (no adb, no browser) are ranked last with
+the reason. Routing only chooses a surface: every action still goes through the executor. The agent loop uses the first route's surface unless the task names
 one.
 """
 
@@ -72,10 +73,16 @@ class Route:
         }
 
 
+RISK = {"filesystem": 1, "shell": 2, "code": 2, "api": 2, "sandbox": 0, "browser": 2, "desktop": 3, "android": 3}
+"""How much a route can touch outside the project (a sandbox the least, a real desktop the most)."""
+
+
 @dataclass
 class ToolRouter:
     availability: Mapping[str, Callable[[], tuple[bool, str]]] = field(default_factory=dict)
     """tool → () -> (available, why not). Tools without a check count as available."""
+    history: Mapping[str, float] = field(default_factory=dict)
+    """tool → success rate of past tasks on it (from trajectory memory)."""
 
     def route(self, goal: str) -> list[Route]:
         routes: list[Route] = []
@@ -87,8 +94,14 @@ class ToolRouter:
             available, why = check() if check else (True, "")
             needs_vision = tool == "desktop" and bool(CANVAS_APPS.search(goal))
             score = float(len(hits))
-            reason = f"matches {len(hits)} {tool} cue(s)" + (f"; unavailable: {why}" if not available else "")
-            routes.append(Route(tool, score, COST[tool] + (2 if needs_vision else 0), reason, available, needs_vision))
+            reason = f"matches {len(hits)} {tool} cue(s)"
+            if tool in self.history:
+                rate = self.history[tool]
+                score += 0.5 * (rate - 0.5)  # a tool that usually works here is preferred among equals
+                reason += f"; {rate:.0%} of past tasks succeeded"
+            if not available:
+                reason += f"; unavailable: {why}"
+            routes.append(Route(tool, score, COST[tool] + (2 if needs_vision else 0) + RISK[tool] // 2, reason, available, needs_vision))
         if not routes:
             routes.append(Route("shell", 0.1, COST["shell"], "no specific cue: start with commands and files"))
         # most relevant first; among equally relevant, the cheapest; unavailable ones last
@@ -108,7 +121,18 @@ class ToolRouter:
         return len(kinds) >= 2
 
 
-def default_router() -> ToolRouter:
+def success_history(store: object) -> dict[str, float]:
+    """Success rate per tool from recent trajectories (surface → tool)."""
+    totals: dict[str, list[int]] = {}
+    for trajectory in getattr(store, "recent", lambda **_: [])(limit=200):
+        tool = {"browser": "browser", "desktop": "desktop", "android": "android"}.get(trajectory.surface, "shell")
+        done = totals.setdefault(tool, [0, 0])
+        done[0] += trajectory.status == "completed"
+        done[1] += 1
+    return {tool: ok / total for tool, (ok, total) in totals.items() if total >= 3}
+
+
+def default_router(store: object = None) -> ToolRouter:
     def adb() -> tuple[bool, str]:
         from highhx.drivers.android.adb import find_adb
 
@@ -119,4 +143,4 @@ def default_router() -> ToolRouter:
 
         return (True, "") if find_browser() else (False, "no Chromium-family browser was found")
 
-    return ToolRouter({"android": adb, "browser": browser})
+    return ToolRouter({"android": adb, "browser": browser}, success_history(store) if store is not None else {})

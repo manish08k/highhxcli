@@ -42,6 +42,10 @@ if TYPE_CHECKING:
     from highhx.computer.session import ComputerSession
 
 
+TYPED_INPUTS = frozenset({"text", "password", "value", "body"})
+"""Inputs that carry text a person or agent typed: never written to events as they are."""
+
+
 class UnknownActionError(ValidationError):
     pass
 
@@ -97,9 +101,14 @@ class Planned:
         return lines
 
     def to_dict(self) -> dict[str, Any]:
+        """For events and logs: typed text is replaced by its length (it may be a password)."""
         return {
             "action": self.spec.name,
-            "inputs": {k: v for k, v in self.inputs.items() if k != "content"},
+            "inputs": {
+                k: (f"<{len(v)} characters>" if k in TYPED_INPUTS and isinstance(v, str) else v)
+                for k, v in self.inputs.items()
+                if k != "content"
+            },
             "risk": self.decision.risk.label,
             "approval": self.decision.approval.name.lower(),
             "asks": self.asks,

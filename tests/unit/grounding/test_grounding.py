@@ -226,3 +226,25 @@ def test_vision_reads_a_serialized_states_capture_file(tmp_path) -> None:
     assert state.screenshot.data is None
     result = HybridGrounder(vision=model).ground(state, Target.of("logo"))
     assert result.grounded and result.point == (20, 20)
+
+
+def test_model_registry_keeps_the_free_pro_and_consent_rules(monkeypatch, agent_project, make_app) -> None:
+    import pytest
+
+    from highhx.core.errors import PlanRequiredError
+    from highhx.models.registry import language_model, vision_model
+
+    app = make_app(agent_project)
+    monkeypatch.setenv("HIGHHX_PLANNER_BASE_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("HIGHHX_PLANNER_MODEL", "big")
+    with pytest.raises(PlanRequiredError):
+        language_model(app)  # a remote endpoint needs consent
+    assert language_model(app, remote_ok=True).name.endswith("big")
+    monkeypatch.setenv("HIGHHX_PLANNER_BASE_URL", "http://127.0.0.1:11434/v1")
+    assert language_model(app).local  # a local model needs neither Pro nor consent
+    for name in ("HIGHHX_PLANNER_BASE_URL", "HIGHHX_PLANNER_MODEL", "HIGHHX_VISION_BASE_URL", "HIGHHX_VISION_MODEL", "HIGHHX_VISION_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(PlanRequiredError):
+        language_model(app, remote_ok=True)  # no local model and not signed in: HighhX Pro is required
+    with pytest.raises(PlanRequiredError):
+        vision_model(app, remote_ok=True)

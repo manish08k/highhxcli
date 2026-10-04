@@ -220,6 +220,9 @@ class AgentLoop:
             feedback = ""
             self._usage(decision, counters)
             if decision.kind == "done":
+                unconfirmed = sum(1 for s in trajectory.steps if (s.verification or {}).get("unobservable"))
+                if unconfirmed and task.success is None:
+                    return Status.NEEDS_USER, f"done, but {unconfirmed} step(s) could not be confirmed and the task has no success check"
                 ok, why = self._finished(task, observer, counters)
                 if ok is True:
                     return Status.COMPLETED, decision.summary or why
@@ -313,7 +316,7 @@ class AgentLoop:
             verdict = verifier.verify(step, work, state)
             counters.observations += verdict.observations
             counters.outcomes[str(verdict.outcome)] = counters.outcomes.get(str(verdict.outcome), 0) + 1
-            reflection = reflector.after_step(step.id, work.last, verdict.outcome, step.label)
+            reflection = reflector.after_step(step.id, work.last, verdict.outcome, step.label, unobservable=verdict.unobservable)
             self.events.emit(ev.AGENT_REFLECTION, step=step.id, **reflection.to_dict())
             grounding = work.grounding.to_dict() if work.grounding else None
             if grounding is not None:

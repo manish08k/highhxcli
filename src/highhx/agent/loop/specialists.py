@@ -7,6 +7,8 @@
       ComputerAgent   acts on the desktop
       AndroidAgent    acts on an Android device
       CodeAgent       commands and files in the project (shell, filesystem, git, tests)
+      TestingAgent    runs and reads tests (changes nothing else)
+      DebuggingAgent  investigates a failure: reads code, history and test output
       VerifierAgent   checks the overall success criteria, and acts on nothing
       PlannerAgent    turns the task into sub-tasks (a model when one is available, otherwise
                       the tool router)
@@ -71,6 +73,8 @@ SPECIALISTS: dict[str, Specialist] = {
         Specialist("computer", "desktop", ("computer.",), "acts on the desktop"),
         Specialist("android", "android", ("android.", "computer.state"), "acts on an Android device"),
         Specialist("code", "none", ("shell.run", "filesystem.", "git.", "project.", "package."), "commands and files in the project"),
+        Specialist("testing", "none", ("project.test", "project.check", "shell.run", "filesystem.read", "filesystem.list", "filesystem.search"), "runs and reads tests, changes nothing else"),
+        Specialist("debugging", "none", ("filesystem.read", "filesystem.search", "filesystem.find", "filesystem.list", "git.diff", "git.log", "git.status", "project.check", "project.test", "shell.run"), "investigates failures, reads before it changes"),
     )
 }
 ROUTE_TO_SPECIALIST = {"browser": "browser", "desktop": "computer", "android": "android", "shell": "code", "code": "code", "filesystem": "code", "api": "research", "sandbox": "code"}

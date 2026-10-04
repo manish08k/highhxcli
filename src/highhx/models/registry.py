@@ -48,8 +48,14 @@ def language_model(app: App, cancel: CancellationToken | None = None, *, remote_
                 "A local planner model needs both HIGHHX_PLANNER_BASE_URL and HIGHHX_PLANNER_MODEL.",
                 hint="e.g. HIGHHX_PLANNER_BASE_URL=http://127.0.0.1:11434/v1 HIGHHX_PLANNER_MODEL=qwen2.5:14b",
             )
+        from highhx.agent.model.capabilities import is_loopback
         from highhx.agent.model.openai import OpenAIProvider
 
+        if not is_loopback(base_url) and not remote_ok:
+            raise PlanRequiredError(
+                f"HIGHHX_PLANNER_BASE_URL ({base_url}) is not on this computer: the task and screen contents would leave it.",
+                hint="Confirm with --remote-model, or point it at a model served locally (127.0.0.1).",
+            )
         local = OpenAIProvider(os.environ.get("HIGHHX_PLANNER_API_KEY") or "local", base_url=base_url)
         return ChatLanguageModel(local, capabilities_for("local", model, config={"base_url": base_url}))
     from highhx.computer.operator.models import vision_config

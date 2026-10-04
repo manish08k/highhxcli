@@ -1089,12 +1089,12 @@ class ChromeBrowser:
             )
         if problems:
             self._note(None, "recovered", f"opened {url} after recovering from: {'; '.join(problems)}")
+        landed = self.current_url(cancel=cancel)
         tab = self.tabs.get(self._target_id)
         if tab is not None:
-            tab.requested = url
-        return NavigationResult(
-            url, self.current_url(cancel=cancel), self._target_id, settled=self.last_wait_settled, attempts=attempt
-        )
+            tab.url = landed or tab.url
+            tab.opened(url, landed)
+        return NavigationResult(url, landed, self._target_id, settled=self.last_wait_settled, attempts=attempt)
 
     def _open_where(self, url: str, cancel: CancellationToken | None) -> NavigationResult | None:
         """Where "open <url>" goes, before anything is loaded:

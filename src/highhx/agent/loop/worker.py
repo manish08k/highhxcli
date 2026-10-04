@@ -161,6 +161,10 @@ class AgentWorker:
             grounding = self.ground(step, state, strategies=strategies, escalate=escalate)
             work.grounding = grounding
             state = grounding.state or state
+            element = grounding.candidate.element if grounding.candidate else None
+            if element is not None and element.secret and step.parameters.get("text"):
+                # registered before anything is submitted, so no event, log or trace can keep it
+                self.executor.app.redactor.add([str(step.parameters["text"])])
         requests = self._requests(step, surface, state, grounding)
         previous = parent
         for request in requests:

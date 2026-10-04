@@ -38,9 +38,13 @@ class StepVerdict:
     after: ComputerState | None
     observations: int = 0
     detail: str = ""
+    unobservable: bool = False
+    """The effect cannot be observed by design (text typed into a secret field): unconfirmed,
+    never success — the task's own success check decides."""
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "unobservable": self.unobservable,
             "outcome": str(self.outcome),
             "report": self.report.to_dict() if self.report else None,
             "observations": self.observations,
@@ -67,6 +71,15 @@ def default_check(step: StepIntent, before: ComputerState | None) -> dict[str, A
     if verb == "launch" and before is not None and before.surface == "desktop":
         return {"application": str(step.parameters.get("name") or step.label)}
     return None
+
+
+def _secret_target(step: StepIntent, before: ComputerState | None, work: WorkResult) -> bool:
+    candidate = work.grounding.candidate if work.grounding is not None else None
+    if candidate is not None and candidate.element is not None:
+        return candidate.element.secret
+    if before is not None and step.label:
+        return any(e.secret for e in before.find(name=step.label))
+    return False
 
 
 class AgentVerifier:
@@ -104,6 +117,9 @@ class AgentVerifier:
             return StepVerdict(Outcome.FAILED, None, before, 0, "nothing ran")
         if not last.result.ok:
             return StepVerdict(Outcome.FAILED, None, before, 0, last.result.error or last.result.status)
+        if step.action == "type" and step.verify is None and _secret_target(step, before, work):
+            after = self.observe()
+            return StepVerdict(Outcome.UNKNOWN, None, after, 1, "typed into a secret field: it cannot be read back", unobservable=True)
         check = default_check(step, before)
         if check is None:
             if last.outcome == Outcome.UNKNOWN and before is not None:
