@@ -146,7 +146,7 @@ def run_task(executor: ActionExecutor, planner: AgentPlanner, task: AgentTask, *
     from highhx.agent.loop import AgentLoop, default_router
 
     trajectories, traces = stores(executor.app)
-    loop = AgentLoop(executor, planner, store=trajectories, traces=traces, router=default_router(trajectories))
+    loop = AgentLoop(executor, planner, store=trajectories, traces=traces, router=default_router(trajectories, executor.catalog))
     return loop.run(task)
 
 

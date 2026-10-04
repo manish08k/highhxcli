@@ -12,6 +12,11 @@ Everything HighhX runs leaves four kinds of records, each redacted before it is 
 Traces (spans per operation and workflow step) and metrics are recorded in the state
 database as well (`highhx trace`, `highhx report`).
 
+Computer-use tasks add task traces (`highhx trace tr_…`, [TRACES.md](TRACES.md)), trajectories
+(`highhx trajectories`, [TRAJECTORIES.md](TRAJECTORIES.md)), the event envelope (trace,
+session, task, step, action and execution ids; [EVENTS.md](EVENTS.md)) and benchmark metrics
+([BENCHMARKS.md](BENCHMARKS.md)).
+
 ## Events
 
 | Event | Emitted when | Main fields |

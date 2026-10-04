@@ -140,7 +140,7 @@ class FakeWebApp:
     def type_text(self, element_id: str, text: str, *, cancel: Any = None) -> None:
         spec = self._spec(element_id)
         self.log.append(("type", (spec["name"], text)))
-        if spec["name"] == "Email":
+        if spec["name"] == "Email" or spec.get("type") == "email":
             self.state["email"] = text
         if spec["name"] == "Search":
             self.state["typed_query"] = text

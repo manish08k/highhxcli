@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 TOOLS = ("filesystem", "shell", "code", "api", "browser", "desktop", "android", "sandbox")
-COST = {"filesystem": 1, "shell": 1, "code": 2, "api": 1, "sandbox": 2, "browser": 3, "desktop": 4, "android": 4}
+COST = {"filesystem": 1, "shell": 1, "code": 2, "api": 1, "sandbox": 2, "browser": 3, "desktop": 4, "android": 4, "plugin": 1}
 SURFACE = {"browser": "browser", "desktop": "desktop", "android": "android"}
 
 RULES: dict[str, tuple[str, ...]] = {
@@ -73,7 +73,7 @@ class Route:
         }
 
 
-RISK = {"filesystem": 1, "shell": 2, "code": 2, "api": 2, "sandbox": 0, "browser": 2, "desktop": 3, "android": 3}
+RISK = {"filesystem": 1, "shell": 2, "code": 2, "api": 2, "sandbox": 0, "browser": 2, "desktop": 3, "android": 3, "plugin": 2}
 """How much a route can touch outside the project (a sandbox the least, a real desktop the most)."""
 
 
@@ -83,6 +83,9 @@ class ToolRouter:
     """tool → () -> (available, why not). Tools without a check count as available."""
     history: Mapping[str, float] = field(default_factory=dict)
     """tool → success rate of past tasks on it (from trajectory memory)."""
+    plugins: Mapping[str, str] = field(default_factory=dict)
+    """Plugin actions (``plugin.<plugin>.<command>`` → description): a task that names one is
+    routed to it (it still runs through the executor like every action)."""
 
     def route(self, goal: str) -> list[Route]:
         routes: list[Route] = []
@@ -102,6 +105,12 @@ class ToolRouter:
             if not available:
                 reason += f"; unavailable: {why}"
             routes.append(Route(tool, score, COST[tool] + (2 if needs_vision else 0) + RISK[tool] // 2, reason, available, needs_vision))
+        for action, description in self.plugins.items():
+            _, plugin, command = [*action.split(".", 2), "", ""][:3]
+            words = {w for w in (plugin, command) if len(w) > 2}
+            hits = [w for w in words if re.search(rf"\b{re.escape(w)}\b", goal, re.I)]
+            if hits:
+                routes.append(Route("plugin", 1.0 + len(hits), COST["plugin"] + RISK["plugin"] // 2, f"{action}: {description[:60]}"))
         if not routes:
             routes.append(Route("shell", 0.1, COST["shell"], "no specific cue: start with commands and files"))
         # most relevant first; among equally relevant, the cheapest; unavailable ones last
@@ -132,7 +141,7 @@ def success_history(store: object) -> dict[str, float]:
     return {tool: ok / total for tool, (ok, total) in totals.items() if total >= 3}
 
 
-def default_router(store: object = None) -> ToolRouter:
+def default_router(store: object = None, catalog: object = None) -> ToolRouter:
     def adb() -> tuple[bool, str]:
         from highhx.drivers.android.adb import find_adb
 
@@ -143,4 +152,5 @@ def default_router(store: object = None) -> ToolRouter:
 
         return (True, "") if find_browser() else (False, "no Chromium-family browser was found")
 
-    return ToolRouter({"android": adb, "browser": browser}, success_history(store) if store is not None else {})
+    plugins = {spec.name: spec.description for spec in (catalog or []) if str(spec.name).startswith("plugin.")}  # type: ignore[attr-defined]
+    return ToolRouter({"android": adb, "browser": browser}, success_history(store) if store is not None else {}, plugins)

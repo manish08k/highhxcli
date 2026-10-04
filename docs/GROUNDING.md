@@ -18,6 +18,7 @@ A `Target` keeps every representation it was recorded with, so a change to one d
 | `text` (visible text, fuzzy) | role changes, small rewordings | larger rewordings |
 | `ocr` (text read from pixels) | missing structure (canvases, remote desktops) | low-contrast text |
 | `visual` (description for a vision model, last box, screenshot digest) | almost anything visible | needs a vision model |
+| `relative` (anchor label + direction: right, left, above, below, near; role) | unlabeled controls next to a label | the anchor renamed or moved apart |
 | `coordinate` (point + viewport + app + URL) | nothing structural, so it is the last resort | any layout change |
 
 Generated class names (`css-1x2y3z`, `sc-…`, `jsx-…`, hashes) are not used as selectors.
@@ -28,7 +29,7 @@ Generated class names (`css-1x2y3z`, `sc-…`, `jsx-…`, hashes) are not used a
 ## HybridGrounder
 
 ```text
-accessibility (1.00) → dom (0.95) → text (0.85) → ocr (0.70) → vision (0.65) → coordinate (0.30)
+accessibility (1.00) → dom (0.95) → text (0.85) → relative (0.75) → ocr (0.70) → vision (0.65) → coordinate (0.30)
 ```
 
 - **score** = strategy weight × candidate confidence, plus 0.15 when an earlier strategy pointed

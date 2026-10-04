@@ -26,6 +26,14 @@ and enforces them. The AI only chooses actions; it never gets its own way to run
 [Automation](docs/AUTOMATION.md) · [Voice](docs/VOICE.md) ·
 [Observability](docs/OBSERVABILITY.md) · [Plugin system](docs/PLUGIN_SYSTEM.md) ·
 [CLI reference](docs/CLI_REFERENCE.md) ([all commands](docs/commands.md)) ·
+**Computer use:** [architecture](docs/COMPUTER_USE_ARCHITECTURE.md) ·
+[perception](docs/PERCEPTION.md) · [grounding](docs/GROUNDING.md) ·
+[agent loop](docs/AGENT_LOOP.md) · [self-healing](docs/SELF_HEALING.md) ·
+[browser](docs/BROWSER_AUTOMATION.md) · [Android](docs/ANDROID.md) ·
+[runtime](docs/COMPUTER_RUNTIME.md) · [sandbox](docs/SANDBOX.md) ·
+[trajectories](docs/TRAJECTORIES.md) · [traces](docs/TRACES.md) ·
+[benchmarks](docs/BENCHMARKS.md) · [events](docs/EVENTS.md) · [MCP](docs/MCP.md) ·
+[console](docs/TUI.md) · [model providers](docs/PROVIDERS.md) ·
 [Roadmap](docs/ROADMAP.md) · [Contributing](docs/CONTRIBUTING.md)
 
 ```text
@@ -55,6 +63,7 @@ Suggested actions
 - [The interactive session](#the-interactive-session)
 - [HighhX Free: plain-language automation](#highhx-free-plain-language-automation)
 - [HighhX Pro: the AI developer agent](#highhx-pro-the-ai-developer-agent)
+- [Computer use](#computer-use)
 - [Commands](#commands)
 - [Workflows](#workflows)
 - [Configuration](#configuration)
@@ -359,6 +368,26 @@ highhx agent "why is the application crashing?"
 ```
 
 Guides: [docs/agent.md](docs/agent.md) · [docs/computer-use.md](docs/computer-use.md) · [docs/platform.md](docs/platform.md).
+
+## Computer use
+
+HighhX observes and operates browsers, desktops and Android devices through one action
+protocol and the same executor as everything else: risk, policy, approval, verification, audit.
+
+```bash
+highhx agent loop "export the invoices" --surface browser --plan steps.yaml   # plan → act → verify → recover
+highhx browser record invoices --url https://app.example.com                  # record once …
+highhx browser replay invoices                                                # … replay; drifted selectors heal
+highhx sandbox create && highhx sandbox exec sbx_… -- pytest -q              # isolated workspaces
+highhx android devices                                                        # Android through adb
+highhx trace tr_…                                                             # what happened, step by step
+highhx benchmark run browser desktop                                          # measure it
+highhx tui                                                                    # the console with a live dashboard
+```
+
+Targets are found by accessibility, DOM attributes, text, OCR, a vision model and, last,
+coordinates, and ambiguity is reported instead of guessed. Every step is verified, and an
+unconfirmed one is never reported done. See [COMPUTER_USE_ARCHITECTURE.md](docs/COMPUTER_USE_ARCHITECTURE.md).
 
 ## Commands
 

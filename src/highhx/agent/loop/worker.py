@@ -109,7 +109,7 @@ class AgentWorker:
     # ---------------------------------------------------------------- grounding
     def target_for(self, step: StepIntent, state: ComputerState) -> Target:
         """The step's target, enriched with selectors that found the same label before."""
-        if step.target.get("accessibility") or step.target.get("dom"):
+        if step.target.get("accessibility") or step.target.get("dom") or step.target.get("relative"):
             return Target.from_dict(step.target)
         base = Target.of(step.label, str(step.target.get("role") or ""), description=str(step.target.get("description") or ""))
         if self.memory is not None and step.label:
@@ -155,7 +155,7 @@ class AgentWorker:
         work = WorkResult(step)
         surface = step.surface or self.surface
         grounding = None
-        if step.is_verb and step.action in GROUNDED_VERBS and step.label:
+        if step.is_verb and step.action in GROUNDED_VERBS and (step.label or step.target.get("relative")):
             if state is None:
                 raise UnsupportedStep(f"'{step.action}' needs a screen, but this task has none")
             grounding = self.ground(step, state, strategies=strategies, escalate=escalate)

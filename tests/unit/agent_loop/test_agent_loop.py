@@ -388,3 +388,32 @@ def test_testing_and_debugging_specialists_are_read_mostly() -> None:
     assert SPECIALISTS["testing"].task("x", AgentTask("y")).permits("project.test")
     assert not SPECIALISTS["testing"].task("x", AgentTask("y")).permits("filesystem.write")
     assert not SPECIALISTS["debugging"].task("x", AgentTask("y")).permits("git.push")
+
+
+def test_an_unlabeled_field_is_grounded_by_its_neighbour(kit: Kit) -> None:
+    from highhx.benchmarks.environments import web
+
+    original = web.page_elements
+
+    def with_unlabeled(path, state, variant):  # type: ignore[no-untyped-def]
+        title, elements, text = original(path, state, variant)
+        if path == "/form" and not state.get("submitted"):
+            elements = [{"role": "text", "name": "Email", "tag": "label"}, {**elements[0], "name": ""}, *elements[1:]]
+        return title, elements, text
+
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(web, "page_elements", with_unlabeled)
+        kit.web.url = f"{BASE}/form"
+        script = [{"action": "type", "target": {"role": "textbox", "relative": {"anchor": "Email", "direction": "below", "role": "textbox"}}, "parameters": {"text": "me@example.com"}}]
+        result = kit.loop(ScriptedPlanner(script)).run(AgentTask("fill", surface="browser"))
+    assert kit.web.state.get("email") == "me@example.com"
+    assert result.trajectory.steps[0].grounding["candidate"]["strategy"] == "relative"
+
+
+def test_routing_to_plugin_commands() -> None:
+    router = ToolRouter(plugins={"plugin.lighthouse.audit": "Run a Lighthouse audit of the site"})
+    first = router.route("run the lighthouse audit")[0]
+    assert first.tool == "plugin" and first.surface == "none" and "plugin.lighthouse.audit" in first.reason
+    assert all(r.tool != "plugin" for r in router.route("export the invoices"))

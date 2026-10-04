@@ -172,3 +172,15 @@ def test_results_are_stored_and_compared(tmp_path: Path) -> None:
     diff = compare(base, other)
     assert diff["summary"]["task_success_rate"]["delta"] == -0.5 and diff["summary"]["task_success_rate"]["better"] is False
     assert set(diff["tasks"]) == {"write-config", "run-a-script"}
+
+
+def test_doctor_reports_computer_use_capabilities_honestly(monkeypatch: pytest.MonkeyPatch) -> None:
+    from highhx.core.result import CheckStatus
+    from highhx.diagnostics.doctor import computer_use_checks
+
+    monkeypatch.setenv("HIGHHX_ADB", "/nonexistent/adb")
+    checks = {c.name: c for c in computer_use_checks()}
+    android = checks["android driver unavailable"]
+    assert android.status == CheckStatus.SKIP and "adb" in (android.hint or "")
+    assert checks["vm driver unavailable"].status == CheckStatus.SKIP
+    assert any(name.startswith(("sandbox isolation", "no sandbox")) for name in checks)

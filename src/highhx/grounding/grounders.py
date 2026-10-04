@@ -261,6 +261,53 @@ class VisionGrounder:
         return Found(out)
 
 
+class RelativeGrounder:
+    """The element in a direction from an anchor found by its label, nearest first. Confidence
+    falls with distance, and several equally near candidates are a tie (never a guess)."""
+
+    name = "relative"
+    DIRECTIONS = ("right", "left", "above", "below", "near")
+
+    def find(self, state: ComputerState, target: Target, *, cancel: CancellationToken | None = None) -> Found:
+        rel = target.relative
+        if rel is None:
+            return Found(status="skipped", detail="no relative position recorded")
+        anchors = [e for e in _structured(state) if e.bounds and _norm(e.name) == _norm(rel.anchor)]
+        if not anchors:
+            anchors = [e for e in state.elements if e.bounds and _similar(rel.anchor, e.name) >= 0.85]
+        if len(anchors) != 1:
+            return Found(detail=f"{'no' if not anchors else len(anchors)} anchor(s) named {rel.anchor!r}")
+        anchor = anchors[0]
+        assert anchor.bounds is not None
+        ax, ay, aw, ah = anchor.bounds
+        acx, acy = ax + aw / 2, ay + ah / 2
+        role = rel.role or target.role
+        scored: list[tuple[float, StateElement]] = []
+        for e in state.elements:
+            if e is anchor or not e.bounds or (role and e.role != role):
+                continue
+            x, y, w, h = e.bounds
+            cx, cy = x + w / 2, y + h / 2
+            in_row = abs(cy - acy) <= max(ah, h)
+            in_column = abs(cx - acx) <= max(aw, w)
+            ok = {
+                "right": x >= ax + aw - 2 and in_row,
+                "left": x + w <= ax + 2 and in_row,
+                "below": y >= ay + ah - 2 and in_column,
+                "above": y + h <= ay + 2 and in_column,
+                "near": True,
+            }.get(rel.direction, False)
+            if ok:
+                scored.append((((cx - acx) ** 2 + (cy - acy) ** 2) ** 0.5, e))
+        if not scored:
+            return Found(detail=f"nothing {rel.direction} of {rel.anchor!r}")
+        scored.sort(key=lambda pair: pair[0])
+        nearest = scored[0][0]
+        close = [e for d, e in scored if d <= nearest * 1.1 + 2]
+        confidence = max(0.5, 0.95 - nearest / 2000)
+        return Found([Candidate(self.name, confidence, e, reason=f"{e.label()} {rel.direction} of {rel.anchor!r}") for e in close])
+
+
 class CoordinateGrounder:
     name = "coordinate"
 

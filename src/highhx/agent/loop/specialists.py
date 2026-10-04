@@ -72,12 +72,12 @@ SPECIALISTS: dict[str, Specialist] = {
         Specialist("browser", "browser", ("browser.", "computer.state"), "acts in the browser"),
         Specialist("computer", "desktop", ("computer.",), "acts on the desktop"),
         Specialist("android", "android", ("android.", "computer.state"), "acts on an Android device"),
-        Specialist("code", "none", ("shell.run", "filesystem.", "git.", "project.", "package."), "commands and files in the project"),
+        Specialist("code", "none", ("shell.run", "filesystem.", "git.", "project.", "package.", "plugin."), "commands, files and plugin commands in the project"),
         Specialist("testing", "none", ("project.test", "project.check", "shell.run", "filesystem.read", "filesystem.list", "filesystem.search"), "runs and reads tests, changes nothing else"),
         Specialist("debugging", "none", ("filesystem.read", "filesystem.search", "filesystem.find", "filesystem.list", "git.diff", "git.log", "git.status", "project.check", "project.test", "shell.run"), "investigates failures, reads before it changes"),
     )
 }
-ROUTE_TO_SPECIALIST = {"browser": "browser", "desktop": "computer", "android": "android", "shell": "code", "code": "code", "filesystem": "code", "api": "research", "sandbox": "code"}
+ROUTE_TO_SPECIALIST = {"browser": "browser", "desktop": "computer", "android": "android", "shell": "code", "code": "code", "filesystem": "code", "api": "research", "sandbox": "code", "plugin": "code"}
 
 
 @dataclass

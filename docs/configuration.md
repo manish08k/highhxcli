@@ -200,6 +200,11 @@ See [security.md](security.md#policies).
 | `HIGHHX_API_URL` | HighhX platform URL (self-hosted / development) |
 | `HIGHHX_BROWSER` | Browser binary for `highhx computer` (default: Chrome/Chromium/Edge/Brave) |
 | `HIGHHX_HEADLESS` | Run the HighhX browser without a window (always on Linux without a display) |
+| `HIGHHX_COMPUTER_TARGET` | The computer operated: `local` or `ssh://user@host` (see [COMPUTER_RUNTIME.md](COMPUTER_RUNTIME.md)) |
+| `HIGHHX_VISION_PROVIDER`, `HIGHHX_VISION_BASE_URL`, `HIGHHX_VISION_MODEL`, `HIGHHX_VISION_COORDINATES`, `HIGHHX_VISION_FORMAT`, `HIGHHX_VISION_API_KEY` | The vision model for grounding and the vision operator ([PROVIDERS.md](PROVIDERS.md)) |
+| `HIGHHX_PLANNER_BASE_URL`, `HIGHHX_PLANNER_MODEL`, `HIGHHX_PLANNER_API_KEY` | A local (OpenAI-compatible) model for `highhx agent loop --model`. A non-local endpoint needs `--remote-model` |
+| `HIGHHX_ADB` | The adb binary for Android (default: `adb` on PATH, or `$ANDROID_HOME/platform-tools/adb`) |
+| `HIGHHX_VAR_<NAME>` | A value for a browser workflow's secret-field variable at replay |
 | `NO_COLOR` | Disable colors |
 
 HighhX sets `HIGHHX_WORKFLOW`, `HIGHHX_EXECUTION_ID`, `HIGHHX_STEP_ID`,

@@ -16,14 +16,20 @@ than it does.
 | Plain-language entities from more sources | Test names, package names, container names for the resolver |
 | Windows voice recording | Recorders are POSIX tools today; SAPI speech already works |
 | IDE and chat interfaces | Same session contract as voice: text in, the same engine, outcomes out |
+| Real-device Android validation | The adb driver and actions are tested against a simulated device; run them on emulators and phones in CI |
+| bubblewrap and Docker sandboxes in CI | Implemented; only Seatbelt has been exercised against the real platform so far |
+| VM and cloud computers | `VMRuntime` / `CloudRuntime` are capability errors today; a hypervisor or cloud-desktop backend behind `ComputerDriver` and `Runtime` |
+| Browser network log for verification | The `network` check needs a request log; recording CDP `Network.*` events per action would feed it |
+| A semantic embedding model for trajectory memory | Search is lexical (`HashingEmbedding`); any `EmbeddingModel` can be plugged in |
+| External benchmark adapters | Convert WebArena-, OSWorld- or AndroidWorld-style tasks into the HighhX benchmark format |
 
 ## Deliberately not built
 
 | Item | Reason |
 |---|---|
-| AI on Free (including "just for intent classification") | Free is deterministic by definition: no model calls, no provider keys, no account |
+| AI on Free (including "just for intent classification") | Free is deterministic by definition: no model calls, no provider keys, no account. (A model the person runs themselves — `computer.vision` with the `local` provider, or `HIGHHX_PLANNER_*` — is used only when they configure it; the remote case needs explicit consent. See [PROVIDERS.md](PROVIDERS.md).) |
 | Bring-your-own-key model providers in the CLI | All AI goes through the platform, which authenticates, entitles and meters every request |
-| Multi-agent orchestration | One agent per session keeps a single auditable decision trail and one approval stream; no demonstrated benefit for the targeted tasks yet |
+| Parallel sub-agents | Specialists in the computer-use loop run one after another on one executor and one approval stream; running them in parallel would split the decision trail |
 | A .NET / native worker | Measured: the Python engine dispatches a command through the full safety pipeline in ~3 ms (see [ARCHITECTURE.md](ARCHITECTURE.md#runtime-choice)); a second runtime would cost installability without a measurable gain |
 | An always-listening microphone | Voice is push-to-talk by design |
 | Automatic retries of non-idempotent actions | A retried push, deploy or install can do damage twice |

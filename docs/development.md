@@ -10,13 +10,29 @@ pip install -e ".[dev]"
 ## Checks
 
 ```bash
-pytest                          # everything (≈ 90 s)
+pytest                          # everything (≈ 5 min)
 pytest tests/unit -q            # fast unit tests
 pytest -m e2e                   # end-to-end: runs `python -m highhx` in subprocesses
 ruff check . && ruff format --check .
 mypy                            # configured in pyproject.toml for src/highhx
 coverage run -m pytest && coverage combine && coverage report
 ```
+
+Opt-in tests that drive real things on this computer:
+
+| Variable | Runs |
+|---|---|
+| `HIGHHX_TEST_BROWSER=1` | real Chrome/Chromium: `test_live_browser.py`, and `test_live_recorder.py` (record a person's clicks, redesign the site, replay with self-healing) |
+| `HIGHHX_TEST_DESKTOP_INPUT=1` | real mouse and keyboard on macOS (`tests/e2e/test_desktop_live.py`) |
+| `HIGHHX_TEST_OCR=1` | real tesseract OCR |
+| `HIGHHX_TEST_LIVE_PROVIDERS=1` | real model providers (needs a key) |
+
+Sandbox tests use the real macOS Seatbelt (or bubblewrap on Linux) when available and skip
+the confinement checks otherwise. The computer-use suites rely on deterministic simulations
+that are part of HighhX itself (`highhx.benchmarks.environments`: a web app, a desktop, an
+Android device behind a fake adb), so CI never needs a model, a device or a display.
+`highhx benchmark run browser desktop android code long_horizon` runs the same simulations
+end to end.
 
 Real-service tests: `tests/integration/test_mysql_real.py` starts a private, throwaway
 `mysqld` when the MySQL server binaries are installed (it never connects to an existing

@@ -61,37 +61,44 @@ Audit / trace ──────────────── safety/audit.py �
 | Android | — | `drivers/android/` (adb client, uiautomator hierarchy, `AndroidDriver`) and `android.*` catalog actions |
 | Environments | `automation/engine/remote.py` (SSH computer) | `runtimes/` (`LocalRuntime`, `SandboxRuntime`, `RemoteRuntime`; `VMRuntime` / `CloudRuntime` report "not available") |
 | Sandbox | `execution/isolation.isolated_environment` (env scrubbing) | `runtimes/sandbox.py`: workspace copy, macOS Seatbelt / Linux bubblewrap / Docker isolation backends, network policy, rlimits, timeout, process-group cleanup, patch export; `sandbox.*` actions |
-| Agent loops | `agent/session.py` (Pro chat agent), `goals/loop.py` (browser Task IR loop), `computer/operator/vision.py` (vision loop) | `agent/loop/`: a surface-neutral Planner → Worker → Observer → Verifier → Reflector loop with `RecoveryManager`, checkpoints and resume, tool routing and optional specialists. It drives catalog actions only |
+| Agent loops | `agent/session.py` (Pro chat agent), `goals/loop.py` (browser Task IR loop), `computer/operator/vision.py` (vision loop) — all kept | `agent/loop/`: a surface-neutral Planner → Worker → Observer → Verifier → Reflector loop with `RecoveryManager`, checkpoints and resume, tool routing and optional specialists. It drives catalog actions only |
 | Verification | `spec.verify`, `verification/strategies.py`, `computer/verify.py` (window predicates) | `verification/declarative.py`: exit code, file, DOM, text, accessibility, URL, screenshot / visual, process, application, network, custom; `any` / `all`; satisfied · unsatisfied · unknown |
 | Memory | `agent/history.py` (chat transcripts), `goals/log.py` | `trajectories/` `TrajectoryStore` (task → observation → action → result → verification → reflection), search, summary, replay |
 | Benchmarks | `tests/computer_use` (simulated desktop and evaluators, test-only) | `benchmarks/` (task format, environments including the simulated desktop moved from the tests, runner, metrics, report, compare) |
 | TUI | `agent/ui.py`, `ui/` | `ui/live.py`: a dashboard that only consumes events |
 | Traces | `observability/tracing.py` (spans per execution), `observability/runs.py` | `observability/tasktrace.py`: Task → Plan → Action → (Observation, Grounding, Execution, Verification) → Recovery → Result, built from events, redacted |
 
-## Package map (new code)
+## Package map
 
 ```text
 src/highhx/
-  actions/protocol.py            ActionRequest · ActionOutcome · aliases · submit()
-  actions/handlers/android.py    android.* handlers (call drivers/android)
-  actions/handlers/sandbox.py    sandbox.* handlers (call runtimes/sandbox)
-  actions/handlers/state.py      computer.state (perception through the executor)
-  perception/                    ComputerState, providers, StateFusion, VisualDiff, ElementTracker, png
-  grounding/                     selectors, grounders, HybridGrounder
-  models/                        VisionModel · LanguageModel · EmbeddingModel · OCRModel (+ adapters)
-  drivers/                       ComputerDriver protocol, desktop/browser/remote/vm adapters, android/
-  runtimes/                      Runtime, LocalRuntime, SandboxRuntime (+ backends), RemoteRuntime
-  agent/loop/                    planner, worker, observer, verifier, reflector, recovery,
-                                 checkpoint, routing, specialists, loop
-  trajectories/                  Trajectory model and TrajectoryStore
-  verification/declarative.py    declarative verifiers
-  benchmarks/                    format, environments, runner, metrics, report, suites/
-  observability/stream.py        trace context and event recorder
-  observability/tasktrace.py     task trace trees
-  computer/recorder.py           browser workflow recording, replay and healing
-  ui/live.py                     event-driven dashboard
-  commands/…                     browser, android, sandbox, benchmark (group), trace (group),
-                                 trajectories, agent loop, computer state / ground
+  actions/protocol.py              ActionRequest · ActionResponse · aliases · prepare/submit
+  actions/catalog_computer.py      computer.state, browser.select/scroll/click_at/insert_text, api.request
+  actions/catalog_android.py       android.* (+ handlers/android.py)
+  actions/catalog_sandbox.py       sandbox.* (+ handlers/sandbox.py)
+  actions/handlers/state.py        computer.state: perception as an audited action
+  actions/handlers/api.py          api.request
+  perception/                      ComputerState, providers, StateFusion, VisualDiff, StateDiff,
+                                   ElementTracker, PerceptionEngine, png (stdlib decoder)
+  grounding/                       selectors (Target), six grounders, HybridGrounder
+  models/                          VisionModel · LanguageModel · EmbeddingModel · OCRModel, adapters,
+                                   registry (Free/Pro and consent rules)
+  drivers/                         ComputerDriver, desktop (Mac/Windows/Linux/Remote), browser, vm,
+                                   android/ (adb client, hierarchy, driver, perception)
+  runtimes/                        Runtime, LocalRuntime, SandboxRuntime (+ backends), RemoteRuntime,
+                                   VMRuntime/CloudRuntime (capability errors), process
+  agent/loop/                      model, planner, worker, observer, verifier, reflector, recovery,
+                                   routing, specialists, loop (checkpoints, resume)
+  trajectories/                    Trajectory, TrajectoryStore (search, hints, lessons, replay)
+  verification/declarative.py      declarative checks: satisfied · unsatisfied · unknown · unsupported
+  benchmarks/                      model, runner, store, environments/ (web, desktop, android), suites/
+  observability/stream.py          EventRecorder (the stream consumers read)
+  observability/tasktrace.py       TaskTrace, TraceStore, TaskTraceRecorder
+  computer/recorder.py             browser workflow recording, storage, replay, healing
+  computer/mcp.py                  MCP server: desktop and runtime toolsets (through the protocol)
+  computer_use.py                  the executor/planner/stores/live view for the CLI and console
+  ui/live.py                       DashboardState, render, LiveDashboard, PausingPrompter
+  commands/computer_use/           browser, android, sandbox, replay, trajectories, agent loop, tui
 ```
 
 ## Escalation (performance)
@@ -110,24 +117,38 @@ unambiguous answer:
 Observations are cached per state fingerprint, and a screenshot is taken only when a level
 that needs one runs.
 
-## Free / Pro
+## Free / Pro and availability
+
+FREE · PRO: plan. LOCAL: runs on this computer. REMOTE: another computer.
+OPTIONAL: needs something installed or configured. EXPERIMENTAL: implemented and tested
+against simulations or fakes only, not yet run on the real platform in this build.
 
 | Capability | Tier |
 |---|---|
-| Action protocol, executor, events, traces, trajectories, declarative verification | Free |
-| Perception (DOM, accessibility, OCR), hybrid grounding without vision | Free |
-| Browser recording, replay, healing (DOM / accessibility / text / OCR) | Free |
-| Android actions, devices, observation (deterministic) | Free · needs `adb` |
-| Sandbox create / exec / patch / destroy | Free · LOCAL · needs a backend (Seatbelt on macOS, bubblewrap or Docker on Linux) |
-| Benchmarks with scripted planners | Free |
-| Vision grounding | Pro (HighhX gateway) or a LOCAL vision model (OPTIONAL) |
-| Model planner for `agent loop` / `android agent`; specialists | Pro, or a local model (OPTIONAL) |
-| Remote runtime (SSH computer) | Free · REMOTE · OPTIONAL |
-| VM and cloud runtimes | not implemented. They report a capability error |
+| Action protocol, executor integration, events, task traces, trajectories, declarative verification | FREE · LOCAL |
+| Perception (DOM, accessibility), hybrid grounding without vision, self-healing replay | FREE · LOCAL |
+| OCR | FREE · LOCAL · OPTIONAL (tesseract) |
+| Browser recording and replay | FREE · LOCAL · OPTIONAL (a Chromium-family browser). Tested in real Chrome |
+| Agent loop with scripted plans or Free's resolver; benchmarks; the console | FREE · LOCAL |
+| Agent loop / specialists with a model planner; vision grounding | PRO (HighhX gateway, with consent) or a LOCAL model (OPTIONAL) |
+| Android actions and driver | FREE · LOCAL · OPTIONAL (adb) · EXPERIMENTAL (no real device in this build) |
+| Sandboxes: Seatbelt | FREE · LOCAL (macOS). Tested against the real sandbox |
+| Sandboxes: bubblewrap, Docker | FREE · LOCAL · OPTIONAL · EXPERIMENTAL here (not installed in this build's environment) |
+| Desktop on Windows / Linux | existing backends · EXPERIMENTAL (tested against fakes of the OS layer) |
+| Remote runtime / driver (SSH) | FREE · REMOTE · OPTIONAL |
+| MCP server (desktop and runtime toolsets) | FREE · LOCAL |
+| VM and cloud runtimes | not implemented: they report a capability error |
 
 ## Migration order
 
 1. action protocol 2. computer state 3. event bus 4. perception 5. grounding 6. agent loop
 7. browser upgrades 8. self-healing 9. drivers 10. Android 11. sandbox runtime 12. trajectories
-13. benchmarks 14. multi-agent 15. TUI 16. documentation. Each step runs the full suite and is
-committed on its own.
+13. benchmarks 14. multi-agent 15. TUI 16. documentation. Each step ran the full suite and was
+committed on its own (see `git log` on `feat/computer-use-runtime`).
+
+Detailed pages: [PERCEPTION](PERCEPTION.md) · [GROUNDING](GROUNDING.md) ·
+[AGENT_LOOP](AGENT_LOOP.md) · [SELF_HEALING](SELF_HEALING.md) ·
+[BROWSER_AUTOMATION](BROWSER_AUTOMATION.md) · [ANDROID](ANDROID.md) ·
+[COMPUTER_RUNTIME](COMPUTER_RUNTIME.md) · [SANDBOX](SANDBOX.md) ·
+[TRAJECTORIES](TRAJECTORIES.md) · [BENCHMARKS](BENCHMARKS.md) · [EVENTS](EVENTS.md) ·
+[TRACES](TRACES.md) · [MCP](MCP.md) · [TUI](TUI.md) · [PROVIDERS](PROVIDERS.md).

@@ -248,3 +248,23 @@ def test_model_registry_keeps_the_free_pro_and_consent_rules(monkeypatch, agent_
         language_model(app, remote_ok=True)  # no local model and not signed in: HighhX Pro is required
     with pytest.raises(PlanRequiredError):
         vision_model(app, remote_ok=True)
+
+
+def test_relative_position_grounds_unlabeled_controls() -> None:
+    from highhx.grounding import RelativeSelector
+
+    state = page(
+        el("l1", "text", "Email", (10, 100, 60, 20)),
+        el("f1", "textbox", "", (90, 98, 200, 24)),
+        el("l2", "text", "Phone", (10, 140, 60, 20)),
+        el("f2", "textbox", "", (90, 138, 200, 24)),
+        el("b1", "button", "", (300, 98, 24, 24)),
+    )
+    email_field = Target("", "textbox", relative=RelativeSelector("Email", "right", "textbox"))
+    result = HybridGrounder().ground(state, email_field)
+    assert result.grounded and result.strategy == "relative" and result.candidate.element.id == "f1"
+    below = HybridGrounder().ground(state, Target("", "textbox", relative=RelativeSelector("Email", "below", "textbox")))
+    assert below.candidate.element.id == "f2"
+    nothing = HybridGrounder().ground(state, Target("", "checkbox", relative=RelativeSelector("Email", "right", "checkbox")))
+    assert not nothing.grounded and any(a.strategy == "relative" and "nothing right" in a.detail for a in nothing.attempts)
+    assert Target.from_dict(email_field.to_dict()) == email_field

@@ -329,6 +329,8 @@ class BenchmarkRunner:
 
         base = Path(tempfile.mkdtemp(prefix="highhx-bench-"))
         app = None
+        executor = None
+        holder: dict[str, Any] = {}
         try:
             env = build_environment(task, base)
             app = App(Options(interactive=False), cwd=env.project)
@@ -336,14 +338,15 @@ class BenchmarkRunner:
             model_planned = task.planner.get("kind") == "model"
             actor = Actor.AGENT if model_planned else Actor.USER
             gate = ActionGate(app.engine, approver, source="benchmark", mode=ApprovalMode.ASK)
-            holder: dict[str, Any] = {}
 
             def session() -> Any:
+                # every run gets its own session; a real browser runs on a throwaway profile in the
+                # run's directory (never the person's HighhX browser) and is stopped afterwards
                 if "s" not in holder:
                     holder["s"] = BenchmarkSession(gate, actor=actor, tool="benchmark", web=env.web, desktop=env.desktop, android=env.android, state_dir=base / "computer")
                 return holder["s"]
 
-            executor = ActionExecutor(app, gate, actor=actor, computer=session if task.kind != "browser" else None, sleep=lambda _s: None)
+            executor = ActionExecutor(app, gate, actor=actor, computer=session, sleep=lambda _s: None)
             planner = self._planner(task, app, executor)
             store = TrajectoryStore(self.keep or base / "trajectories", redactor=app.redactor)
             surface = task.surface or env.surface()
@@ -361,6 +364,13 @@ class BenchmarkRunner:
             goal, _notes = evaluate(task, env, executor)
             return run_metrics(task, outcome.trajectory, goal, benchmark_id=benchmark_id, run=run, provider=provider, runtime="local")
         finally:
+            if executor is not None:
+                executor.close()
+            opened = holder.get("s")
+            if opened is not None:
+                if task.kind == "browser" and opened._browser is not None:
+                    opened._browser.stop()
+                opened.close()
             if app is not None:
                 app.close()
             shutil.rmtree(base, ignore_errors=True)

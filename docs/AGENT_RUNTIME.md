@@ -99,7 +99,17 @@ computer-use tools, which the platform entitles by name.
 
 ## Multi-agent
 
-Not implemented. The runtime executes one agent per session; sub-agents would add
-parallel model calls and a second approval stream without a demonstrated benefit for the
-tasks HighhX targets today. The action graph already parallelises nothing that needs a
-person's approval and keeps a single, auditable decision trail. See [ROADMAP.md](ROADMAP.md).
+The interactive Pro agent stays one agent per session, with one approval stream and one
+decision trail. The computer-use agent loop ([AGENT_LOOP.md](AGENT_LOOP.md)) has optional
+specialists (research, browser, computer, android, code, testing, debugging) coordinated by a
+supervisor. They run one after another on the same executor, approvals and trace, each with a
+narrower set of allowed actions. They are used only for tasks that need several kinds of tool;
+one agent is the default.
+
+## The computer-use loop
+
+`highhx agent loop` runs the Planner → Worker → Observer → Verifier → Reflector loop for tasks
+on a screen (browser, desktop, Android) or without one (commands, files, HTTP), with bounded
+recovery, checkpoints (`highhx agent --resume task_…`), trajectories and task traces. Its
+planner is a plan file, HighhX Free's deterministic resolver, or a model (Pro or local). See
+[AGENT_LOOP.md](AGENT_LOOP.md).

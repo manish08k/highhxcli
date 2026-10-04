@@ -79,6 +79,15 @@ did (→ `/history`, `/changes`).
 | `highhx history`, `events`, `audit`, `logs` | What happened (see [OBSERVABILITY.md](OBSERVABILITY.md)) |
 | `highhx runs [list\|show [RUN_ID]\|stats]` | Plain-language automation runs: the deterministic decision, the plan, each step's result and verification; totals, failures, Pro escalations, most-used actions and targets |
 | `highhx computer status` | Browser, Accessibility, the automation engine in use (C#/.NET or Python) and the target registry |
+| `highhx computer state\|ground\|drivers` | One fused observation; hybrid grounding of a target; drivers and sandbox backends available here |
+| `highhx agent loop GOAL [--plan FILE\|--model] [--resume TASK_ID]` | The computer-use agent loop ([AGENT_LOOP.md](AGENT_LOOP.md)) |
+| `highhx browser record\|replay\|heal\|workflows\|show\|delete`, `highhx replay` | Browser workflows with self-healing replay ([BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md)) |
+| `highhx android devices\|observe\|tap\|type\|swipe\|press\|launch\|find\|agent …` | Android through adb ([ANDROID.md](ANDROID.md)) |
+| `highhx sandbox create\|exec\|patch\|apply\|list\|destroy` | Isolated workspaces ([SANDBOX.md](SANDBOX.md)) |
+| `highhx trace [ID]`, `trace list\|export`, `highhx trajectories list\|show\|search` | Task traces and trajectories ([TRACES.md](TRACES.md), [TRAJECTORIES.md](TRAJECTORIES.md)) |
+| `highhx benchmark list\|run\|report\|compare` | Computer-use benchmarks ([BENCHMARKS.md](BENCHMARKS.md)); `highhx benchmark -- CMD` still times a command |
+| `highhx mcp serve` | HighhX's tools for MCP clients ([MCP.md](MCP.md)) |
+| `highhx tui` | The console with the live dashboard ([TUI.md](TUI.md)) |
 | `highhx login`, `logout`, `account` | HighhX account and plan |
 | `highhx plugin …`, `config …`, `policy …` | Extensions, configuration, policies |
 

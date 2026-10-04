@@ -223,6 +223,35 @@ claude mcp add highhx-computer -- highhx computer mcp --mode read-only # observa
   owner); audit rows carry source `mcp`.
 - One computer session per server process. No HTTP transport: HighhX never listens on a port.
 
+## One driver interface
+
+`highhx.drivers.ComputerDriver` is the common interface for every computer HighhX operates:
+`observe`, `screenshot`, `inspect`, `find`, `click`, `double_click`, `right_click`, `type`,
+`key`, `hotkey`, `scroll`, `drag`, `move`, `wait`, `launch`, `close`, `focus`, and
+`capabilities()` (each operation with whether it works here and why not).
+
+| Driver | Wraps |
+|---|---|
+| `DesktopDriver` (`MacDriver`, `WindowsDriver`, `LinuxDriver`) | the `HighhXDriver` above, unchanged. The platform classes refuse other platforms |
+| `RemoteDriver` | the same, over an `ssh://` target (the remote engine) |
+| `BrowserDriver` | the HighhX browser (CSS pixels; tabs stand in for applications) |
+| `AndroidDriver` | adb ([ANDROID.md](ANDROID.md)) |
+| `VMDriver` | not implemented: construction raises a capability error naming the alternatives |
+
+Unsupported operations raise `CapabilityError` (Android has no pointer to move or right
+button). Engine refusals such as `accessibility_denied` become capability errors with the hint.
+Drivers are mechanism: catalog handlers use them after the executor approved the action.
+`highhx computer drivers` lists what is available here.
+
+## Runtimes
+
+`highhx.runtimes.Runtime` owns where work happens: `info()` (kind, workspace, isolation,
+network policy, limits), `capabilities()`, `exec(argv)`, `driver()` and `stop()`.
+`LocalRuntime` is this computer, `SandboxRuntime` an isolated copy of the project
+([SANDBOX.md](SANDBOX.md)), and `RemoteRuntime` another computer over SSH (BatchMode, host
+keys checked). `VMRuntime` and `CloudRuntime` are not implemented and raise a capability
+error. The agent loop does not depend on which runtime is underneath.
+
 ## CLI
 
 `highhx computer status` (per-feature capabilities) · `observe --source desktop` ·

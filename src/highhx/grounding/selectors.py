@@ -87,6 +87,18 @@ class VisualSelector:
 
 
 @dataclass(frozen=True)
+class RelativeSelector:
+    """A control by where it is relative to another one: ``the textbox right of "Email"``.
+    For unlabeled controls (an icon button next to a heading, a field without a label)."""
+
+    anchor: str
+    """The visible label of the anchor element."""
+    direction: str = "right"
+    """right · left · above · below · near"""
+    role: str = ""
+
+
+@dataclass(frozen=True)
 class CoordinateSelector:
     x: int
     y: int
@@ -105,6 +117,7 @@ class Target:
     text: TextSelector | None = None
     ocr: OCRSelector | None = None
     visual: VisualSelector | None = None
+    relative: RelativeSelector | None = None
     coordinate: CoordinateSelector | None = None
     history: tuple[dict[str, Any], ...] = field(default=(), compare=False)
     """Heals applied to this target (what changed, when)."""
@@ -178,7 +191,7 @@ class Target:
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"label": self.label, "role": self.role}
-        for name in ("semantic", "accessibility", "dom", "text", "ocr", "visual", "coordinate"):
+        for name in ("semantic", "accessibility", "dom", "text", "ocr", "visual", "relative", "coordinate"):
             value = getattr(self, name)
             if value is not None:
                 data = asdict(value)
@@ -207,6 +220,7 @@ class Target:
             text=build(TextSelector, data.get("text")),
             ocr=build(OCRSelector, data.get("ocr")),
             visual=build(VisualSelector, data.get("visual")),
+            relative=build(RelativeSelector, data.get("relative")),
             coordinate=build(CoordinateSelector, data.get("coordinate")),
             history=tuple(dict(h) for h in data.get("history") or ()),
         )

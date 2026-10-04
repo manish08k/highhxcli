@@ -1,7 +1,8 @@
 """HybridGrounder: try the representations cheapest and most reliable first, score the
 candidates, stop at the first confident and unambiguous answer, and record every attempt.
 
-    accessibility (1.00) → dom (0.95) → text (0.85) → ocr (0.70) → vision (0.65) → coordinate (0.30)
+    accessibility (1.00) → dom (0.95) → text (0.85) → relative (0.75) → ocr (0.70) → vision (0.65)
+    → coordinate (0.30)
 
 score = strategy weight * candidate confidence (+ agreement bonus when an earlier strategy
 pointed at the same element). A strategy whose best candidates tie is *ambiguous*. The grounder
@@ -30,6 +31,7 @@ from highhx.grounding.grounders import (
     Found,
     Grounder,
     OCRGrounder,
+    RelativeGrounder,
     TextGrounder,
     VisionGrounder,
 )
@@ -40,11 +42,12 @@ if TYPE_CHECKING:
     from highhx.grounding.selectors import Target
     from highhx.models.interfaces import VisionModel
 
-ORDER = ("accessibility", "dom", "text", "ocr", "vision", "coordinate")
+ORDER = ("accessibility", "dom", "text", "relative", "ocr", "vision", "coordinate")
 WEIGHTS: dict[str, float] = {
     "accessibility": 1.0,
     "dom": 0.95,
     "text": 0.85,
+    "relative": 0.75,
     "ocr": 0.7,
     "vision": 0.65,
     "coordinate": 0.3,
@@ -142,6 +145,7 @@ class HybridGrounder:
                     AccessibilityGrounder(),
                     DOMGrounder(),
                     TextGrounder(),
+                    RelativeGrounder(),
                     OCRGrounder(),
                     VisionGrounder(vision),
                     CoordinateGrounder(),

@@ -128,6 +128,46 @@ private keys, credential files), cannot modify `.git/` or `.highhx/state`, honou
 Agent actions have policy names (`agent:write`, `agent:exec`, `agent:deploy:<target>` …).
 Everything sent to the model is redacted first. Details: [agent.md](agent.md#safety).
 
+## Computer use
+
+Everything in the computer-use runtime goes through the same executor, gate, policies and
+audit ([COMPUTER_USE_ARCHITECTURE.md](COMPUTER_USE_ARCHITECTURE.md)).
+
+- **One path.** The agent loop, specialists, browser replay, benchmarks, MCP tools and the
+  console submit `ActionRequest`s to `ActionExecutor`. Drivers are only reached from action
+  handlers after approval.
+- **Models propose, HighhX decides.** Planner output is parsed into a closed set of verbs and
+  catalog actions and checked against the task's allowed actions. A vision model returns
+  candidate boxes, never clicks.
+- **A label can only raise risk.** A request carries its target's label (`Delete account`),
+  which is classified like the control itself, so a point that grounding produced cannot make a
+  destructive click look harmless. A caller can raise the floor (`min_risk`), never lower it.
+- **Observation is an action.** `computer.state` with pixels is `screen:capture`; a policy can
+  deny it. Remote vision raises it to high risk.
+- **Policy names for computer-specific risks:** `screen:capture`, `network:<host>`,
+  `credential:use`, `android:install`, `android:delete`, `sandbox:create`, `sandbox:exec`,
+  `sandbox:apply`. Purchases, sending, deleting and downloads in pages are recognised by the
+  existing control classifier (financial, publish, destructive, download categories).
+  Shutdown and similar commands go through the command classifier.
+- **No silent retries.** Only SAFE or idempotent actions are retried automatically; a risky
+  action that failed or may have run is re-planned from a fresh observation and asked again.
+  A confirmation declined inside an action (the browser's per-element check) is reported as
+  denied and never retried.
+- **Secrets.** Typed text is replaced by its length in events, traces, trajectories and audit.
+  Text typed into a password, card or one-time-code field is registered with the redactor
+  before the action runs, never recorded by the browser recorder (it becomes a variable), never
+  stored in a checkpoint, and such a step is never reported verified.
+  `api.request` credentials come from environment variables and are redacted.
+  `tests/security/test_computer_use_secrets.py` checks every file, database, event and
+  dashboard for a typed password and a request credential.
+- **Sandboxes** confine writes and network (Seatbelt, bubblewrap, Docker), scrub the
+  environment and keep credential folders unreadable. A command run inside one is still
+  classified as itself ([SANDBOX.md](SANDBOX.md)).
+- **MCP** cannot ask anyone: actions that need approval are refused unless the person starting
+  the server passes `--yes` (never for critical or blocked actions).
+- **Untrusted content.** Page and screen text given to a model planner is marked as untrusted,
+  with an instruction never to follow it.
+
 ## Data
 
 Free commands keep everything local: `.highhx/state/` (SQLite) and `.highhx/logs/`

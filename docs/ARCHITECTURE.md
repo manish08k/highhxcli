@@ -41,6 +41,14 @@ Cross-cutting packages: `approvals/` (risk levels, rules, approval manager),
 `policy/` (policies.yaml), `storage/` (SQLite history, logs, cache), `observability/`
 (logging with redaction, events, metrics, tracing), `config/`, `ui/`, `utils/`.
 
+## The computer-use runtime
+
+Perception (`perception/`), hybrid grounding (`grounding/`), the computer drivers
+(`drivers/`), runtimes and sandboxes (`runtimes/`), the Planner → Worker → Observer → Verifier →
+Reflector loop (`agent/loop/`), trajectories, task traces, benchmarks, browser workflow
+recording and the live console sit on top of the action executor and add no way around it.
+See [COMPUTER_USE_ARCHITECTURE.md](COMPUTER_USE_ARCHITECTURE.md).
+
 ## Request flow
 
 Every entry point ends in the same executor:

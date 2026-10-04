@@ -141,6 +141,40 @@ def run_doctor(app: Any) -> list[CheckResult]:
             )
 
     checks.extend(project_checks(app))
+    checks.extend(computer_use_checks())
+    return checks
+
+
+def computer_use_checks() -> list[CheckResult]:
+    """What the computer-use runtime can use here: drivers and sandbox isolation. Nothing is
+    started; optional pieces that are missing are skipped with what to install, never failed."""
+    from highhx.drivers import discover
+    from highhx.runtimes import available_backends
+
+    checks: list[CheckResult] = []
+    for driver in discover():
+        if driver["driver"] in ("desktop", "remote"):
+            continue  # reported by `highhx computer status` (it starts the engine) / configured per target
+        ok = bool(driver["available"])
+        checks.append(
+            CheckResult(
+                f"{driver['driver']} driver" + ("" if ok else " unavailable"),
+                CheckStatus.OK if ok else CheckStatus.SKIP,
+                str(driver["detail"]),
+                hint=None if ok or driver["driver"] == "vm" else str(driver["detail"]),
+                category="computer use",
+            )
+        )
+    confined = [n for n, c in available_backends().items() if c.available and n != "workspace"]
+    checks.append(
+        CheckResult(
+            f"sandbox isolation: {', '.join(confined)}" if confined else "no sandbox isolation backend",
+            CheckStatus.OK if confined else CheckStatus.SKIP,
+            "" if confined else "only the unconfined workspace copy is available",
+            hint=None if confined else "Install bubblewrap (Linux) or Docker for `highhx sandbox`.",
+            category="computer use",
+        )
+    )
     return checks
 
 
