@@ -213,3 +213,65 @@ def test_the_kill_switch_destroys_every_sandbox(agent_project: Path, make_app) -
     assert len(executor.run("sandbox.list").output["sandboxes"]) == 2
     assert executor.run("sandbox.destroy", {"all": True}).ok
     assert executor.run("sandbox.list").output["sandboxes"] == []
+
+
+@pytest.mark.skipif(not SEATBELT, reason="macOS Seatbelt")
+def test_seatbelt_commands_cannot_signal_other_processes(project: Path, tmp_path: Path) -> None:
+    import subprocess
+
+    victim = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        sandbox = SandboxManager(tmp_path / "sbx").create(project, isolation="seatbelt")
+        code = (
+            "import os, signal, subprocess, sys\n"
+            f"try:\n    os.kill({victim.pid}, signal.SIGTERM); print('victim-killed')\nexcept PermissionError:\n    print('victim-protected')\n"
+            "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'])\n"
+            "os.kill(c.pid, signal.SIGTERM); c.wait(); print('child-stopped')\n"
+        )
+        result = sandbox.exec([sys.executable, "-c", code])
+        assert result.stdout.split() == ["victim-protected", "child-stopped"], result.stderr
+        assert victim.poll() is None  # still running
+    finally:
+        victim.kill()
+        victim.wait()
+
+
+@needs_isolation
+def test_a_symlink_cannot_escape_the_workspace(project: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "notes.txt").write_text("original\n")
+    (outside / "secret.txt").write_text("top-secret-value\n")
+    (project / "link").symlink_to(outside, target_is_directory=True)  # a link inside the project, copied as a link
+    sandbox = SandboxManager(tmp_path / "sbx").create(project, isolation=ISOLATED, deny_read=[outside / "secret.txt"])
+    wrote = sandbox.exec(["/bin/sh", "-c", "echo changed > link/notes.txt"])
+    assert not wrote.ok and (outside / "notes.txt").read_text() == "original\n"
+    read = sandbox.exec(["/bin/cat", "link/secret.txt"])
+    assert not read.ok and "top-secret-value" not in read.stdout
+
+
+@needs_isolation
+def test_cpu_limit_and_secret_environment(project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret-42")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp-secret-42")
+    sandbox = SandboxManager(tmp_path / "sbx").create(project, isolation=ISOLATED, limits=ResourceLimits(cpu_seconds=1, timeout=30))
+    env = sandbox.exec([sys.executable, "-c", "import os; print(sorted(os.environ))"])
+    assert env.ok and "AWS_SECRET_ACCESS_KEY" not in env.stdout and "GITHUB_TOKEN" not in env.stdout
+    burn = sandbox.exec([sys.executable, "-c", "while True: pass"])
+    assert not burn.ok and not burn.timed_out and burn.seconds < 20  # stopped by the CPU limit, not the timeout
+    tmp = sandbox.exec([sys.executable, "-c", "import tempfile; print(tempfile.gettempdir())"])
+    assert tmp.stdout.strip().startswith(str(sandbox.workspace.resolve())) or tmp.stdout.strip().startswith(str(sandbox.workspace))
+
+
+def test_unavailable_backends_are_clear_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    import highhx.runtimes.sandbox as module
+
+    monkeypatch.setattr(module.shutil, "which", lambda name: None)
+    found = available_backends()
+    assert not found["seatbelt"].available and not found["bubblewrap"].available and not found["docker"].available
+    assert "bubblewrap" in found["bubblewrap"].detail and "Docker" in found["docker"].detail
+    with pytest.raises(CapabilityError, match="docker is not available"):
+        choose_backend("docker")
+    with pytest.raises(CapabilityError) as caught:
+        choose_backend(None)
+    assert "--isolation workspace" in (caught.value.hint or "")

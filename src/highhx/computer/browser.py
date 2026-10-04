@@ -405,6 +405,10 @@ class ChromeBrowser:
         self.journal: list[dict[str, Any]] = []
         """Recovery, tab, dialog and download events not yet written to the audit trail."""
         self.downloads: dict[str, Download] = {}
+        from highhx.computer.network import NetworkJournal
+
+        self.network = NetworkJournal()
+        """Requests the pages made (sanitized: no headers, bodies or query values), for verification."""
         self.reconnects = 0
         self._interrupted = False
         """An operation was cancelled mid-way: its load may still be pending in the tab."""
@@ -643,6 +647,13 @@ class ChromeBrowser:
     def downloads_dir(self) -> Path:
         return self.state_dir / "downloads"
 
+    def pump_events(self, seconds: float = 0.2, *, cancel: CancellationToken | None = None) -> None:
+        """Process browser events that arrive within ``seconds`` (late network responses after an
+        action) without sending anything. Does nothing when not connected."""
+        if self._conn is not None and self._conn.usable:
+            with contextlib.suppress(Exception):
+                self._conn.pump(cancel=cancel, seconds=seconds)
+
     def close(self) -> None:
         """Close the connection (the browser keeps running for the next command)."""
         if self._conn is not None:
@@ -654,7 +665,9 @@ class ChromeBrowser:
     def _on_event(self, message: dict[str, Any]) -> None:
         method = str(message.get("method") or "")
         params = message.get("params") or {}
-        if method in ("Target.targetCreated", "Target.targetInfoChanged"):
+        if method.startswith("Network."):
+            self.network.handle(method, params, str(message.get("sessionId") or ""))
+        elif method in ("Target.targetCreated", "Target.targetInfoChanged"):
             self.tabs.update(params.get("targetInfo") or {})
         elif method == "Target.targetDestroyed":
             target = str(params.get("targetId") or "")
@@ -801,7 +814,7 @@ class ChromeBrowser:
         try:
             if stop_loading:
                 conn.call("Page.stopLoading", session_id=session_id, cancel=cancel, timeout=SETUP_TIMEOUT)
-            for method in ("Page.enable", "Runtime.enable", "Inspector.enable"):
+            for method in ("Page.enable", "Runtime.enable", "Inspector.enable", "Network.enable"):
                 conn.call(method, session_id=session_id, cancel=cancel, timeout=SETUP_TIMEOUT)
             tree = conn.call("Page.getFrameTree", session_id=session_id, cancel=cancel, timeout=SETUP_TIMEOUT)
             events.main_frame = str(((tree.get("frameTree") or {}).get("frame") or {}).get("id") or "")

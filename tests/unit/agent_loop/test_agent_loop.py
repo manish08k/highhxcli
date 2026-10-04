@@ -417,3 +417,22 @@ def test_routing_to_plugin_commands() -> None:
     first = router.route("run the lighthouse audit")[0]
     assert first.tool == "plugin" and first.surface == "none" and "plugin.lighthouse.audit" in first.reason
     assert all(r.tool != "plugin" for r in router.route("export the invoices"))
+
+
+def test_a_failing_model_ends_the_task_resumably(kit: Kit) -> None:
+    from highhx.core.errors import ModelProviderError
+
+    provider = ScriptedProvider([reply('{"steps": []}'), ModelProviderError("the model service is unavailable")])
+    planner = ModelPlanner(ChatLanguageModel(provider, CAPS), kit.executor.catalog)
+    result = kit.loop(planner).run(AgentTask("export", surface="browser"))
+    assert result.status == Status.FAILED and "unavailable" in result.summary and "--resume" in result.summary
+    assert kit.store.load(result.trajectory.id).metrics["checkpoint"]["planner"]["kind"] == "model"
+
+
+def test_vision_without_a_model_is_a_clear_capability_error(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("HIGHHX_VISION_BASE_URL", "HIGHHX_VISION_MODEL", "HIGHHX_VISION_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+    result = kit.executor.run("computer.state", {"surface": "browser", "vision": "auto"})
+    assert not result.ok and "vision model" in result.error.lower()
+    remote = kit.executor.plan("computer.state", {"surface": "browser", "vision": "auto", "remote_vision": True})
+    assert remote.decision.risk.label == "high"  # screenshots would leave the computer: always asked

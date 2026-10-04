@@ -166,7 +166,18 @@ audit ([COMPUTER_USE_ARCHITECTURE.md](COMPUTER_USE_ARCHITECTURE.md)).
 - **MCP** cannot ask anyone: actions that need approval are refused unless the person starting
   the server passes `--yes` (never for critical or blocked actions).
 - **Untrusted content.** Page and screen text given to a model planner is marked as untrusted,
-  with an instruction never to follow it.
+  with an instruction never to follow it. Notes from past trajectories are given as data, not
+  instructions, and truncated.
+- **URLs.** Query values never reach audit rows, events, network evidence or trajectories:
+  URLs there keep parameter names only (`?api_key=…`).
+- **Where computer-use data lives.** Trajectories, task traces and benchmark results are in
+  `.highhx/state/` (git-ignored by `highhx init`, not readable or writable by the agent's file
+  tools). State screenshots are kept in the user data directory, at most the 20 most recent.
+- **Recording** opens its start page through the executor; the recorder only listens.
+- **Model failures** end a task as failed and resumable; they never leave an action half-decided.
+- **Audit (tested).** Every new path was checked for driver, adb, browser-input or subprocess
+  calls outside action handlers: drivers are instantiated only inside handlers, and the one
+  exception found (the recorder navigating by itself) was fixed.
 
 ## Data
 

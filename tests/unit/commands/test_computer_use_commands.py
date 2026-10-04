@@ -103,3 +103,36 @@ def test_browser_workflows_and_drivers(cli, tmp_path: Path) -> None:
 
 def test_the_console_needs_a_terminal(cli, tmp_path: Path) -> None:
     assert cli("tui", cwd=tmp_path).code != 0
+
+
+def test_project_stores_live_in_the_ignored_protected_state_directory(agent_project: Path, make_app) -> None:
+    from highhx.benchmarks import BenchmarkStore
+    from highhx.config.defaults import GITIGNORE_ENTRIES
+    from highhx.observability.tasktrace import TraceStore
+    from highhx.trajectories import TrajectoryStore
+
+    app = make_app(agent_project)
+    state = agent_project / ".highhx" / "state"
+    for store in (TrajectoryStore.for_app(app), TraceStore.for_app(app), BenchmarkStore.for_app(app)):
+        assert store.root.parent == state
+    assert ".highhx/state/" in GITIGNORE_ENTRIES
+    from highhx.agent.permissions import confine_path
+    from highhx.agent.tools.base import ToolError
+
+    for write in (False, True):  # neither readable nor writable by the agent's file tools
+        with pytest.raises(ToolError):
+            confine_path(app, ".highhx/state/trajectories/task_x.json", write=write)
+
+
+def test_model_planning_without_a_model_says_how_to_get_one(cli, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("HIGHHX_PLANNER_BASE_URL", "HIGHHX_PLANNER_MODEL", "HIGHHX_VISION_BASE_URL", "HIGHHX_VISION_MODEL", "HIGHHX_VISION_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+    result = cli("agent", "loop", "export the invoices", "--model", "--no-live", cwd=tmp_path)
+    text = result.stdout + result.stderr
+    assert result.code == 10 and "local model" in text.lower() and "HIGHHX_PLANNER_BASE_URL" in text
+    remote = cli("agent", "loop", "x", "--model", "--no-live", cwd=tmp_path)
+    assert remote.code == 10
+    monkeypatch.setenv("HIGHHX_PLANNER_BASE_URL", "https://api.example.com/v1")
+    monkeypatch.setenv("HIGHHX_PLANNER_MODEL", "big")
+    consent = cli("agent", "loop", "x", "--model", "--no-live", cwd=tmp_path)
+    assert consent.code == 10 and "--remote-model" in consent.stdout + consent.stderr

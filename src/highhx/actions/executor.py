@@ -46,6 +46,17 @@ TYPED_INPUTS = frozenset({"text", "password", "value", "body"})
 """Inputs that carry text a person or agent typed: never written to events as they are."""
 
 
+def _shown(key: str, value: Any) -> Any:
+    """An input as events show it: typed text by its length, URLs without query values."""
+    if key in TYPED_INPUTS and isinstance(value, str):
+        return f"<{len(value)} characters>"
+    if key == "url" and isinstance(value, str) and "?" in value:
+        from highhx.computer.network import sanitize_url
+
+        return sanitize_url(value)
+    return value
+
+
 class UnknownActionError(ValidationError):
     pass
 
@@ -104,11 +115,7 @@ class Planned:
         """For events and logs: typed text is replaced by its length (it may be a password)."""
         return {
             "action": self.spec.name,
-            "inputs": {
-                k: (f"<{len(v)} characters>" if k in TYPED_INPUTS and isinstance(v, str) else v)
-                for k, v in self.inputs.items()
-                if k != "content"
-            },
+            "inputs": {k: _shown(k, v) for k, v in self.inputs.items() if k != "content"},
             "risk": self.decision.risk.label,
             "approval": self.decision.approval.name.lower(),
             "asks": self.asks,

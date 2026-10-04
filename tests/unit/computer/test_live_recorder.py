@@ -71,6 +71,7 @@ def test_record_then_heal_after_a_redesign(site: tuple[str, Path], agent_project
     executor = ActionExecutor(app, gate, actor=Actor.USER, computer=lambda: session)
     try:
         browser = session.browser
+        assert executor.run("browser.open", {"url": f"{base}/index.html"}).ok  # through the executor
         recorder = BrowserRecorder(browser)
         recorder.start(f"{base}/index.html")
         browser.wait_ready()

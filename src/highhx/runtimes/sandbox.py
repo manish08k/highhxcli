@@ -10,7 +10,8 @@ Isolation, by backend (the strongest available is chosen unless one is asked for
 
 =============  ==========================================================================
 seatbelt       macOS ``sandbox-exec``: writes only inside the workspace, the user's credential
-               folders unreadable, network denied (``--network deny``, the default)
+               folders unreadable, network denied (``--network deny``, the default), signals
+               only to its own processes
 bubblewrap     Linux ``bwrap``: read-only system, the workspace as the only writable
                directory, a private /tmp and home, new PID namespace, network namespace on deny
 docker         a container with the workspace mounted, ``--network none`` on deny, memory and
@@ -122,6 +123,9 @@ def seatbelt_profile(workspace: Path, *, network: str, deny_read: list[Path]) ->
         lines.append(f"(deny file-read* {readable_denied})")
     if network == "deny":
         lines.append("(deny network*)")
+    # signals only to the command itself, its process group and its children: a sandboxed command
+    # can manage its own processes but cannot stop (or signal) anything else the user runs
+    lines += ["(deny signal)", "(allow signal (target self))", "(allow signal (target pgrp))", "(allow signal (target children))"]
     return "\n".join(lines) + "\n"
 
 

@@ -38,7 +38,7 @@ class BenchmarkStore:
     def for_app(cls, app: Any) -> BenchmarkStore:
         from highhx.utils.paths import user_data_dir
 
-        root = (app.root / ".highhx" / "benchmarks") if getattr(app, "initialized", False) else user_data_dir() / "benchmarks"
+        root = (app.paths.state_dir / "benchmarks") if getattr(app, "initialized", False) else user_data_dir() / "benchmarks"
         return cls(root)
 
     def save(self, result: BenchmarkResult) -> Path:

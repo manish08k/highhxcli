@@ -19,7 +19,7 @@ The strongest available backend is chosen unless one is asked for.
 
 | Backend | Platform | Filesystem | Network (`deny`, the default) | Process |
 |---|---|---|---|---|
-| `seatbelt` | macOS `sandbox-exec` | writes only inside the workspace; the user's credential folders (`.ssh`, `.aws`, `.gnupg`, keychains, …), HighhX's config directory and any `deny_read` paths are unreadable | all network denied | own process group, rlimits |
+| `seatbelt` | macOS `sandbox-exec` | writes only inside the workspace (also through symlinks); the user's credential folders (`.ssh`, `.aws`, `.gnupg`, keychains, …), HighhX's config directory and any `deny_read` paths are unreadable | all network denied | own process group, rlimits; **signals only to itself, its process group and its children** (it cannot stop or signal anything else the user runs) |
 | `bubblewrap` | Linux `bwrap` | read-only system, the workspace as the only writable directory, private `/tmp` and home | new network namespace | new PID namespace, dies with its parent |
 | `docker` | Docker | only the workspace mounted | `--network none` | memory and process limits |
 | `workspace` | any | **a copy only, no confinement** | **not restricted** | process group, rlimits |
@@ -41,10 +41,22 @@ classified like any command:** a sandbox limits what it can reach and never lowe
 (`rm -rf /` is still critical). Policy names: `sandbox:create`, `sandbox:exec`,
 `sandbox:apply`, `sandbox:destroy`.
 
-**What has run where:** Seatbelt enforcement (writes outside the workspace, reads of denied
-folders and network access all refused) is tested against the real macOS sandbox. Bubblewrap
-and Docker are implemented, and their tests run only where they are installed; they have not
-been exercised in this build's environment.
+**What has run where:** Seatbelt enforcement is tested against the real macOS sandbox:
+
+| Property | Result |
+|---|---|
+| writes outside the workspace, directly or through a symlink | refused |
+| reads of denied folders, directly or through a symlink | refused |
+| network (`deny`, the default) / (`allow`) | refused / allowed |
+| signalling another of the user's processes | refused; its own children can still be stopped |
+| CPU limit | the process is stopped by the limit, before the timeout |
+| file-size limit | enforced |
+| timeout | the whole process group is killed, background children included |
+| host secrets in the environment (`AWS_*`, `GITHUB_TOKEN` …) | not passed |
+| process-count limit | **not enforced by Seatbelt** (Docker only) |
+
+Bubblewrap and Docker are implemented, and their tests run only where they are installed. They
+have not been exercised in this build's environment (neither is installed here): **experimental**.
 
 ## Runtimes
 

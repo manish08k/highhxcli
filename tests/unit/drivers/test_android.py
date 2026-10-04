@@ -227,3 +227,54 @@ def test_more_android_actions(device: FakeDevice, agent_project: Path, make_app)
     assert executor.plan("android.find", {"text": "x"}).decision.risk == Risk.SAFE
     with pytest.raises(CapabilityError):
         AndroidDriver(AdbClient(serial=device.serial)).right_click(1, 1)
+
+
+ANDROID_ACTIONS = {
+    "android.connect": {"address": "10.0.0.5:5555"},
+    "android.observe": {},
+    "android.screenshot": {},
+    "android.tap": {"x": 10, "y": 10},
+    "android.long_press": {"x": 10, "y": 10},
+    "android.swipe": {"direction": "up"},
+    "android.scroll": {"direction": "down"},
+    "android.type": {"text": "hello"},
+    "android.key": {"key": "enter"},
+    "android.back": {},
+    "android.home": {},
+    "android.recents": {},
+    "android.launch": {"package": "com.android.settings"},
+    "android.stop": {"package": "com.android.settings"},
+    "android.packages": {},
+    "android.find": {"text": "Save"},
+    "android.inspect": {},
+    "android.install": {"apk": "app.apk"},
+    "android.uninstall": {"package": "com.example.app"},
+}
+
+
+def test_every_android_action_fails_clearly_without_adb(agent_project: Path, make_app, monkeypatch: pytest.MonkeyPatch) -> None:
+    from highhx.actions.catalog import default_catalog
+
+    monkeypatch.setenv("HIGHHX_ADB", "/nonexistent/adb")
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    executor, _ = _executor(make_app, agent_project)
+    catalog_actions = {s.name for s in default_catalog() if s.name.startswith("android.")}
+    assert catalog_actions - {"android.devices"} == set(ANDROID_ACTIONS)  # every action is covered here
+    for name, inputs in ANDROID_ACTIONS.items():
+        result = executor.run(name, inputs)
+        assert not result.ok, name
+        assert "adb" in result.error.lower(), (name, result.error)
+        assert result.output.get("devices") is None and result.output.get("elements") is None, name
+    listed = executor.run("android.devices")
+    assert listed.ok and listed.output == {"available": False, "detail": listed.output["detail"], "devices": []}
+    from highhx.drivers import discover
+
+    assert next(d for d in discover() if d["driver"] == "android")["available"] is False
+
+
+def test_android_state_without_adb_is_unavailable_not_empty(agent_project: Path, make_app, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HIGHHX_ADB", "/nonexistent/adb")
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    executor, _ = _executor(make_app, agent_project)
+    result = executor.run("computer.state", {"surface": "android"})
+    assert not result.ok and "nothing could be observed" in result.error and "adb" in result.error

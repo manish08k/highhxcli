@@ -87,6 +87,7 @@ SANDBOX_DESTROYED = "sandbox.destroyed"
 RUNTIME_STARTED = "runtime.started"
 RUNTIME_STOPPED = "runtime.stopped"
 MODEL_USAGE = "model.usage"
+NETWORK_OBSERVED = "network.observed"
 BENCHMARK_STARTED = "benchmark.started"
 BENCHMARK_TASK = "benchmark.task"
 BENCHMARK_COMPLETED = "benchmark.completed"
@@ -157,6 +158,7 @@ EVENT_NAMES = (
     RUNTIME_STARTED,
     RUNTIME_STOPPED,
     MODEL_USAGE,
+    NETWORK_OBSERVED,
     BENCHMARK_STARTED,
     BENCHMARK_TASK,
     BENCHMARK_COMPLETED,
@@ -185,6 +187,7 @@ LOGGED_PREFIXES = (
     "sandbox.",
     "runtime.",
     "model.",
+    "network.",
     "benchmark.",
 )
 

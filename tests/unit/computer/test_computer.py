@@ -363,6 +363,62 @@ def test_cdp_calls_are_cancellable() -> None:
     server.close()
 
 
+def _split_frame_server(pause: float) -> tuple[socket.socket, list[bytes]]:
+    """A WebSocket peer that sends one text frame in two halves, ``pause`` seconds apart."""
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    payload = json.dumps({"method": "Network.dataReceived", "params": {"x": "y" * 4000}}).encode()
+    frame = bytes([0x81, 126]) + struct.pack("!H", len(payload)) + payload
+
+    def serve() -> None:
+        conn, _ = server.accept()
+        request = conn.recv(4096).decode()
+        key = next(line.split(":", 1)[1].strip() for line in request.split("\r\n") if line.lower().startswith("sec-websocket-key"))
+        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        conn.sendall(
+            f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n".encode()
+        )
+        conn.sendall(frame[:1000])
+        time.sleep(pause)
+        try:
+            conn.sendall(frame[1000:])
+            time.sleep(0.5)
+        except OSError:
+            pass
+        conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    return server, [payload]
+
+
+def test_websocket_message_straddling_a_deadline_keeps_the_connection() -> None:
+    """Regression: a short deadline (event pumping) that expired while a large DevTools message was
+    arriving closed the connection — every Network event burst on a real site cost a reconnect."""
+    server, (payload,) = _split_frame_server(pause=0.4)
+    ws = WebSocket(f"ws://127.0.0.1:{server.getsockname()[1]}/devtools/page/1")
+    time.sleep(0.1)  # the first half has arrived
+    assert ws.recv(poll=0.05, deadline=time.monotonic() + 0.1) == payload.decode()
+    assert not ws.closed
+    ws.close()
+    server.close()
+
+
+def test_websocket_peer_stalling_mid_message_beyond_the_grace_closes(monkeypatch: pytest.MonkeyPatch) -> None:
+    import highhx.computer.websocket as websocket
+
+    monkeypatch.setattr(websocket, "FRAME_GRACE", 0.2)
+    server, _ = _split_frame_server(pause=3.0)
+    ws = WebSocket(f"ws://127.0.0.1:{server.getsockname()[1]}/devtools/page/1")
+    time.sleep(0.1)
+    started = time.monotonic()
+    with pytest.raises(websocket.WebSocketTimeout):
+        ws.recv(poll=0.05, deadline=time.monotonic() + 0.1)
+    assert time.monotonic() - started < 2
+    assert ws.closed  # a half-read frame leaves the stream unusable
+    server.close()
+
+
 def test_websocket_refuses_remote_endpoints() -> None:
     with pytest.raises(IntegrationError, match="non-local"):
         WebSocket("ws://example.com:9222/devtools/page/1")  # not configured as a remote browser

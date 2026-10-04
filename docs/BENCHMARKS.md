@@ -61,4 +61,4 @@ guessed), `code` (write a file, run a script), `long_horizon` (search, sign up, 
 task).
 
 Model-planned tasks (`planner: {kind: model}`) run only with `--model` and are otherwise
-skipped, never faked. Results are saved as JSON in `.highhx/benchmarks/`.
+skipped, never faked. Results are saved as JSON in `.highhx/state/benchmarks/`.

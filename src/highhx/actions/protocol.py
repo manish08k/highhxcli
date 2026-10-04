@@ -264,6 +264,7 @@ class ActionResponse:
             "summary": self.result.summary,
             "error": self.result.error,
             "verified": self.result.verified,
+            "network": (self.result.output.get("network") or [])[:20] or None,
             "verification": self.verification.to_dict() if self.verification else None,
             "attempts": self.attempts,
             "seconds": round(self.seconds, 3),

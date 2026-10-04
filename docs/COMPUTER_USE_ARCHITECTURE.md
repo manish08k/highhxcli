@@ -129,6 +129,7 @@ against simulations or fakes only, not yet run on the real platform in this buil
 | Perception (DOM, accessibility), hybrid grounding without vision, self-healing replay | FREE · LOCAL |
 | OCR | FREE · LOCAL · OPTIONAL (tesseract) |
 | Browser recording and replay | FREE · LOCAL · OPTIONAL (a Chromium-family browser). Tested in real Chrome |
+| Browser network evidence for verification | FREE · LOCAL. Tested in real Chrome |
 | Agent loop with scripted plans or Free's resolver; benchmarks; the console | FREE · LOCAL |
 | Agent loop / specialists with a model planner; vision grounding | PRO (HighhX gateway, with consent) or a LOCAL model (OPTIONAL) |
 | Android actions and driver | FREE · LOCAL · OPTIONAL (adb) · EXPERIMENTAL (no real device in this build) |

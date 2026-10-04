@@ -121,6 +121,7 @@ def test_the_recorder_listens_through_a_devtools_binding() -> None:
     recorder = BrowserRecorder(FakeBrowser(conn))  # type: ignore[arg-type]
     recorder.start(URL)
     assert [m for m, _ in conn.calls] == ["Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate"]
+    assert recorder.browser.navigated == []  # the recorder never navigates: the caller opened the page through the executor
     payload = json.dumps(ev("click", "button", "Export", 5000))
     conn.queue += [
         {"method": "Runtime.bindingCalled", "sessionId": "S1", "params": {"name": BINDING, "payload": payload}},

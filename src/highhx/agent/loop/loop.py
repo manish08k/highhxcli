@@ -216,7 +216,10 @@ class AgentLoop:
             last_fingerprint = fingerprint
             if same_screen >= NO_PROGRESS:
                 return Status.FAILED, "no progress: the screen stopped changing while steps kept failing"
-            decision = self.planner.next(task, state, trajectory.steps, feedback=feedback, lessons=lessons)
+            try:
+                decision = self.planner.next(task, state, trajectory.steps, feedback=feedback, lessons=lessons)
+            except HighhXError as exc:  # a model that is down or refuses: the task stops, resumable
+                return Status.FAILED, f"the planner failed: {exc.message} — resume with `highhx agent --resume {trajectory.id}`"
             feedback = ""
             self._usage(decision, counters)
             if decision.kind == "done":

@@ -145,7 +145,42 @@ def _runtime(ctx: ActionContext) -> Any:
     return runtime
 
 
+class network_evidence:
+    """The requests the page made while an action ran, added to the action's result
+    (``output["network"]``) and emitted as ``network.observed``. Pages without a network journal
+    (simulations) add nothing."""
+
+    def __init__(self, ctx: ActionContext) -> None:
+        self.ctx = ctx
+        self.browser = getattr(ctx.computer(), "browser", None)  # the object only: nothing is started here
+        journal = getattr(self.browser, "network", None)
+        self.journal = journal if callable(getattr(journal, "mark", None)) else None
+        self.mark = self.journal.mark() if self.journal is not None else None
+
+    def attach(self, result: ActionResult) -> ActionResult:
+        if self.journal is None or self.mark is None:
+            return result
+        pump = getattr(self.browser, "pump_events", None)
+        if callable(pump):
+            pump(0.25, cancel=self.ctx.cancel)
+        entries = self.journal.since(self.mark)
+        result.output["network"] = entries
+        if entries:
+            from highhx.actions import events as ev
+
+            failed = [e for e in entries if e.get("error") or (e.get("status") or 0) >= 400]
+            self.ctx.app.ctx.events.emit(
+                ev.NETWORK_OBSERVED, requests=len(entries), failed=len(failed), entries=entries[:20]
+            )
+        return result
+
+
 def _flow_step(ctx: ActionContext, step: dict[str, Any], timeout: float = 10.0) -> ActionResult:
+    evidence = network_evidence(ctx)
+    return evidence.attach(_run_flow_step(ctx, step, timeout))
+
+
+def _run_flow_step(ctx: ActionContext, step: dict[str, Any], timeout: float = 10.0) -> ActionResult:
     """One deterministic step through the flow runner (element resolution, per-element safety
     check, execution, re-observation and verification)."""
     from highhx.computer.flows import Flow, FlowRunner
@@ -173,6 +208,11 @@ def _flow_step(ctx: ActionContext, step: dict[str, Any], timeout: float = 10.0) 
 def open_url(ctx: ActionContext, url: str, *, reuse_tab: bool = False) -> ActionResult:
     """Open ``url`` in the HighhX browser (with ``reuse_tab``: switch to a tab already showing
     it) and report where the browser really is — verified by the runtime."""
+    evidence = network_evidence(ctx)
+    return evidence.attach(_open_url(ctx, url, reuse_tab=reuse_tab))
+
+
+def _open_url(ctx: ActionContext, url: str, *, reuse_tab: bool = False) -> ActionResult:
     from highhx.core.errors import NotFoundError, UsageError, ValidationError
 
     runtime = _runtime(ctx)

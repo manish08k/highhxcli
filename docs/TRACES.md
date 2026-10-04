@@ -29,7 +29,7 @@ highhx trace export tr_… [--format json|jsonl] [-o FILE]
 highhx trace [EXECUTION_ID]            # unchanged: an execution's timing tree (spans)
 ```
 
-Traces are redacted JSON Lines, one per trace id, in `.highhx/traces/` (or the user data
+Traces are redacted JSON Lines, one per trace id, in `.highhx/state/traces/` (or the user data
 directory). They are written by `highhx agent loop`, browser replays, `highhx replay`, the TUI,
 and any `AgentLoop` given a `TraceStore`, including on interruption. The execution ids in a trace
 link to `highhx history` and `highhx trace EXECUTION_ID`, and the task id links to `highhx

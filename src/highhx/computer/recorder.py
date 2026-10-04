@@ -307,8 +307,9 @@ class BrowserRecorder:
         self._listener: Callable[[dict[str, Any]], None] | None = None
 
     def start(self, url: str | None = None) -> None:
-        if url:
-            self.browser.navigate(url, cancel=self.cancel)
+        """Listen to the working tab. ``url`` is the page the caller already opened *through the
+        executor* (``browser.open``): it is recorded as the start, never navigated here — the
+        recorder only listens."""
         conn, session = self.browser._page(self.cancel)  # the working tab's DevTools session
         self._conn, self._session = conn, session
         script = record_script()

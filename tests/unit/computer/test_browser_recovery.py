@@ -443,11 +443,12 @@ def test_browser_starts_and_one_connection_serves_sequential_actions(
     assert chrome.connections == 1 and browser.reconnects == 0
     assert len(_sent(chrome, "Target.attachToTarget")) == 1  # one session for the whole sequence
     assert _events(browser) == ["connected"]
-    setup = [m for t, m, _ in chrome.sent if t == "t1"][:5]
+    setup = [m for t, m, _ in chrome.sent if t == "t1"][:6]
     assert setup == [
         "Page.enable",
         "Runtime.enable",
         "Inspector.enable",
+        "Network.enable",
         "Page.getFrameTree",
         "Emulation.setFocusEmulationEnabled",
     ]

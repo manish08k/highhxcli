@@ -116,3 +116,18 @@ def test_a_credential_used_by_a_request_appears_nowhere(agent_project: Path, mak
 
     written = everything_written(tmp_path) + everything_written(user_data_dir()) + everything_written(agent_project / ".highhx")
     assert TOKEN not in written  # … and nothing HighhX wrote keeps it
+
+
+def test_query_string_values_never_reach_audit_or_events(agent_project: Path, make_app, tmp_path: Path) -> None:
+    app = make_app(agent_project)
+    EventLog(app.redactor, directory=tmp_path / "events").attach(app.ctx.events)
+    gate = ActionGate(app.engine, RecordingUI(default_action_answer=False), source="test", mode=ApprovalMode.ASK, audit=AuditLog(app.db, app.redactor))
+    executor = ActionExecutor(app, gate, actor=Actor.USER)
+    # an external read is asked first; declining it still writes an audit row and events
+    result = executor.run("api.request", {"url": "https://api.example.com/v1/me?api_key=qk-77aa-secret"})
+    assert result.status == "denied"
+    app.close()
+    from highhx.utils.paths import user_data_dir
+
+    written = everything_written(tmp_path) + everything_written(user_data_dir()) + everything_written(agent_project / ".highhx")
+    assert "qk-77aa-secret" not in written and "api_key=…" in written

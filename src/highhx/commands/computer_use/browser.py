@@ -34,6 +34,8 @@ def _store(app: App) -> Any:
 def browser_record(app: App, name: str, url: str | None, duration: float | None) -> int:
     """Open the HighhX browser and record clicks, typing, selections and Enter until Ctrl-C
     (or --duration). Nothing is clicked for you while recording."""
+    from highhx.actions.catalog import catalog_for
+    from highhx.actions.executor import ActionExecutor
     from highhx.commands.computer.main import computer_session
     from highhx.computer.recorder import BrowserRecorder
 
@@ -43,6 +45,11 @@ def browser_record(app: App, name: str, url: str | None, duration: float | None)
     recorder = BrowserRecorder(session.browser, cancel=app.ctx.cancel)
     out = app.output
     try:
+        if url:  # opened like any page: classified, policy-checked, audited
+            executor = ActionExecutor(app, session.gate, actor=session.actor, catalog=catalog_for(app), computer=lambda: session)
+            opened = executor.run("browser.open", {"url": url})
+            if not opened.ok:
+                raise UsageError(f"Could not open {url}: {opened.error or opened.status}")
         recorder.start(url)
         out.info(f"Recording {name!r} — use the browser, then press Ctrl-C here to stop.")
         started = time.monotonic()

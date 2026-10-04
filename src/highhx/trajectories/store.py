@@ -10,9 +10,11 @@
         reflection     what the reflector decided and why
         grounding      every strategy tried for the target, and the target's selectors
 
-Stored as redacted JSON files (one per task) in the project's ``.highhx/trajectories`` or, outside
+Stored as redacted JSON files (one per task) in the project's ``.highhx/state/trajectories`` (git-ignored, protected from the agent's file
+tools) or, outside
 a project, the user data directory. :meth:`TrajectoryStore.search` finds similar past tasks
-(lexical embedding by default; any EmbeddingModel can replace it). :meth:`hints` returns the
+(normalized terms, UI synonyms, trigrams and site/app/label matches by default; any
+EmbeddingModel can replace the term vectors). :meth:`hints` returns the
 selectors that found a target before, so grounding can start from what worked.
 :func:`replay_steps` turns a trajectory into semantic steps (action type, target, parameters).
 A replay re-grounds every target on the current screen and never repeats recorded coordinates
@@ -191,16 +193,9 @@ class TrajectoryStore:
     def for_app(cls, app: Any) -> TrajectoryStore:
         from highhx.utils.paths import user_data_dir
 
-        root = (app.root / ".highhx" / "trajectories") if getattr(app, "initialized", False) else user_data_dir() / "trajectories"
+        # .highhx/state/ is git-ignored by `highhx init` and protected from the agent's file tools
+        root = (app.paths.state_dir / "trajectories") if getattr(app, "initialized", False) else user_data_dir() / "trajectories"
         return cls(root, redactor=app.redactor)
-
-    @property
-    def embedding(self) -> EmbeddingModel:
-        if self._embedding is None:
-            from highhx.models.adapters import HashingEmbedding
-
-            self._embedding = HashingEmbedding()
-        return self._embedding
 
     def path(self, trajectory_id: str) -> Path:
         if not trajectory_id.replace("_", "").isalnum():
@@ -248,16 +243,25 @@ class TrajectoryStore:
         self.path(trajectory_id).unlink(missing_ok=True)
 
     # ------------------------------------------------------------------ memory
-    def search(self, query: str, *, limit: int = 5, status: str | None = None, min_score: float = 0.15) -> list[SearchHit]:
-        from highhx.models.adapters import cosine
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        status: str | None = None,
+        min_score: float = 0.12,
+        surface: str | None = None,
+        host: str | None = None,
+    ) -> list[SearchHit]:
+        """Similar past tasks (see :mod:`highhx.trajectories.search`): normalized terms with UI
+        synonyms (or an injected EmbeddingModel), trigrams, site/app/label matches, outcome."""
+        from highhx.trajectories.search import TrajectoryIndex
 
-        items = self.recent(limit=500, status=status)
-        if not items or not query.strip():
-            return []
-        vectors = self.embedding.embed([query, *(t.text() for t in items)])
-        wanted, rest = vectors[0], vectors[1:]
-        hits = [SearchHit(t, cosine(wanted, v)) for t, v in zip(items, rest, strict=True)]
-        return sorted((h for h in hits if h.score >= min_score), key=lambda h: h.score, reverse=True)[:limit]
+        items = self.recent(limit=500)
+        ranked = TrajectoryIndex(items, embedding=self._embedding).search(
+            query, limit=limit, min_score=min_score, surface=surface, host=host, status=status
+        )
+        return [SearchHit(r.trajectory, r.score) for r in ranked]
 
     def hints(self, label: str, *, url: str = "", app: str = "") -> list[dict[str, Any]]:
         """Targets (all their selectors) that grounded ``label`` successfully before, most recent

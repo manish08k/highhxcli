@@ -185,7 +185,7 @@ class TraceStore:
     def for_app(cls, app: Any) -> TraceStore:
         from highhx.utils.paths import user_data_dir
 
-        root = (app.root / ".highhx" / "traces") if getattr(app, "initialized", False) else user_data_dir() / "traces"
+        root = (app.paths.state_dir / "traces") if getattr(app, "initialized", False) else user_data_dir() / "traces"
         return cls(root)
 
     def _path(self, trace_id: str) -> Path:

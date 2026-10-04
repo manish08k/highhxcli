@@ -16,16 +16,22 @@ Plus the plan, metrics (actions, observations, failures, re-plans, recoveries, t
 grounding strategies, outcomes, seconds) and the checkpoint used by resume
 ([AGENT_LOOP.md](AGENT_LOOP.md#checkpoints-and-resume)).
 
-Storage: redacted JSON, one file per task, in `.highhx/trajectories/` (or the user data
-directory). Text typed into secret fields is registered with the redactor *before* the action
+Storage: redacted JSON, one file per task, in `.highhx/state/trajectories/` (git-ignored by
+`highhx init` and protected from the agent's file tools), or the user data directory outside a
+project. Text typed into secret fields is registered with the redactor *before* the action
 runs and is never written.
 
 ## Memory
 
-- `search(query)`: similar past tasks. Lexical by default (`HashingEmbedding`, no model);
-  any `EmbeddingModel` can replace it.
+- `search(query, surface=, host=, status=)`: similar past tasks, deterministic and model-free
+  ([`trajectories/search.py`](../src/highhx/trajectories/search.py)): normalized terms with a
+  light stemmer and UI-verb synonyms (download ≈ export, log in ≈ sign in, remove ≈ delete),
+  character trigrams (typos, plurals), structured matches (the site, app, target labels or
+  surface named in the query) and completed-first ordering. An injected `EmbeddingModel`
+  replaces the term vectors. It does not understand arbitrary paraphrase without one.
 - `hints(label, url, app)`: selectors that found a target before. The worker uses them first.
-- `lessons(query)`: short notes for the model planner (what worked, what failed and why).
+- `lessons(query)`: short notes for the model planner (what worked, what failed and why),
+  given to it as data, not instructions, and truncated.
 - Router history: success rate per surface ([AGENT_LOOP.md](AGENT_LOOP.md#tool-routing)).
 
 ## Replay

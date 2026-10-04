@@ -17,6 +17,8 @@ from highhx.execution.cancellation import CancellationToken
 
 _GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_MESSAGE = 64 * 1024 * 1024
+FRAME_GRACE = 10.0
+"""Seconds a message that has started arriving gets to finish after the caller's deadline."""
 
 
 class WebSocketClosed(IntegrationError):
@@ -112,7 +114,13 @@ class WebSocket:
         boundary: bool = False,
     ) -> bytes:
         """``boundary``: nothing of the current message has been read, so giving up (cancel,
-        deadline) leaves the stream intact and the connection open."""
+        deadline) leaves the stream intact and the connection open.
+
+        A deadline is about *waiting for* a message. Once a message has started arriving, it gets
+        :data:`FRAME_GRACE` more seconds to finish — a large message (DevTools Network events,
+        screenshots) that straddles a short deadline must not cost the connection. Only a peer that
+        stalls mid-message beyond the grace closes it (the stream would be unusable)."""
+        graced = False
         while len(self._buffer) < n:
             intact = boundary and not self._buffer
             if cancel is not None and cancel.cancelled:
@@ -120,6 +128,9 @@ class WebSocket:
                     self.close()  # a half-read frame leaves the stream unusable
                 raise OperationCancelledError("Browser operation cancelled.")
             if deadline is not None and time.monotonic() > deadline:
+                if not intact and not graced:
+                    deadline, graced = time.monotonic() + FRAME_GRACE, True
+                    continue
                 if not intact:
                     self.close()
                 raise WebSocketTimeout("No answer from the browser in time.")

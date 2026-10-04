@@ -37,6 +37,7 @@ typed text in action inputs is replaced by its length before the event is emitte
 | Tools (MCP) | `tool.started` · `tool.completed` · `tool.failed` |
 | Runtimes | `sandbox.created` · `sandbox.exec` · `sandbox.destroyed` · `runtime.started` · `runtime.stopped` |
 | Models | `model.usage` (tokens, cost when reported) |
+| Network | `network.observed` (the sanitized requests a browser action caused: method, URL without query values, status, failures) |
 | Benchmarks | `benchmark.started` · `benchmark.task` · `benchmark.completed` |
 | Existing | `session.*`, `intent.*`, `workflow.*`, `agent.turn`, `agent.tool_call`, `voice.heard`, `computer.*` (the vision operator), `mcp.connected` |
 

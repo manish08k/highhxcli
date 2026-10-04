@@ -9,6 +9,7 @@ from highhx.actions.handlers.native import _flow_step
 from highhx.actions.policy import Risk
 from highhx.actions.spec import BROWSER, DESKTOP, NETWORK, ActionContext, ActionResult, ActionSpec, Inputs
 from highhx.cloud.plans import AGENT_COMPUTER_USE
+from highhx.computer.network import sanitize_url
 from highhx.safety.actions import ActionKind
 from highhx.utils.validation import Any_, Bool, Int, Map, Num, Obj, Prop, Str
 
@@ -40,10 +41,13 @@ def _browser(ctx: ActionContext):  # type: ignore[no-untyped-def]
 
 
 def browser_click_at(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    from highhx.actions.handlers.native import network_evidence
+
     x, y = int(inputs["x"]), int(inputs["y"])
     count = int(inputs.get("count") or 1)
+    evidence = network_evidence(ctx)
     _browser(ctx).pointer("click", x, y, button=str(inputs.get("button") or "left"), count=count, cancel=ctx.cancel)
-    return ActionResult(True, output={"x": x, "y": y, "count": count}, summary=f"clicked the page at ({x}, {y})", verified=None)
+    return evidence.attach(ActionResult(True, output={"x": x, "y": y, "count": count}, summary=f"clicked the page at ({x}, {y})", verified=None))
 
 
 def browser_insert_text(ctx: ActionContext, inputs: Inputs) -> ActionResult:
@@ -177,7 +181,7 @@ def computer_use_specs() -> list[ActionSpec]:
             timeout=300,
             feature=AGENT_COMPUTER_USE,
             agent=False,
-            target=lambda i: str(i.get("url", "")),
+            target=lambda i: sanitize_url(str(i.get("url", ""))),  # audit and events: no query values
             policy_action=api.policy_name,
             risk_for=api.risk_for,
         ),

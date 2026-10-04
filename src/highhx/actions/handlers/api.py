@@ -21,6 +21,7 @@ from highhx.actions.policy import Risk
 from highhx.actions.spec import ActionContext, ActionResult, Inputs
 from highhx.agent.model.capabilities import is_loopback
 from highhx.agent.tools.base import ToolError
+from highhx.computer.network import sanitize_url
 
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 MAX_BODY = 64_000
@@ -88,7 +89,7 @@ def request(ctx: ActionContext, inputs: Inputs) -> ActionResult:
         "headers": {k: v for k, v in response_headers.items() if k in SHOWN_HEADERS},
         "body": text,
         "truncated": len(raw) > MAX_BODY,
-        "network": [{"url": url, "method": method, "status": status}],
+        "network": [{"url": sanitize_url(url), "method": method, "status": status}],
     }
     if "json" in response_headers.get("content-type", ""):
         try:

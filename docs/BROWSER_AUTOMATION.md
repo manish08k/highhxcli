@@ -23,6 +23,26 @@ title, tabs and loading state. A screenshot is taken only when asked for (or whe
 must run) and is in CSS pixels, so a box found in it can be clicked as it is. See
 [PERCEPTION.md](PERCEPTION.md) and [GROUNDING.md](GROUNDING.md).
 
+## Network evidence
+
+Every tab enables the DevTools Network domain. A bounded journal
+([`computer/network.py`](../src/highhx/computer/network.py)) keeps, per request: the method, a
+**sanitized URL** (scheme, host, port, path and query parameter *names*; never their values,
+never `user:password@`, never the fragment), the resource type, the status, or the failure
+reason. Headers, cookies and bodies are never read. Each browser action takes the requests that
+finished while it ran (plus a short wait for late responses) into its result
+(`output.network`). That evidence is emitted as `network.observed`, stored with the trajectory
+step, and used by the `network` verification check:
+
+```yaml
+- action: click
+  target: {label: Place order, role: button}
+  verify: {network: {url_contains: /api/orders, method: POST, status: 201}}
+```
+
+Without a journal (for example, a remote browser that is not HighhX's), `network` stays
+`unknown`, never guessed. Tested in real Chrome: `tests/unit/computer/test_live_network.py`.
+
 ## Recording and replay
 
 ```text
@@ -34,8 +54,10 @@ highhx browser workflows · delete NAME
 highhx replay invoices                                           # the same; also replays task_… ids
 ```
 
-The recorder injects a script through a DevTools binding (`Runtime.addBinding`, plus
-`Page.addScriptToEvaluateOnNewDocument` so it survives navigation). It never acts. It labels
+`--url` is opened through the executor (`browser.open`: classified, policy-checked, audited)
+before recording starts. The recorder itself never navigates or acts: it injects a listening
+script through a DevTools binding (`Runtime.addBinding`, plus
+`Page.addScriptToEvaluateOnNewDocument` so it survives navigation). It labels
 each clicked, typed, selected or Enter-pressed element with **the same role and name rules as
 observation**, and keeps its attributes, box and viewport. Events become semantic steps:
 
@@ -51,7 +73,7 @@ project), redacted when written. Replay runs through the agent loop, so every st
 grounded, approved, verified and recovered, and drifted selectors are healed
 ([SELF_HEALING.md](SELF_HEALING.md)).
 
-## A fix made for this work
+## Fixes made for this work
 
 The tab registry remembered the address HighhX last *requested* in a tab (to follow redirects),
 but never forgot it when the page later moved elsewhere, for example after a person's click
@@ -59,3 +81,13 @@ while recording. "Open the start page" then believed the tab was already there a
 nothing. A request now stands for a tab only while the tab still shows the page that request
 landed on (`Tab.landed`). Regression tests: `tests/unit/computer/test_tab_registry.py` and the
 real-Chrome recorder test.
+
+Turning on the Network domain exposed a transport bug. A read with a short deadline (pumping
+events between actions) that expired while a large DevTools message was still arriving closed
+the connection, because a half-read frame leaves the stream unusable. On busy real sites every
+burst of Network events then cost a reconnect (6 in 15 navigations). A deadline now applies only
+to *waiting for* a message. A message that has started arriving gets a bounded grace
+(`FRAME_GRACE`, 10 s) to finish, and only a peer that stalls mid-message beyond it loses the
+connection. Regression tests: `test_websocket_message_straddling_a_deadline_keeps_the_connection`,
+`test_websocket_peer_stalling_mid_message_beyond_the_grace_closes`, and the real-internet test
+(`test_github_then_wikipedia_repeatedly_on_the_real_internet`: 0 reconnects).

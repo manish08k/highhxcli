@@ -18,8 +18,8 @@ than it does.
 | IDE and chat interfaces | Same session contract as voice: text in, the same engine, outcomes out |
 | Real-device Android validation | The adb driver and actions are tested against a simulated device; run them on emulators and phones in CI |
 | bubblewrap and Docker sandboxes in CI | Implemented; only Seatbelt has been exercised against the real platform so far |
+| A process-count limit under Seatbelt | macOS's sandbox does not limit forks; Docker's `--pids-limit` does |
 | VM and cloud computers | `VMRuntime` / `CloudRuntime` are capability errors today; a hypervisor or cloud-desktop backend behind `ComputerDriver` and `Runtime` |
-| Browser network log for verification | The `network` check needs a request log; recording CDP `Network.*` events per action would feed it |
 | A semantic embedding model for trajectory memory | Search is lexical (`HashingEmbedding`); any `EmbeddingModel` can be plugged in |
 | External benchmark adapters | Convert WebArena-, OSWorld- or AndroidWorld-style tasks into the HighhX benchmark format |
 
