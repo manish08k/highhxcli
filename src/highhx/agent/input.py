@@ -35,8 +35,8 @@ def setup_readline() -> Callable[[], None]:
     with contextlib.suppress(OSError):
         readline.read_history_file(str(path))
     readline.set_history_length(HISTORY_LENGTH)
-    with contextlib.suppress(Exception):  # libedit and GNU readline name the binding differently
-        readline.parse_and_bind("tab: complete")
+    with contextlib.suppress(Exception):
+        readline.parse_and_bind(tab_binding(readline.__doc__ or ""))
 
     def save() -> None:
         with contextlib.suppress(OSError):
@@ -44,6 +44,12 @@ def setup_readline() -> Callable[[], None]:
             readline.write_history_file(str(path))
 
     return save
+
+
+def tab_binding(backend_doc: str) -> str:
+    """Tab completes, in the syntax of the line editor Python was built with: macOS ships libedit,
+    where GNU readline's "tab: complete" does nothing and Tab typed whitespace instead."""
+    return "bind ^I rl_complete" if "libedit" in backend_doc else "tab: complete"
 
 
 def ansi_prompt(text: str, sgr: str, *, color: bool) -> str:

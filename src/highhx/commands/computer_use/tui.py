@@ -39,19 +39,56 @@ class Command:
 
 
 COMMANDS: tuple[Command, ...] = (
-    Command("run", "/run GOAL [--plan FILE] [--model]", "Work toward a goal (agent loop, live dashboard).", lambda a: ["agent", "loop", *a]),
-    Command("resume", "/resume TASK_ID", "Continue an interrupted task from its checkpoint.", lambda a: ["agent", "loop", "--resume", *a]),
-    Command("replay", "/replay WORKFLOW|TASK_ID", "Replay a browser workflow or a past task (self-healing).", lambda a: ["replay", *a]),
+    Command(
+        "run",
+        "/run GOAL [--plan FILE] [--model]",
+        "Work toward a goal (agent loop, live dashboard).",
+        lambda a: ["agent", "loop", *a],
+    ),
+    Command(
+        "resume",
+        "/resume TASK_ID",
+        "Continue an interrupted task from its checkpoint.",
+        lambda a: ["agent", "loop", "--resume", *a],
+    ),
+    Command(
+        "replay",
+        "/replay WORKFLOW|TASK_ID",
+        "Replay a browser workflow or a past task (self-healing).",
+        lambda a: ["replay", *a],
+    ),
     Command("record", "/record NAME [--url URL]", "Record a browser workflow.", lambda a: ["browser", "record", *a]),
     Command("workflows", "/workflows", "Recorded browser workflows.", lambda a: ["browser", "workflows", *a]),
     Command("trace", "/trace [ID]", "A task trace (default: the last task's).", None),
     Command("traces", "/traces", "Recent task traces.", lambda a: ["trace", "list", *a]),
     Command("history", "/history", "Recent tasks (trajectories).", lambda a: ["trajectories", "list", *a]),
-    Command("state", "/state [browser|desktop|android]", "Observe a surface (structure; --screenshot, --ocr …).", lambda a: ["computer", "state", *(["--surface", a[0], *a[1:]] if a and not a[0].startswith("-") else a)]),
-    Command("ground", "/ground TARGET [--surface S]", "Find a target by every representation.", lambda a: ["computer", "ground", *a]),
-    Command("drivers", "/drivers", "Drivers and sandbox backends available here.", lambda a: ["computer", "drivers", *a]),
-    Command("android", "/android SUBCOMMAND …", "Android devices (devices, observe, tap, agent …).", lambda a: ["android", *a]),
-    Command("sandbox", "/sandbox SUBCOMMAND …", "Sandboxes (create, list, exec, patch, apply, destroy).", lambda a: ["sandbox", *a]),
+    Command(
+        "state",
+        "/state [browser|desktop|android]",
+        "Observe a surface (structure; --screenshot, --ocr …).",
+        lambda a: ["computer", "state", *(["--surface", a[0], *a[1:]] if a and not a[0].startswith("-") else a)],
+    ),
+    Command(
+        "ground",
+        "/ground TARGET [--surface S]",
+        "Find a target by every representation.",
+        lambda a: ["computer", "ground", *a],
+    ),
+    Command(
+        "drivers", "/drivers", "Drivers and sandbox backends available here.", lambda a: ["computer", "drivers", *a]
+    ),
+    Command(
+        "android",
+        "/android SUBCOMMAND …",
+        "Android devices (devices, observe, tap, agent …).",
+        lambda a: ["android", *a],
+    ),
+    Command(
+        "sandbox",
+        "/sandbox SUBCOMMAND …",
+        "Sandboxes (create, list, exec, patch, apply, destroy).",
+        lambda a: ["sandbox", *a],
+    ),
     Command("benchmark", "/benchmark SUITE [-n RUNS]", "Run a benchmark suite.", lambda a: ["benchmark", "run", *a]),
     Command("cli", "/cli ARGS …", "Any HighhX command, e.g. /cli git status.", list),
     Command("palette", "/palette [WORDS]", "Find a command.", None),
@@ -76,6 +113,17 @@ def palette(query: str = "") -> list[Command]:
     return [c for c in COMMANDS if all(w in f"{c.name} {c.usage} {c.summary}".lower() for w in words)]
 
 
+def suggest(name: str) -> str:
+    """The command a mistyped name most likely meant ("hlep" → "help"), or ''."""
+    import difflib
+
+    found = difflib.get_close_matches(name, [*BY_NAME, *ALIASES], n=1, cutoff=0.6)
+    if found:
+        return ALIASES.get(found[0], found[0])
+    matches = palette(name)
+    return matches[0].name if matches else ""
+
+
 class HighhxConsole:
     def __init__(
         self,
@@ -98,7 +146,10 @@ class HighhxConsole:
     def _run_cli(self, argv: list[str]) -> int:
         from highhx.cli import run
 
-        flags = [*(["--yes"] if self.app.options.yes else []), *(["--debug"] if getattr(self.app.options, "debug", False) else [])]
+        flags = [
+            *(["--yes"] if self.app.options.yes else []),
+            *(["--debug"] if getattr(self.app.options, "debug", False) else []),
+        ]
         return run([*flags, *argv], app=App(cwd=self.app.root))
 
     # ----------------------------------------------------------------- screens
@@ -117,7 +168,9 @@ class HighhxConsole:
 
     def show_palette(self, query: str) -> None:
         found = palette(query)
-        self.out.table(["command", "what it does"], [(c.usage, c.summary) for c in found]) if found else self.out.warn(f"No command matches {query!r}.")
+        self.out.table(["command", "what it does"], [(c.usage, c.summary) for c in found]) if found else self.out.warn(
+            f"No command matches {query!r}."
+        )
 
     # ---------------------------------------------------------------- dispatch
     def dispatch(self, line: str) -> bool:
@@ -139,8 +192,8 @@ class HighhxConsole:
         args = parts[1:]
         command = BY_NAME.get(name)
         if command is None:
-            close = palette(name)
-            self.out.error(f"Unknown command /{name}." + (f" Did you mean /{close[0].name}?" if close else " Try /help."))
+            close = suggest(name)
+            self.out.error(f"Unknown command /{name}." + (f" Did you mean /{close}?" if close else " Try /help."))
             return True
         if name == "quit":
             return False
