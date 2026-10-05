@@ -1,4 +1,4 @@
-# HighhXCli
+# HighhXClii
 
 **HighhX is a developer automation CLI.** Run `highhx` in a project and describe what you
 want. Everything HighhX does — a command you typed, a sentence, a workflow step, or a step
