@@ -31,6 +31,7 @@ XDOTOOL_KEYS = {
     "space": "space",
     "delete": "BackSpace",
     "backspace": "BackSpace",
+    "forwarddelete": "Delete",
     "escape": "Escape",
     "esc": "Escape",
     "left": "Left",

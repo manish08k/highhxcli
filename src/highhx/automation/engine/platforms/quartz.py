@@ -322,8 +322,28 @@ def key(code: int, modifiers: list[str], *, pid: int | None = None) -> None:
         _post(event, pid)
 
 
+TEXT_KEYS = {"\n": 36, "\r": 36, "\t": 48}
+"""Characters typed as their key (Return, Tab), as a person would: a field acts on them."""
+
+
 def type_text(text: str, *, pid: int | None = None) -> None:
-    """Unicode text as keyboard events (chunks of 16 UTF-16 units, the events' limit)."""
+    """Unicode text as keyboard events that carry the text itself, so neither the keyboard layout
+    nor Caps Lock changes what arrives; line breaks and tabs are their keys."""
+    segment = ""
+    for char in text.replace("\r\n", "\n"):
+        if char in TEXT_KEYS:
+            _unicode(segment, pid)
+            segment = ""
+            key(TEXT_KEYS[char], [], pid=pid)
+        else:
+            segment += char
+    _unicode(segment, pid)
+
+
+def _unicode(text: str, pid: int | None) -> None:
+    """Chunks of 16 UTF-16 units (the events' limit)."""
+    if not text:
+        return
     fw = frameworks()
     units = text.encode("utf-16-le")
     codes = [int.from_bytes(units[i : i + 2], "little") for i in range(0, len(units), 2)]

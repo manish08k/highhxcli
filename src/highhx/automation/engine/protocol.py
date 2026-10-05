@@ -53,6 +53,7 @@ KEY_CODES = {
     "space": 49,
     "delete": 51,
     "backspace": 51,
+    "forwarddelete": 117,
     "escape": 53,
     "esc": 53,
     "left": 123,

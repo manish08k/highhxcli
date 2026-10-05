@@ -117,6 +117,30 @@ def test_mac_background_keys_use_the_ansi_layout(fake_quartz: dict[str, Any]) ->
     assert caught.value.code == "unsupported"
 
 
+def test_mac_foreground_text_is_typed_as_itself(fake_quartz: dict[str, Any]) -> None:
+    # Regressions (found on a real desktop): System Events' keystroke typed "é", "中" and emoji
+    # as "a", and followed Caps Lock ("hello" became "HELLO"). All text goes as events that carry
+    # the text itself.
+    runner = Runner(default="ok")
+    backend = MacBackend(runner)
+    backend.call("type", {"text": "Z9!@ é中😀"})
+    backend.call("type", {"text": "plain ascii"})
+    assert fake_quartz["calls"] == [("type_text", ("Z9!@ é中😀",), {}), ("type_text", ("plain ascii",), {})]
+    assert runner.argv == []  # never through keystroke
+    fake_quartz["trusted"] = False
+    with pytest.raises(EngineError) as caught:
+        backend.call("type", {"text": "é"})
+    assert caught.value.code == "accessibility_denied"  # refused, never dropped
+
+
+def test_mac_typed_line_breaks_and_tabs_are_their_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[Any] = []
+    monkeypatch.setattr(quartz, "_unicode", lambda text, pid: sent.append(text) if text else None)
+    monkeypatch.setattr(quartz, "key", lambda code, modifiers, pid=None: sent.append((code, pid)))
+    quartz.type_text("a b\r\nc\td\n", pid=7)
+    assert sent == ["a b", (36, 7), "c", (48, 7), "d", (36, 7)]
+
+
 def test_mac_scroll_is_real_wheel_input(fake_quartz: dict[str, Any]) -> None:
     MacBackend(Runner()).call("scroll", {"direction": "up", "amount": 2, "x": 5, "y": 6})
     assert fake_quartz["calls"] == [("scroll", (-6, 0), {"at": (5, 6)})]
@@ -399,3 +423,16 @@ def test_the_windows_backend_never_pretends_off_windows() -> None:
     with pytest.raises(EngineError) as caught:
         WindowsBackend(Runner()).call("cursor", {})
     assert caught.value.code == "unsupported_platform"
+
+
+def test_every_platform_has_a_forward_delete_key_and_it_is_asked_first() -> None:
+    # "delete" is the Mac keyboard's backspace on every platform; forward delete had no name at all.
+    from highhx.actions.catalog import default_catalog
+    from highhx.actions.policy import Risk
+    from highhx.automation.engine.platforms.linux import XDOTOOL_KEYS
+    from highhx.automation.engine.platforms.windows import VK
+
+    assert (KEY_CODES["forwarddelete"], XDOTOOL_KEYS["forwarddelete"], VK["forwarddelete"]) == (117, "Delete", 0x2E)
+    assert set(KEY_CODES) == set(XDOTOOL_KEYS) == set(VK)  # one set of key names everywhere
+    press = next(spec for spec in default_catalog() if spec.name == "computer.press")
+    assert press.risk_for is not None and press.risk_for({"key": "ForwardDelete"}) == Risk.MEDIUM

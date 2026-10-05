@@ -1134,7 +1134,10 @@ def _specs() -> list[ActionSpec]:
             "List managed browser sessions (local and remote); cleanup: forget dead or idle ones.",
             native.browser_sessions,
             Obj({"cleanup": Prop(Bool())}),
-            {"sessions": "[{id, kind, profile, browser_id, devtools, healthy, last_heartbeat}]", "removed": "cleaned up"},
+            {
+                "sessions": "[{id, kind, profile, browser_id, devtools, healthy, last_heartbeat}]",
+                "removed": "cleaned up",
+            },
             permissions=(BROWSER,),
             agent=False,
         ),
@@ -1286,7 +1289,9 @@ def _specs() -> list[ActionSpec]:
             agent=False,
             target=lambda i: str(i.get("key", "")),
             risk_for=lambda i: (
-                Risk.MEDIUM if str(i.get("key", "")).lower() in ("enter", "return", "delete", "backspace") else Risk.LOW
+                Risk.MEDIUM
+                if str(i.get("key", "")).lower() in ("enter", "return", "delete", "backspace", "forwarddelete")
+                else Risk.LOW
             ),
         ),
         ActionSpec(
@@ -1341,7 +1346,10 @@ def _specs() -> list[ActionSpec]:
             "computer.wait",
             "Wait a number of seconds (at most 60) for the screen to settle.",
             desktop.wait,
-            Obj({"seconds": Prop(Num(minimum=0), description="At most 60.")}, check=lambda v: ["seconds: at most 60"] if float(v.get("seconds") or 0) > 60 else []),
+            Obj(
+                {"seconds": Prop(Num(minimum=0), description="At most 60.")},
+                check=lambda v: ["seconds: at most 60"] if float(v.get("seconds") or 0) > 60 else [],
+            ),
             {"waited": "seconds"},
             permissions=(DESKTOP,),
             timeout=70,
@@ -1369,7 +1377,9 @@ def _specs() -> list[ActionSpec]:
                     "capture": Prop(
                         Str(min_length=1), description="Coordinates are in this screenshot (from computer.screenshot)."
                     ),
-                    "space": Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."),
+                    "space": Prop(
+                        Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."
+                    ),
                     "direction": Prop(Str(choices=("up", "down", "left", "right"))),
                     "source": Prop(Str(choices=("browser", "desktop"))),
                     "amount": Prop(Int(minimum=1, maximum=20)),
@@ -1450,7 +1460,9 @@ def _specs() -> list[ActionSpec]:
                 {
                     "window": Prop(Int(minimum=0)),
                     "app": Prop(Str(min_length=1)),
-                    "max_size": Prop(Int(minimum=200, maximum=8000), description="Longest side in pixels (for a model)."),
+                    "max_size": Prop(
+                        Int(minimum=200, maximum=8000), description="Longest side in pixels (for a model)."
+                    ),
                     "region": Prop(List(Int(minimum=-100_000, maximum=100_000), min_items=4)),
                 },
                 check=lambda v: (
@@ -1521,7 +1533,9 @@ def _specs() -> list[ActionSpec]:
                     "capture": Prop(
                         Str(min_length=1), description="Coordinates are in this screenshot (from computer.screenshot)."
                     ),
-                    "space": Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."),
+                    "space": Prop(
+                        Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."
+                    ),
                     "x": Prop(COORD),
                     "y": Prop(COORD),
                     "text": Prop(Str(min_length=1, check=lambda v: "at most 200 characters" if len(v) > 200 else None)),
@@ -1549,7 +1563,9 @@ def _specs() -> list[ActionSpec]:
                     "capture": Prop(
                         Str(min_length=1), description="Coordinates are in this screenshot (from computer.screenshot)."
                     ),
-                    "space": Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."),
+                    "space": Prop(
+                        Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."
+                    ),
                     "x": Prop(COORD, required=True),
                     "y": Prop(COORD, required=True),
                 }
@@ -1573,7 +1589,9 @@ def _specs() -> list[ActionSpec]:
                     "capture": Prop(
                         Str(min_length=1), description="Coordinates are in this screenshot (from computer.screenshot)."
                     ),
-                    "space": Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."),
+                    "space": Prop(
+                        Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."
+                    ),
                     "action": Prop(Str(choices=("down", "up")), required=True),
                     "x": Prop(COORD, required=True),
                     "y": Prop(COORD, required=True),
@@ -1598,7 +1616,9 @@ def _specs() -> list[ActionSpec]:
                     "capture": Prop(
                         Str(min_length=1), description="Coordinates are in this screenshot (from computer.screenshot)."
                     ),
-                    "space": Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."),
+                    "space": Prop(
+                        Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000."
+                    ),
                     "from_x": Prop(COORD, required=True),
                     "from_y": Prop(COORD, required=True),
                     "to_x": Prop(COORD, required=True),

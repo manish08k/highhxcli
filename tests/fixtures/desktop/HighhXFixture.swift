@@ -4,6 +4,22 @@
 // not just that an event was sent. Built by tests/e2e/test_desktop_live.py with swiftc.
 import AppKit
 
+// Records every kind of pointer input it receives, with where (in its own coordinates).
+final class Pad: NSView {
+    var onEvent: ((String, NSPoint) -> Void)?
+    override var acceptsFirstResponder: Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        onEvent?(event.clickCount == 2 ? "double" : "left", convert(event.locationInWindow, from: nil))
+    }
+    override func rightMouseDown(with event: NSEvent) { onEvent?("right", convert(event.locationInWindow, from: nil)) }
+    override func otherMouseDown(with event: NSEvent) { onEvent?("middle", convert(event.locationInWindow, from: nil)) }
+    override func scrollWheel(with event: NSEvent) {
+        if event.scrollingDeltaX != 0 { onEvent?(event.scrollingDeltaX > 0 ? "scroll-left" : "scroll-right", .zero) }
+        if event.scrollingDeltaY != 0 { onEvent?(event.scrollingDeltaY > 0 ? "scroll-up" : "scroll-down", .zero) }
+    }
+    override func draw(_ dirtyRect: NSRect) { NSColor.systemTeal.setFill(); dirtyRect.fill() }
+}
+
 final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let statePath: String
     var window: NSWindow!
@@ -12,18 +28,23 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     var adds = [0, 0]
     let label = NSTextField(labelWithString: "Count: 0")
     let name = NSTextField(string: "")
+    let email = NSTextField(string: "")
     let agree = NSButton(checkboxWithTitle: "Agree", target: nil, action: nil)
     let volume = NSSlider(value: 0, minValue: 0, maxValue: 100, target: nil, action: nil)
     let scroll = NSScrollView()
+    let pad = Pad(frame: NSRect(x: 0, y: 0, width: 200, height: 60))
+    var padEvents: [String: Int] = [:]
+    var tinyClicks = 0
 
     init(statePath: String) { self.statePath = statePath }
 
     func write() {
         let state: [String: Any] = [
-            "count": count, "adds": adds, "name": name.stringValue, "agree": agree.state == .on,
+            "count": count, "adds": adds, "name": name.stringValue, "email": email.stringValue, "agree": agree.state == .on,
             "volume": Int(volume.doubleValue), "scrolled": Int(scroll.contentView.bounds.origin.y),
             "frame": [Int(window.frame.origin.x), Int(window.frame.origin.y),
                       Int(window.frame.size.width), Int(window.frame.size.height)],
+            "pad": padEvents, "tiny": tinyClicks, "minimized": window.isMiniaturized,
         ]
         if let data = try? JSONSerialization.data(withJSONObject: state) {
             try? data.write(to: URL(fileURLWithPath: statePath))
@@ -38,6 +59,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     @objc func reset() { count = 0; label.stringValue = "Count: 0"; write() }
     func controlTextDidChange(_ notification: Notification) { write() }
     @objc func scrolled() { write() }
+    @objc func tiny() { tinyClicks += 1; write() }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A second window of the same application (behind the main one): exact window targeting.
@@ -46,12 +68,16 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         second.title = "HighhX Fixture 2"
         second.orderFront(nil)
         window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 480, height: 400),
-                          styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+                          styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "HighhX Fixture"
+        window.setContentSize(NSSize(width: 480, height: 500))
         let button = NSButton(title: "Increment", target: self, action: #selector(increment))
         name.placeholderString = "Name"
         name.setAccessibilityLabel("Name")
         name.delegate = self
+        email.placeholderString = "Email"
+        email.setAccessibilityLabel("Email")
+        email.delegate = self
         agree.target = self; agree.action = #selector(changed)
         volume.target = self; volume.action = #selector(changed)
         volume.setAccessibilityLabel("Volume")
@@ -66,13 +92,32 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let pair = NSStackView(views: [NSButton(title: "Add", target: self, action: #selector(addFirst)),
                                        NSButton(title: "Add", target: self, action: #selector(addSecond))])
         pair.orientation = .horizontal
-        let stack = NSStackView(views: [label, button, name, agree, volume, scroll, pair])
+        pad.setAccessibilityElement(true)
+        pad.setAccessibilityRole(.group)
+        pad.setAccessibilityLabel("Pad")
+        pad.onEvent = { kind, _ in self.padEvents[kind, default: 0] += 1; self.write() }
+        pad.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        pad.heightAnchor.constraint(equalToConstant: 60).isActive = true
+        let tinyButton = NSButton(frame: NSRect(x: 0, y: 0, width: 10, height: 10))
+        tinyButton.title = ""
+        tinyButton.isBordered = false
+        tinyButton.wantsLayer = true
+        tinyButton.layer?.backgroundColor = NSColor.systemRed.cgColor
+        tinyButton.target = self; tinyButton.action = #selector(tiny)
+        tinyButton.setAccessibilityLabel("Tiny")
+        tinyButton.widthAnchor.constraint(equalToConstant: 10).isActive = true
+        tinyButton.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        let row = NSStackView(views: [pad, tinyButton])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        let stack = NSStackView(views: [label, button, name, email, agree, volume, scroll, pair, row])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
-        scroll.heightAnchor.constraint(equalToConstant: 120).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 80).isActive = true
         scroll.widthAnchor.constraint(equalToConstant: 400).isActive = true
         name.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        email.widthAnchor.constraint(equalToConstant: 300).isActive = true
         volume.widthAnchor.constraint(equalToConstant: 300).isActive = true
         window.contentView = stack
 
@@ -84,7 +129,24 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let fixtureMenu = NSMenu(title: "Fixture")
         fixtureMenu.addItem(withTitle: "Reset", action: #selector(reset), keyEquivalent: "").target = self
         fixtureItem.submenu = fixtureMenu
+        // Like every Mac application: text fields receive copy/paste/undo shortcuts through these.
+        let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: ""); bar.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+        let windowItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: ""); bar.addItem(windowItem)
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowItem.submenu = windowMenu
+        NSApp.windowsMenu = windowMenu
         NSApp.mainMenu = bar
+        NotificationCenter.default.addObserver(forName: NSWindow.didMiniaturizeNotification, object: window, queue: nil) { _ in self.write() }
+        NotificationCenter.default.addObserver(forName: NSWindow.didDeminiaturizeNotification, object: window, queue: nil) { _ in self.write() }
 
         NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: nil) { _ in self.write() }
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: nil) { _ in self.write() }

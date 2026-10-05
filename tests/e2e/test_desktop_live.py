@@ -25,6 +25,8 @@ from typing import Any
 
 import pytest
 
+from tests.unit.agent.conftest import agent_project, make_app  # noqa: F401
+
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.skipif(sys.platform != "darwin", reason="the live desktop fixture is an AppKit application"),
@@ -241,3 +243,198 @@ def test_a_region_screenshot(fixture_app: tuple[Any, Any]) -> None:
         assert (shot.width, shot.height) == (round(200 * shot.scale), round(100 * shot.scale))
     finally:
         shot.path.unlink(missing_ok=True)
+
+
+# ---------------------------------------- through the executor (the path every caller uses)
+@pytest.fixture
+def act(fixture_app: tuple[Any, Any], make_app: Any, agent_project: Path) -> Iterator[Callable[..., Any]]:  # noqa: F811
+    from highhx.actions.executor import ActionExecutor
+    from highhx.computer.session import ComputerSession
+    from highhx.safety.actions import Actor
+    from highhx.safety.audit import AuditLog
+    from highhx.safety.gate import ActionGate, ApprovalMode
+    from tests.unit.agent.conftest import RecordingUI
+
+    app = make_app(agent_project)
+    gate = ActionGate(
+        app.engine, RecordingUI(), source="test", mode=ApprovalMode.ASK, audit=AuditLog(app.db, app.redactor)
+    )
+    session = ComputerSession(gate, actor=Actor.USER)
+    executor = ActionExecutor(app, gate, actor=Actor.USER, computer=lambda: session)
+    fixture_app[0].focus(APP)
+
+    def run(name: str, inputs: dict[str, Any]) -> Any:
+        result = executor.run(name, inputs)
+        assert result.ok, (name, result.error)
+        return result
+
+    yield run
+    executor.close()
+    session.close()
+
+
+def test_every_mouse_button_and_horizontal_scroll_reach_the_application(fixture_app: tuple[Any, Any], act: Any) -> None:
+    driver, state = fixture_app
+    # The pad is a plain view (not in the accessibility tree): it sits just left of "Tiny" in one
+    # row (NSStackView's default spacing is 8pt; the pad is 200pt wide).
+    tx, ty, _tw, th = _element(driver, "Tiny").bounds
+    x, y = tx - 8 - 100, ty + th // 2
+    before = state()["pad"]
+    for button in ("left", "right", "middle"):
+        act("computer.click_at", {"x": x, "y": y, "button": button})
+        state(lambda s, b=button: s["pad"].get(b, 0) == before.get(b, 0) + 1)
+    for direction in ("left", "right", "down"):
+        act("computer.scroll", {"source": "desktop", "direction": direction, "x": x, "y": y, "amount": 3})
+        state(lambda s, d=direction: s["pad"].get(f"scroll-{d}", 0) > before.get(f"scroll-{d}", 0))
+
+
+def test_small_controls_are_hit_precisely_at_their_edges(fixture_app: tuple[Any, Any], act: Any) -> None:
+    driver, state = fixture_app
+    x, y, width, height = _element(driver, "Tiny").bounds
+    assert width <= 12 and height <= 12, (width, height)
+    count = state()["tiny"]
+    for px, py in ((x + width // 2, y + height // 2), (x + 1, y + 1), (x + width - 2, y + height - 2)):
+        act("computer.click_at", {"x": px, "y": py})
+        count += 1
+        state(lambda s, c=count: s["tiny"] == c)
+    act("computer.click_at", {"x": x + width + 6, "y": y + height // 2})  # just outside: must not count
+    time.sleep(0.6)
+    assert state()["tiny"] == count
+
+
+def test_copy_cut_paste_and_editing_keys_in_a_field(fixture_app: tuple[Any, Any], act: Any) -> None:
+    driver, state = fixture_app
+    original = driver.clipboard_read()
+    try:
+        act("computer.clipboard_write", {"text": "from-clipboard"})
+        x, y = _center(_element(driver, "Name"))
+        act("computer.click_at", {"x": x, "y": y})
+        act("computer.edit", {"op": "select_all"})
+        act("computer.edit", {"op": "paste"})
+        state(lambda s: s["name"] == "from-clipboard")
+        act("computer.press", {"key": "backspace"})
+        state(lambda s: s["name"] == "from-clipboar")
+        act("computer.edit", {"op": "select_all"})
+        act("computer.edit", {"op": "copy"})
+        assert driver.clipboard_read() == "from-clipboar"
+        act("computer.edit", {"op": "cut"})
+        state(lambda s: s["name"] == "")
+        act("computer.edit", {"op": "undo"})
+        state(lambda s: s["name"] == "from-clipboar")
+        act("computer.hotkey", {"keys": "cmd+a"})
+        act("computer.type", {"text": "Z9!@ é"})
+        state(lambda s: s["name"] == "Z9!@ é")
+    finally:
+        driver.clipboard_write(original or " ")
+
+
+def test_maximize_and_minimize_a_real_window(fixture_app: tuple[Any, Any], act: Any) -> None:
+    driver, state = fixture_app
+    screen = driver.screen()
+    act("computer.window_state", {"state": "maximize", "app": APP})
+    assert state(lambda s: s["frame"][2] >= 0.9 * screen.width)["frame"][2] >= 0.9 * screen.width
+    act("computer.window_state", {"state": "minimize", "app": APP})
+    assert state(lambda s: s["minimized"])["minimized"] is True
+    subprocess.run(  # put it back for any test that runs after this one (test-side restore)
+        [
+            "osascript",
+            "-e",
+            f'tell application "System Events" to set value of attribute "AXMinimized" of window "HighhX Fixture" of process "{APP}" to false',
+        ],
+        check=False,
+        capture_output=True,
+    )
+    state(lambda s: not s["minimized"], timeout=8)
+    driver.focus(APP)
+
+
+def test_double_click_is_one_double_click_not_two_singles(fixture_app: tuple[Any, Any], act: Any) -> None:
+    driver, state = fixture_app
+    tx, ty, _tw, th = _element(driver, "Tiny").bounds
+    before = state()["pad"]
+    time.sleep(0.6)  # past the double-click interval of any earlier click
+    act("computer.click_at", {"x": tx - 108, "y": ty + th // 2, "count": 2})
+    after = state(lambda s: s["pad"].get("double", 0) == before.get("double", 0) + 1)["pad"]
+    assert after.get("left", 0) == before.get("left", 0) + 1  # the first press of the pair, then the double
+
+
+def test_navigation_keys_inside_a_field(fixture_app: tuple[Any, Any], act: Any) -> None:
+    # macOS semantics: cmd+left/right move the caret to the line's ends (Home/End scroll, below).
+    driver, state = fixture_app
+    act("computer.click_at", dict(zip(("x", "y"), _center(_element(driver, "Name")), strict=True)))
+    act("computer.hotkey", {"keys": "cmd+a"})
+    act("computer.type", {"text": "abc"})
+    state(lambda s: s["name"] == "abc")
+    steps = (("cmd+left", "X", "Xabc"), ("cmd+right", "Y", "XabcY"), ("left", "-", "Xabc-Y"), ("right", "+", "Xabc-Y+"))
+    for keys, text, expected in steps:
+        act("computer.hotkey", {"keys": keys})
+        act("computer.type", {"text": text})
+        state(lambda s, e=expected: s["name"] == e)
+    act("computer.hotkey", {"keys": "cmd+left"})
+    act("computer.press", {"key": "forwarddelete"})  # removes the "X" after the caret
+    state(lambda s: s["name"] == "abc-Y+")
+    act("computer.hotkey", {"keys": "cmd+right"})
+    act("computer.press", {"key": "backspace"})  # removes the "+" before the caret
+    state(lambda s: s["name"] == "abc-Y")
+    act("computer.hotkey", {"keys": "shift+left"})  # a selection, replaced by what is typed
+    act("computer.type", {"text": "Z"})
+    state(lambda s: s["name"] == "abc-Z")
+    act("computer.press", {"key": "escape"})  # Escape in a field never edits it
+    time.sleep(0.4)
+    assert state()["name"] == "abc-Z"
+
+
+def test_page_and_document_keys_scroll_a_text_view(fixture_app: tuple[Any, Any], act: Any) -> None:
+    driver, state = fixture_app
+    x, y, _width, height = _element(driver, "Volume").bounds
+    act("computer.click_at", {"x": x + 60, "y": y + height + 40})  # inside the "Lines" text view
+    act("computer.press", {"key": "home"})
+    state(lambda s: s["scrolled"] == 0)
+    act("computer.press", {"key": "pagedown"})
+    first = state(lambda s: s["scrolled"] > 0)["scrolled"]
+    act("computer.press", {"key": "pagedown"})
+    state(lambda s: s["scrolled"] > first)
+    act("computer.press", {"key": "pageup"})
+    state(lambda s: 0 < s["scrolled"] < first + 5)
+    act("computer.press", {"key": "end"})
+    state(lambda s: s["scrolled"] > 1000)  # 200 lines: the end is far down
+    act("computer.press", {"key": "home"})
+    state(lambda s: s["scrolled"] == 0)
+
+
+def test_tab_and_shift_tab_move_focus(fixture_app: tuple[Any, Any], act: Any) -> None:
+    driver, _state = fixture_app
+
+    def focus_becomes(wanted: str) -> str:
+        current = ""
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            hit = next((e for e in driver.get_ui_tree(APP).elements if e.focused), None)
+            current = f"{hit.role}:{hit.name}" if hit is not None else ""
+            if current == wanted:
+                break
+            time.sleep(0.1)
+        return current
+
+    act("computer.click_at", dict(zip(("x", "y"), _center(_element(driver, "Name")), strict=True)))
+    assert focus_becomes("textbox:Name") == "textbox:Name"
+    act("computer.press", {"key": "tab"})
+    assert focus_becomes("textbox:Email") == "textbox:Email"
+    act("computer.hotkey", {"keys": "shift+tab"})
+    assert focus_becomes("textbox:Name") == "textbox:Name"
+    act("computer.press", {"key": "tab"})
+    act("computer.press", {"key": "tab"})  # into the multi-line text view (where Tab is a character)
+    assert focus_becomes("textbox:text entry area") == "textbox:text entry area"
+    act("computer.hotkey", {"keys": "ctrl+shift+tab"})  # the macOS way out of a text view
+    assert focus_becomes("textbox:Email") == "textbox:Email"
+
+
+def test_clicks_land_on_the_control_after_the_window_moves_and_resizes(fixture_app: tuple[Any, Any], act: Any) -> None:
+    driver, state = fixture_app
+    for frame in ((300, 160, 560, 520), (60, 90, 500, 500)):
+        window = driver.windows(APP)[0]
+        driver.set_window_frame(window.id, *frame)
+        state(lambda s, f=frame: s["frame"][2] == f[2])
+        before = state()["count"]
+        act("computer.click_at", dict(zip(("x", "y"), _center(_element(driver, "Increment")), strict=True)))
+        state(lambda s, b=before: s["count"] == b + 1)

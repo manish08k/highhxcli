@@ -55,7 +55,9 @@ def run(ctx: ActionContext, operate: Callable[[HighhXDriver], T]) -> T:
         if exc.code == "connection_lost":
             from highhx.automation.engine.remote import LOST
 
-            raise ToolError(f"{LOST}: {exc.message} Whether this action happened is unknown; HighhX reconnects for the next one.") from None
+            raise ToolError(
+                f"{LOST}: {exc.message} Whether this action happened is unknown; HighhX reconnects for the next one."
+            ) from None
         if exc.code in EXPLAINED:
             raise ToolError(exc.message + (f" {exc.hint}" if exc.hint else "")) from None
         raise
@@ -76,7 +78,9 @@ def _point(ctx: ActionContext, inputs: Inputs, x_key: str = "x", y_key: str = "y
     try:
         return run(
             ctx,
-            lambda d: store.ground(d, str(inputs["capture"]), float(x), float(y), space=str(inputs.get("space") or "pixels")),
+            lambda d: store.ground(
+                d, str(inputs["capture"]), float(x), float(y), space=str(inputs.get("space") or "pixels")
+            ),
         )
     except StaleCapture as exc:
         raise ToolError(f"{STALE}: {exc.message}") from None
@@ -91,9 +95,14 @@ def frontmost_app(ctx: ActionContext) -> str:
 
 
 def _app_name(name: str) -> str:
+    """The platform name of an application already running: a known target's, or the name as
+    given (an application started from a bare binary is in no registry but is on screen)."""
     from highhx.actions.handlers.computer import _app_for
 
-    app = _app_for(name)
+    try:
+        app = _app_for(name)
+    except ToolError:
+        return name
     return str(app.platform_name) if app is not None else name
 
 
@@ -394,7 +403,12 @@ def screenshot(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     artifact = record(ctx, shot.path, kind="screenshot", action="computer.screenshot") if ok else None
     return ActionResult(
         ok,
-        output={**capture.to_dict(), "window": window, "region": list(region) if region else None, "artifact": artifact},
+        output={
+            **capture.to_dict(),
+            "window": window,
+            "region": list(region) if region else None,
+            "artifact": artifact,
+        },
         summary=f"{shot.width}x{shot.height} {capture.id}: {shot.path}",
         verified=ok,
     )
@@ -547,7 +561,9 @@ def edit(ctx: ActionContext, inputs: Inputs) -> ActionResult:
 
     op = str(inputs["op"])
     modifier = "cmd" if sys.platform == "darwin" else "ctrl"
-    result = hotkey(ctx, {"keys": f"{modifier}+{EDIT_KEYS[op]}", **({"app": inputs["app"]} if inputs.get("app") else {})})
+    result = hotkey(
+        ctx, {"keys": f"{modifier}+{EDIT_KEYS[op]}", **({"app": inputs["app"]} if inputs.get("app") else {})}
+    )
     result.output["op"] = op
     result.summary = f"{op.replace('_', ' ')} ({result.output.get('keys')}) in {result.output.get('app')}"
     return result

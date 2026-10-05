@@ -37,7 +37,6 @@ function run() {
 """
 _RUNNING = "function run(argv) { return JSON.stringify({running: Application(argv[0]).running()}); }"
 _ACTIVATE = "function run(argv) { Application(argv[0]).activate(); return 'ok'; }"
-_TYPE = "function run(argv) { Application('System Events').keystroke(argv[0]); return 'ok'; }"
 _KEYCODE = """
 function run(argv) {
   const using = JSON.parse(argv[1]).map(m => m + ' down');
@@ -279,7 +278,10 @@ class MacBackend(Backend):
             pid = self._pid(app)
             self._native("Type text", lambda: self._trusted().type_text(text, pid=pid))
             return {"characters": len(text), "app": app, "background": True}
-        self._jxa(_TYPE, text, what="Type text")
+        # Not System Events' keystroke: it types any character missing from the keyboard layout
+        # as "a" (é, 中, emoji) and follows Caps Lock ("hello" became "HELLO"). These events carry
+        # the text itself.
+        self._native("Type text", lambda: self._trusted().type_text(text))
         return {"characters": len(text)}
 
     def _press(self, key: str, modifiers: list[str], app: str | None) -> None:

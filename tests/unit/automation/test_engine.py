@@ -112,12 +112,21 @@ class Recorder:
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="the Python engine's desktop operations are macOS-only")
-def test_python_engine_passes_user_text_as_arguments_only() -> None:
+def test_python_engine_passes_user_text_as_arguments_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    from highhx.automation.engine.platforms import macos, quartz
+
+    typed: list[str] = []
+    monkeypatch.setattr(quartz, "accessibility_trusted", lambda: True)
+    monkeypatch.setattr(quartz, "type_text", lambda text, pid=None: typed.append(text))
     runner = Recorder()
     engine = PythonEngine(runner)
-    engine.call("type", {"text": '\'); do shell script "rm -rf ~" --'})
+    hostile = '\'); do shell script "rm -rf ~" --'
+    engine.call("type", {"text": hostile})
+    assert typed == [hostile]  # typed text is event data: it never reaches a script at all
+    assert not any("rm -rf" in " ".join(argv) for argv in runner.argv)
+    engine.call("key", {"key": '"'})  # a printable key goes through a fixed script, as an argument
     script, *args = runner.argv[-1][4:]
-    assert "rm -rf" not in script and args == ['\'); do shell script "rm -rf ~" --']
+    assert script == macos._KEYSTROKE and args[0] == '"'
     engine.call("hotkey", {"modifiers": ["command"], "key": "t"})
     assert runner.argv[-1][-2:] == ["t", '["command"]']
     engine.call("open_url", {"url": "https://github.com", "app": "Safari"})
@@ -125,12 +134,19 @@ def test_python_engine_passes_user_text_as_arguments_only() -> None:
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS-only")
-def test_python_engine_reports_missing_accessibility_clearly() -> None:
-    runner = Recorder({"keystroke": (1, "", "osascript is not allowed assistive access. (-25211)")})
+def test_python_engine_reports_missing_accessibility_clearly(monkeypatch: pytest.MonkeyPatch) -> None:
+    from highhx.automation.engine.platforms import quartz
+
+    monkeypatch.setattr(quartz, "accessibility_trusted", lambda: False)
+    monkeypatch.setattr(quartz, "type_text", lambda text, pid=None: pytest.fail("typed without Accessibility"))
     with pytest.raises(EngineError) as caught:
-        PythonEngine(runner).call("type", {"text": "hi"})
+        PythonEngine(Recorder()).call("type", {"text": "hi"})
     assert caught.value.code == "accessibility_denied"
     assert "Privacy & Security → Accessibility" in (caught.value.hint or "")
+    runner = Recorder({"keystroke": (1, "", "osascript is not allowed assistive access. (-25211)")})
+    with pytest.raises(EngineError) as caught:  # a script refused by the same missing grant says so too
+        PythonEngine(runner).call("key", {"key": "a"})
+    assert caught.value.code == "accessibility_denied"
 
 
 def test_python_engine_is_honest_off_macos(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -32,6 +32,7 @@ VK = {
     "space": 0x20,
     "delete": 0x08,
     "backspace": 0x08,
+    "forwarddelete": 0x2E,
     "escape": 0x1B,
     "esc": 0x1B,
     "left": 0x25,

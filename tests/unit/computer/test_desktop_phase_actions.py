@@ -42,6 +42,19 @@ def test_maximize_is_verified_by_the_new_frame(desk: Any) -> None:
     assert result.ok and result.verified and result.output["frame"] == [0, 0, 1440, 900]
 
 
+def test_window_actions_reach_a_running_app_the_registry_does_not_list(desk: Any) -> None:
+    # Regression: an application started from a bare binary (no .app bundle, not a known target)
+    # was refused by name ("I don't know an application called ...") although it was on screen.
+    env, executor, _ = desk
+    env.apps["HighhXFixture"] = env.apps.pop("Notes")
+    env.apps["HighhXFixture"]["window"]["app"] = "HighhXFixture"
+    env.front = "HighhXFixture"
+    result = executor.run("computer.window_state", {"state": "maximize", "app": "HighhXFixture"})
+    assert result.ok and result.verified and result.output["app"] == "HighhXFixture"
+    missing = executor.run("computer.window_state", {"state": "maximize", "app": "NoSuchAppAnywhere"})
+    assert not missing.ok and "not on screen" in missing.error
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="minimizing uses the macOS Window menu")
 def test_minimize_is_verified_by_the_window_leaving_the_screen(desk: Any) -> None:
     env, executor, _ = desk
