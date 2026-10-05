@@ -37,6 +37,12 @@ if TYPE_CHECKING:
     from highhx.commands import App
 
 MAX_BODY = 256_000
+ACTIVE = ("starting", "queued", "running")
+"""Task states that have not ended (the page also shows "paused" and "waiting" for running)."""
+
+
+class Conflict(Exception):
+    """The request is valid but the task's state refuses it (409)."""
 
 
 @dataclass
@@ -76,13 +82,16 @@ class WebConsole:
         self.token = token or secrets.token_urlsafe(24)
         self.recorder = EventRecorder.attach(app.ctx.events, redactor=app.redactor)
         self.approvals = ApprovalQueue(emit=app.ctx.events.emit)
-        self.prompter = QueuePrompter(self.approvals)
+        self.prompter = QueuePrompter(self.approvals, cancel=lambda: self.app.ctx.cancel)
         self.headless = headless
         self.tasks: dict[str, WebTask] = {}
         self.brokers = {"browser": FrameBroker(max_fps=max_fps), "desktop": FrameBroker(max_fps=min(max_fps, 2.0))}
         self.streamers: dict[str, Any] = {}
         self._session: Any = None
         self._caps: tuple[float, list[dict[str, Any]]] | None = None
+        self._requests: dict[str, str] = {}
+        """Task-creating request ids → the task each started: a repeated request (a double click,
+        a retry after a lost answer) returns that task instead of starting another."""
         self._lock = threading.Lock()
         self._run_lock = threading.Lock()
         handler = type("Handler", (_Handler,), {"console": self})
@@ -115,23 +124,43 @@ class WebConsole:
     def session(self) -> Any:
         """The console's computer session: the person's own actions, approvals through the queue."""
         with self._lock:
-            if self._session is None:
-                from highhx.computer.session import ComputerSession
-                from highhx.safety.actions import Actor
-                from highhx.safety.audit import AuditLog
-                from highhx.safety.gate import ActionGate, ApprovalMode
+            return self._session_unlocked()
 
-                gate = ActionGate(
-                    self.app.engine,
-                    self.prompter,
-                    source="web",
-                    mode=ApprovalMode.ASK,
-                    audit=AuditLog(self.app.db, self.app.redactor) if self.app.db is not None else None,
-                )
-                self._session = ComputerSession(gate, actor=Actor.USER, tool="web", headless=self.headless)
-            return self._session
+    def _session_unlocked(self) -> Any:
+        """The session (the caller holds ``_lock``)."""
+        if self._session is None:
+            from highhx.computer.session import ComputerSession
+            from highhx.safety.actions import Actor
+            from highhx.safety.audit import AuditLog
+            from highhx.safety.gate import ActionGate, ApprovalMode
 
-    def start_task(self, goal: str, surface: str, steps: list[dict[str, Any]] | None) -> WebTask:
+            gate = ActionGate(
+                self.app.engine,
+                self.prompter,
+                source="web",
+                mode=ApprovalMode.ASK,
+                audit=AuditLog(self.app.db, self.app.redactor) if self.app.db is not None else None,
+            )
+            self._session = ComputerSession(gate, actor=Actor.USER, tool="web", headless=self.headless)
+        return self._session
+
+    def start_task(
+        self, goal: str, surface: str, steps: list[dict[str, Any]] | None, *, request_id: str = ""
+    ) -> tuple[WebTask, bool]:
+        """The task for this request — started now (True), or the one the same request id already
+        started (False)."""
+        with self._lock:
+            known = self._requests.get(request_id) if request_id else None
+            if known is not None:
+                return self.tasks[known], False
+            task = self._start_task(goal, surface, steps)
+            if request_id:
+                self._requests[request_id] = task.id
+                for old in list(self._requests)[:-500]:
+                    del self._requests[old]
+            return task, True
+
+    def _start_task(self, goal: str, surface: str, steps: list[dict[str, Any]] | None) -> WebTask:
         from highhx.actions.catalog import catalog_for
         from highhx.actions.executor import ActionExecutor
         from highhx.agent.loop import AgentLoop, ResolverPlanner, ScriptedPlanner
@@ -139,7 +168,7 @@ class WebConsole:
         from highhx.trajectories import TrajectoryStore
         from highhx.utils.hashing import new_id
 
-        session = self.session()
+        session = self._session_unlocked()
         task = WebTask(new_id("web"), goal, surface)
         executor = ActionExecutor(
             self.app, session.gate, actor=session.actor, catalog=catalog_for(self.app), computer=lambda: session
@@ -187,6 +216,10 @@ class WebConsole:
 
     def control(self, task_id: str, op: str) -> WebTask:
         task = self.tasks[task_id]
+        if op not in ("pause", "resume", "cancel"):
+            raise ValueError(f"unknown control {op!r}")
+        if task.status not in ACTIVE:
+            raise Conflict(f"the task already ended ({task.status})")
         if op == "pause":
             task.pause.set()
         elif op == "resume":
@@ -220,9 +253,14 @@ class WebConsole:
     def snapshot(self) -> dict[str, Any]:
         from highhx.diagnostics.capabilities import capability_report
 
+        pending = [a.to_dict() for a in self.approvals.pending()]
+        tasks = [t.to_dict() for t in sorted(self.tasks.values(), key=lambda t: t.started, reverse=True)]
+        for task in tasks:  # one task runs at a time: what waits for an answer is the running one
+            if task["status"] == "running" and pending:
+                task["status"] = "waiting"
         return {
-            "tasks": [t.to_dict() for t in sorted(self.tasks.values(), key=lambda t: t.started, reverse=True)],
-            "approvals": [a.to_dict() for a in self.approvals.pending()],
+            "tasks": tasks,
+            "approvals": pending,
             "streams": {
                 k: {**b.stats(), "error": getattr(self.streamers.get(k), "error", "")} for k, b in self.brokers.items()
             },
@@ -432,6 +470,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": exc.message})
         except (BrokenPipeError, ConnectionResetError):
             pass
+        except Exception as exc:  # an answer, never a dropped connection the page cannot explain
+            with contextlib.suppress(OSError):
+                self._send(500, {"error": f"the console could not read that: {str(exc)[:200]}"})
 
     def _mjpeg(self, broker: FrameBroker, fps: float) -> None:
         """multipart/x-mixed-replace: one part per frame, at most ``fps`` per second (bandwidth)."""
@@ -477,7 +518,9 @@ class _Handler(BaseHTTPRequestHandler):
                 steps = body.get("steps")
                 if steps is not None and not (isinstance(steps, list) and all(isinstance(s, dict) for s in steps)):
                     raise ValueError("steps is a list of step objects")
-                self._send(201, c.start_task(goal, surface, steps).to_dict())
+                request_id = str(body.get("request_id") or "")[:100]
+                task, started = c.start_task(goal, surface, steps, request_id=request_id)
+                self._send(201 if started else 200, task.to_dict())
             elif path.startswith("/api/tasks/") and path.count("/") == 4:
                 _, _, _, task_id, op = path.split("/")
                 self._send(200, c.control(task_id, op).to_dict())
@@ -497,3 +540,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
         except ValueError as exc:
             self._send(400, {"error": str(exc)})
+        except Conflict as exc:
+            self._send(409, {"error": str(exc)})
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as exc:  # an answer, never a dropped connection the page cannot explain
+            self._send(500, {"error": f"the console could not do that: {str(exc)[:200]}"})

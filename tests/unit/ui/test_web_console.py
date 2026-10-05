@@ -57,6 +57,10 @@ def wait_for(fn: Any, timeout: float = 10.0) -> Any:
     raise AssertionError("condition not met in time")
 
 
+def tasks_of(console: WebConsole) -> list[dict[str, Any]]:
+    return list(call(console, "GET", f"/api/state?token={console.token}")[1]["tasks"])
+
+
 def test_every_request_is_guarded(console: WebConsole) -> None:
     assert call(console, "GET", "/api/state")[0] == 401
     assert call(console, "GET", "/api/state?token=wrong")[0] == 401
@@ -154,6 +158,30 @@ def test_pause_resume_and_cancel(console: WebConsole, agent_project: Path) -> No
     assert final["status"] in ("cancelled", "interrupted") and not (agent_project / "p2.txt").exists()
 
 
+def test_idempotent_honest_states(console: WebConsole, agent_project: Path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
+    steps = [{"action": "filesystem.write", "parameters": {"path": "once.txt", "content": "x\n"}}]
+    body = {"goal": "once", "surface": "none", "steps": steps, "request_id": "r-1"}
+    first = call(console, "POST", "/api/tasks", body, authed(console))
+    again = call(console, "POST", "/api/tasks", body, authed(console))  # a double click / a retried request
+    assert (first[0], again[0]) == (201, 200) and first[1]["id"] == again[1]["id"] and len(console.tasks) == 1
+    # waiting for an answer is what the state says, not "running"
+    wait_for(lambda: call(console, "GET", f"/api/state?token={console.token}")[1]["approvals"])
+    assert tasks_of(console)[0]["status"] == "waiting"
+    # cancelling it ends it now (it used to wait for the approval's deadline) and withdraws the approval
+    call(console, "POST", f"/api/tasks/{first[1]['id']}/cancel", {}, authed(console))
+    wait_for(lambda: tasks_of(console)[0]["status"] not in ("starting", "queued", "running", "waiting"), timeout=5)
+    assert not (agent_project / "once.txt").exists()
+    assert [a.status for a in console.approvals.all()] == ["cancelled"]
+    # controls on an ended task are refused with the reason, unknown ones are a bad request
+    status, answer, _ = call(console, "POST", f"/api/tasks/{first[1]['id']}/pause", {}, authed(console))
+    assert status == 409 and "already ended" in answer["error"]
+    assert call(console, "POST", f"/api/tasks/{first[1]['id']}/explode", {}, authed(console))[0] == 400
+    # an unexpected failure is an answer the page can show, never a dropped connection
+    monkeypatch.setattr(console, "history", lambda limit=50: 1 / 0)
+    status, answer, _ = call(console, "GET", f"/api/history?token={console.token}")
+    assert status == 500 and "could not read that" in answer["error"]
+
+
 LIVE = pytest.mark.skipif(
     not (os.environ.get("HIGHHX_TEST_BROWSER") and find_browser()),
     reason="set HIGHHX_TEST_BROWSER=1 to drive a real browser",
@@ -201,3 +229,145 @@ def test_the_page_shows_untrusted_text_as_text_in_real_chrome(console: WebConsol
         )
     finally:
         viewer.stop()
+
+
+# ---------------------------------------- the page itself, driven like a person in real Chrome
+class Page:
+    """The console page in a real browser: real mouse clicks and keystrokes (DevTools input)."""
+
+    def __init__(self, console: WebConsole, folder: Path) -> None:
+        from highhx.computer.browser import ChromeBrowser
+
+        self.viewer = ChromeBrowser(folder, headless=True)
+        self.viewer.navigate(console.url)
+        wait_for(lambda: self.js("document.getElementById('status').textContent") not in ("", "connecting…"))
+
+    def js(self, expression: str) -> Any:
+        return self.viewer.evaluate(expression, retry_safe=True)
+
+    def click(self, selector: str, count: int = 1) -> None:
+        box = self.js(
+            f"(() => {{ const r = document.querySelector({json.dumps(selector)}).getBoundingClientRect();"
+            " return [r.x + r.width / 2, r.y + r.height / 2]; })()"
+        )
+        self.viewer.pointer("click", box[0], box[1], count=count)
+
+    def type(self, selector: str, text: str) -> None:
+        self.click(selector)
+        self.viewer.insert_text(text)
+
+    def status(self) -> str:
+        return str(self.js("document.getElementById('status').textContent"))
+
+    def close(self) -> None:
+        self.viewer.stop()
+
+
+@LIVE
+def test_page_double_submits_make_one_task(console: WebConsole, tmp_path: Path) -> None:
+    page = Page(console, tmp_path / "viewer")
+    try:
+        page.js(
+            "document.getElementById('steps').value = JSON.stringify([{action: 'wait'}]);"
+            "document.getElementById('surface').value = 'none'"
+        )
+        page.type("#goal", "first")
+        page.click("#run", count=2)  # a double click
+        wait_for(lambda: tasks_of(console))
+        time.sleep(1.0)
+        assert [t["goal"] for t in tasks_of(console)] == ["first"]
+        page.type("#goal", "second")
+        page.viewer.press("enter")  # Enter runs it, a second Enter while it is starting does nothing
+        page.viewer.press("enter")
+        wait_for(lambda: len(tasks_of(console)) == 2)
+        time.sleep(1.0)
+        assert sorted(t["goal"] for t in tasks_of(console)) == ["first", "second"]
+        assert page.js("document.getElementById('formerror').textContent") in ("", "say what HighhX should do")
+    finally:
+        page.close()
+
+
+@LIVE
+def test_page_approvals_by_click(console: WebConsole, tmp_path: Path, agent_project: Path) -> None:  # noqa: F811
+    page = Page(console, tmp_path / "viewer")
+    (agent_project / "build").mkdir()
+    (agent_project / "keep").mkdir()
+    try:
+        steps = [{"action": "shell.run", "parameters": {"command": f"rm -rf {agent_project / 'build'}"}}]
+        call(console, "POST", "/api/tasks", {"goal": "clean", "surface": "none", "steps": steps}, authed(console))
+        wait_for(lambda: page.js("document.querySelectorAll('#approvals input').length") == 1)
+        assert page.status() == "waiting for approval (1)"
+        page.type("#approvals input", "appr")
+        time.sleep(3.5)  # two state polls: the row, its half-typed word and the focus stay
+        assert page.js("document.querySelector('#approvals input').value") == "appr"
+        assert page.js("document.activeElement === document.querySelector('#approvals input')")
+        # an invalid modification is explained in place, never in a blocking dialog
+        page.click("#approvals li button:nth-of-type(4)")  # Modify…
+        page.js("document.querySelector('#approvals textarea').value = '{not json'")
+        page.click("#approvals .editor button")
+        assert "not valid JSON" in page.js("document.querySelector('#approvals .err').textContent")
+        page.click("#approvals input")
+        page.viewer.press("end")
+        page.viewer.insert_text("ove")
+        page.viewer.press("enter")  # Enter approves (the typed word is checked by the console)
+        wait_for(lambda: tasks_of(console)[0]["status"] == "completed")
+        assert not (agent_project / "build").exists()
+        wait_for(lambda: page.js("document.activeElement && document.activeElement.id") == "goal")  # focus moved on
+        wait_for(lambda: page.status() == "idle")
+        # a rejection by click: the action never runs
+        steps = [{"action": "shell.run", "parameters": {"command": f"rm -rf {agent_project / 'keep'}"}}]
+        call(console, "POST", "/api/tasks", {"goal": "nope", "surface": "none", "steps": steps}, authed(console))
+        wait_for(lambda: page.js("document.querySelectorAll('#approvals li button').length") >= 3)
+        page.click("#approvals li button:nth-of-type(2)", count=2)  # Reject, double-clicked
+        wait_for(lambda: tasks_of(console)[0]["status"] not in ("starting", "queued", "running", "waiting"))
+        assert tasks_of(console)[0]["status"] == "failed" and (agent_project / "keep").exists()
+        assert [a.status for a in console.approvals.all()].count("rejected") == 1
+    finally:
+        page.close()
+
+
+@LIVE
+def test_page_cancel_disconnect_and_one_live_loop(console: WebConsole, tmp_path: Path, agent_project: Path) -> None:  # noqa: F811
+    from http.server import ThreadingHTTPServer
+
+    page = Page(console, tmp_path / "viewer")
+    try:
+        steps = [{"action": "filesystem.write", "parameters": {"path": "c.txt", "content": "x\n"}}]
+        call(console, "POST", "/api/tasks", {"goal": "to cancel", "surface": "none", "steps": steps}, authed(console))
+        wait_for(
+            lambda: page.js("[...document.querySelectorAll('#tasks button')].some(b => b.textContent === 'Cancel')")
+        )
+        page.js(
+            "window.cancelButton = [...document.querySelectorAll('#tasks button')].find(b => b.textContent === 'Cancel');"
+            "window.cancelButton.id = 'cancel-1'"
+        )
+        page.click("#cancel-1")
+        wait_for(lambda: tasks_of(console)[0]["status"] not in ("starting", "queued", "running", "waiting"))
+        assert tasks_of(console)[0]["status"] in ("cancelled", "interrupted", "failed")
+        assert not (agent_project / "c.txt").exists()
+        # the console goes away: the page says so, then recovers when it is back
+        handler = console.server.RequestHandlerClass
+        console.server.shutdown()
+        console.server.server_close()
+        wait_for(lambda: page.status().startswith("disconnected"), timeout=8)
+        console.server = ThreadingHTTPServer(("127.0.0.1", console.port), handler)
+        console.server.daemon_threads = True
+        console.start()
+        wait_for(lambda: page.status() == "idle", timeout=8)
+        # rapid Start/Stop of the live view: at most one frame request in flight
+        page.js(
+            "window.inflight = 0; window.peak = 0; const f = window.fetch; window.fetch = async (...a) => {"
+            " const frame = String(a[0]).includes('/api/frame'); if (frame) { inflight++; peak = Math.max(peak, inflight); }"
+            " try { return await f(...a); } finally { if (frame) inflight--; } }"
+        )
+        for _ in range(3):
+            page.click("#live")
+            page.click("#live")
+        page.click("#live")  # finally on
+        time.sleep(3)
+        assert page.js("window.peak") == 1
+        page.click("#live")
+    finally:
+        page.close()
+        if console._session is not None and console._session._browser is not None:
+            console._session._browser.stop()

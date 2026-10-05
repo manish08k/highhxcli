@@ -110,3 +110,33 @@ def test_critical_actions_need_the_typed_word(agent_project: Path, make_app) -> 
         queue.decide(item.id, "reject")
     ex.close()
     app.close()
+
+
+def test_cancelling_the_task_withdraws_its_waiting_approval() -> None:
+    # Regression: a task cancelled while it waited for an answer kept waiting until the deadline
+    # (five minutes); the approval could even be approved after the cancel.
+    from highhx.execution.cancellation import CancellationToken
+
+    token = CancellationToken()
+    queue = ApprovalQueue()
+    prompter = QueuePrompter(queue, cancel=lambda: token)
+    thread, out = in_background(lambda: prompter.ask_permission("write notes.txt", ()))
+    item = next_pending(queue)
+    started = time.monotonic()
+    token.cancel("cancelled from the web console")
+    thread.join(5)
+    assert out["result"] == "no" and time.monotonic() - started < 2
+    assert item.status == "cancelled" and queue.pending() == []
+    with pytest.raises(ValueError, match="already cancelled"):
+        queue.decide(item.id, "approve")
+
+
+def test_the_same_answer_twice_is_one_answer() -> None:
+    queue = ApprovalQueue()
+    thread, _ = in_background(lambda: QueuePrompter(queue).ask_permission("write a.txt", ()))
+    item = next_pending(queue)
+    queue.decide(item.id, "approve", by="web console")
+    assert queue.decide(item.id, "approve", by="web console").status == "approved"  # a double click: no error
+    with pytest.raises(ValueError, match="already approved"):
+        queue.decide(item.id, "reject")  # a different answer afterwards is refused
+    thread.join(5)

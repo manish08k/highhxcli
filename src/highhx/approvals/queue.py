@@ -37,6 +37,10 @@ class ApprovalModifiedError(ApprovalDeniedError):
         self.inputs = inputs
 
 
+RESULTS = {"approve": "approved", "reject": "rejected", "modify": "modified"}
+"""A decision → the state it leaves the approval in."""
+
+
 @dataclass
 class PendingApproval:
     id: str
@@ -54,7 +58,7 @@ class PendingApproval:
     task_id: str = ""
     trace_id: str = ""
     status: str = "pending"
-    """pending · approved · rejected · modified · expired"""
+    """pending · approved · rejected · modified · expired · cancelled (its task was cancelled)"""
     decided_at: float | None = None
     decided_by: str = ""
     defers: int = 0
@@ -95,13 +99,21 @@ class ApprovalQueue:
             raise KeyError(approval_id)
         return found
 
-    def ask(self, item: PendingApproval) -> PendingApproval:
-        """Queue ``item`` and wait until it is decided or its deadline passes (rejected)."""
+    def ask(self, item: PendingApproval, *, cancel: Any = None) -> PendingApproval:
+        """Queue ``item`` and wait until it is decided, its deadline passes (rejected) or ``cancel``
+        (the task's token) is cancelled — then it is withdrawn: nobody can approve it afterwards.
+        (Cancelling a task that waited for an answer did nothing until the deadline, minutes later.)"""
         with self._lock:
             self._items[item.id] = item
         self.emit("approval.required", approval=item.id, action=item.action, risk=item.risk, kind=item.kind)
         while not item._done.wait(0.1):
-            if self.clock() > item.deadline:
+            if cancel is not None and cancel.cancelled:
+                with self._lock:
+                    if item.status == "pending":
+                        item.status, item.decided_at, item.note = "cancelled", self.clock(), "the task was cancelled"
+                        item._done.set()
+                self.emit("approval.cancelled", approval=item.id, action=item.action)
+            elif self.clock() > item.deadline:
                 with self._lock:
                     if item.status == "pending":
                         item.status, item.decided_at, item.note = "expired", self.clock(), "no answer in time"
@@ -124,6 +136,8 @@ class ApprovalQueue:
         item = self.get(approval_id)
         with self._lock:
             if item.status != "pending":
+                if RESULTS.get(decision) == item.status:
+                    return item  # the same answer twice (a double click, a retried request): no change
                 raise ValueError(f"already {item.status}")
             if decision == "defer":
                 if item.defers >= MAX_DEFERS:
@@ -138,7 +152,7 @@ class ApprovalQueue:
                 if item.kind != "confirm" or not inputs:
                     raise ValueError("modify needs the new inputs of an action")
                 item.inputs = dict(inputs)
-            item.status = {"approve": "approved", "reject": "rejected", "modify": "modified"}[decision]
+            item.status = RESULTS[decision]
             item.decided_at, item.decided_by, item.note = self.clock(), by, note
             item._done.set()
         self.emit(f"approval.{item.status}", approval=item.id, action=item.action, by=by)
@@ -150,8 +164,13 @@ class QueuePrompter:
 
     interactive = True
 
-    def __init__(self, queue: ApprovalQueue) -> None:
+    def __init__(self, queue: ApprovalQueue, *, cancel: Callable[[], Any] | None = None) -> None:
         self.queue = queue
+        self.cancel = cancel
+        """The cancellation token of whatever is asking now (a waiting approval ends with it)."""
+
+    def _ask(self, item: PendingApproval) -> PendingApproval:
+        return self.queue.ask(item, cancel=self.cancel() if self.cancel is not None else None)
 
     def _item(
         self,
@@ -185,11 +204,11 @@ class QueuePrompter:
         )
 
     def ask_permission(self, action: str, details: Sequence[str], *, allow_always: bool = True) -> str:
-        item = self.queue.ask(self._item("permission", action, "", "", "normal", (), details, None))
+        item = self._ask(self._item("permission", action, "", "", "normal", (), details, None))
         return "yes" if item.status == "approved" else "no"
 
     def confirm_action(self, request: Any) -> bool:
-        item = self.queue.ask(
+        item = self._ask(
             self._item(
                 "confirm",
                 request.action,
@@ -206,9 +225,9 @@ class QueuePrompter:
         return item.status == "approved"
 
     def confirm(self, message: str, *, default: bool = False) -> bool:
-        item = self.queue.ask(self._item("permission", message, "", "", "normal", (), (), None))
+        item = self._ask(self._item("permission", message, "", "", "normal", (), (), None))
         return item.status == "approved"
 
     def confirm_typed(self, message: str, expected: str) -> bool:
-        item = self.queue.ask(self._item("confirm", message, "", "", "critical", (), (), expected))
+        item = self._ask(self._item("confirm", message, "", "", "critical", (), (), expected))
         return item.status == "approved"
