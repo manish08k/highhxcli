@@ -203,6 +203,8 @@ class HybridGrounder:
             point=list(result.point) if result.point else None,
             attempts=[a.to_dict() for a in result.attempts],
         )
+        if result.candidate is None:
+            self._emit("grounding.failed", target=target.label, status=result.status, tried=[a.strategy for a in result.attempts])
         return result
 
     # ---------------------------------------------------------------- judging

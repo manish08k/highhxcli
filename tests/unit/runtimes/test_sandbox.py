@@ -156,9 +156,13 @@ def test_other_runtimes(tmp_path: Path) -> None:
     assert isinstance(local, Runtime) and local.exec([sys.executable, "-c", "print(1)"]).stdout.strip() == "1"
     with pytest.raises(CapabilityError):
         local.driver()
-    for unavailable in (VMRuntime, CloudRuntime):
-        with pytest.raises(CapabilityError, match="not implemented"):
-            unavailable()
+    with pytest.raises(CapabilityError, match="not implemented"):
+        CloudRuntime()
+    from highhx.runtimes.vm import BACKENDS
+
+    if not any(cls.available() for cls in BACKENDS.values()):  # this machine: neither lima nor tart
+        with pytest.raises(CapabilityError, match="No virtual-machine backend is installed"):
+            VMRuntime("dev")
     remote = RemoteRuntime("ssh://me@build.example:2222", cwd=tmp_path)
     assert remote._ssh()[-1] == "me@build.example" and "BatchMode=yes" in remote._ssh() and "2222" in remote._ssh()
     from highhx.core.errors import UsageError

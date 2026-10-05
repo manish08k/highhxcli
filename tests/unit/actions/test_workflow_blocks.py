@@ -188,10 +188,21 @@ def test_yaml_is_parsed_safely(agent_project: Path, executor_for) -> None:
 
 
 # --------------------------------------------------------------------- email
+SMTP_SERVERS: list[Any] = []
+
+
+@pytest.fixture(autouse=True)
+def close_smtp_servers() -> Any:
+    yield
+    while SMTP_SERVERS:
+        SMTP_SERVERS.pop().server.close()
+
+
 class FakeSMTP:
     """A minimal SMTP server on 127.0.0.1 (no TLS): records the envelope and message."""
 
     def __init__(self, starttls: bool = False) -> None:
+        SMTP_SERVERS.append(self)
         self.server = socket.socket()
         self.server.bind(("127.0.0.1", 0))
         self.server.listen(1)
@@ -203,7 +214,10 @@ class FakeSMTP:
         threading.Thread(target=self._serve, daemon=True).start()
 
     def _serve(self) -> None:
-        conn, _ = self.server.accept()
+        try:
+            conn, _ = self.server.accept()
+        except OSError:  # closed by the test before anyone connected
+            return
         f = conn.makefile("rwb")
 
         def say(text: str) -> None:
@@ -242,6 +256,7 @@ class FakeSMTP:
                 break
             else:
                 say("502 no")
+        f.close()
         conn.close()
 
 
@@ -381,3 +396,119 @@ def test_parsing_a_pdf_without_pdftotext_says_what_to_install(agent_project: Pat
     (agent_project / "invoice.pdf").write_bytes(_minimal_pdf("x"))
     result = executor.run("filesystem.parse", {"path": "invoice.pdf"})
     assert not result.ok and "pdftotext" in result.error
+
+
+class MultiSMTP(FakeSMTP):
+    """FakeSMTP that serves several connections; the first ``busy`` are turned away with 421."""
+
+    def __init__(self, busy: int = 0) -> None:
+        self.busy = busy
+        self.connections = 0
+        super().__init__()
+
+    def _serve(self) -> None:
+        while True:
+            try:
+                conn, _ = self.server.accept()
+            except OSError:
+                return
+            self.connections += 1
+            if self.connections <= self.busy:
+                conn.sendall(b"421 too busy, try later\r\n")
+                conn.close()
+                continue
+            self.server_conn = conn
+            self._session(conn)
+
+    def _session(self, conn: socket.socket) -> None:
+        f = conn.makefile("rwb")
+
+        def say(text: str) -> None:
+            f.write(text.encode() + b"\r\n")
+            f.flush()
+
+        say("220 fake ESMTP")
+        while True:
+            line = f.readline().decode().rstrip("\r\n")
+            if not line:
+                break
+            self.lines.append(line)
+            verb = line.split(" ", 1)[0].upper()
+            if verb in ("EHLO", "HELO"):
+                say("250-fake\r\n250 AUTH PLAIN")
+            elif verb in ("AUTH", "MAIL"):
+                say("235 ok" if verb == "AUTH" else "250 ok")
+            elif verb == "RCPT":
+                self.recipients.append(line.split(":", 1)[1].strip(" <>"))
+                say("250 ok")
+            elif verb == "DATA":
+                say("354 go")
+                body = []
+                while (chunk := f.readline().decode()) not in (".\r\n", ""):
+                    body.append(chunk)
+                self.data = "".join(body)
+                say("250 queued")
+            elif verb == "QUIT":
+                say("221 bye")
+                break
+        conn.close()
+
+
+def test_email_with_html_attachments_and_a_reply(agent_project: Path, executor_for, smtp_env) -> None:
+    import email
+
+    server = MultiSMTP()
+    smtp_env(server)
+    (agent_project / "report.csv").write_text("a,b\n1,2\n")
+    executor, _ = executor_for(agent_project)
+    events: list[Any] = []
+    executor.events.subscribe("*", events.append)
+    result = executor.run(
+        "email.send",
+        {
+            "to": ["ada@example.com"],
+            "subject": "Re: report",
+            "body": "see attached",
+            "html": "<p>see <b>attached</b> HTML-SECRET</p>",
+            "attachments": ["report.csv"],
+            "in_reply_to": "<orig-1@example.com>",
+        },
+    )
+    assert result.ok and result.output["attachments"] == [{"name": "report.csv", "bytes": 8, "type": "text/csv"}]
+    parsed = email.message_from_string(server.data)
+    assert parsed["In-Reply-To"] == "<orig-1@example.com>" and parsed["References"] == "<orig-1@example.com>"
+    parts = {part.get_content_type(): part for part in parsed.walk()}
+    assert "text/plain" in parts and "text/html" in parts and parts["text/csv"].get_filename() == "report.csv"
+    assert parts["text/csv"].get_payload(decode=True) == b"a,b\n1,2\n"
+    shown = json.dumps([getattr(e, "data", {}) for e in events], default=str)
+    assert "HTML-SECRET" not in shown  # the HTML body is shown as its length, like the text
+
+
+def test_email_attachments_never_include_secret_or_outside_files(agent_project: Path, executor_for, smtp_env) -> None:
+    server = MultiSMTP()
+    smtp_env(server)
+    (agent_project / ".env").write_text("TOKEN=abc\n")
+    executor, _ = executor_for(agent_project)
+    for path in (".env", "/etc/hosts", "../outside.txt"):
+        result = executor.run(
+            "email.send", {"to": ["ada@example.com"], "subject": "x", "body": "y", "attachments": [path]}
+        )
+        assert not result.ok, path
+    assert server.data == ""  # nothing was sent
+    bad_reply = executor.run(
+        "email.send", {"to": ["ada@example.com"], "subject": "x", "body": "y", "in_reply_to": "not-an-id"}
+    )
+    assert not bad_reply.ok and "Message-ID" in bad_reply.error and server.data == ""
+
+
+def test_email_retries_only_before_the_message_is_handed_over(agent_project: Path, executor_for, smtp_env) -> None:
+    server = MultiSMTP(busy=2)
+    smtp_env(server)
+    executor, _ = executor_for(agent_project)
+    result = executor.run("email.send", {"to": ["ada@example.com"], "subject": "x", "body": "y", "retries": 2})
+    assert (
+        result.ok
+        and result.output["attempts"] == 3
+        and server.connections == 3
+        and server.recipients == ["ada@example.com"]
+    )

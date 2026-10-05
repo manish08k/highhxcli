@@ -19,6 +19,7 @@ traces and benchmarks see the same run.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -115,8 +116,11 @@ class AgentLoop:
         traces: TraceStore | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        pause: threading.Event | None = None,
     ) -> None:
         self.executor = executor
+        self.pause = pause
+        """While set, the task waits before its next step (never in the middle of an action)."""
         self.traces = traces
         self.planner = planner
         self.store = store
@@ -139,6 +143,10 @@ class AgentLoop:
         surface = task.surface if task.surface != "auto" else self.router.surface(task.goal)
         trajectory = trajectory or Trajectory(task.goal, surface, planner=self.planner.name, agent=self.agent)
         trajectory.surface = surface
+        if not trajectory.environment:
+            from highhx.trajectories.store import reproducibility
+
+            trajectory.environment = reproducibility(self.executor.app.root, self.planner)
         checkpoint = trajectory.metrics.get("checkpoint") or {}
         counters = Counters.from_dict(checkpoint.get("counters") or {})
         recorder = None
@@ -172,6 +180,8 @@ class AgentLoop:
                 status=str(status),
                 summary=summary,
             )
+            if status == Status.CANCELLED:
+                self.events.emit(ev.TASK_CANCELLED, task=task.goal, summary=summary)
             self.events.emit(
                 ev.AGENT_COMPLETED,
                 task=task.goal,
@@ -200,16 +210,24 @@ class AgentLoop:
             trajectory.plan = [p.to_dict() for p in plan]
             self.events.emit(ev.PLAN_CREATED, steps=[p.title for p in plan], planner=self.planner.name)
         lessons = self.store.lessons(task.goal) if self.store is not None and self.memory else []
+        if self.memory:
+            lessons = [*self._skill_notes(task, surface), *self._remembered(task.goal), *lessons]  # curated first
+        lessons = [*(f"handed over: {n}" for n in task.notes[:3]), *lessons]
         feedback = ""
         same_screen = 0
         last_fingerprint = ""
         while True:
+            if self.pause is not None and self.pause.is_set() and not cancel.cancelled:
+                self.events.emit(ev.TASK_PAUSED, task=task.goal, steps=counters.steps)
+                paused_at = self.clock()
+                while self.pause.is_set() and not cancel.cancelled:
+                    cancel.wait(0.1)
+                deadline += self.clock() - paused_at  # a pause does not use up the task's time
+                self.events.emit(ev.TASK_RESUMED, task=task.goal, steps=counters.steps)
             if cancel.cancelled:
                 return Status.CANCELLED, "cancelled"
             if self.clock() > deadline:
                 return Status.FAILED, f"the task did not finish within {task.timeout:g}s"
-            if counters.steps >= task.max_steps:
-                return Status.FAILED, f"the task did not finish within {task.max_steps} steps"
             if counters.failures > task.max_failures:
                 return Status.FAILED, f"{counters.failures} failed steps"
             fingerprint = state.fingerprint() if state is not None else ""
@@ -225,10 +243,22 @@ class AgentLoop:
                 )
                 self.events.emit(ev.AGENT_REFLECTION, decision="ask_user", reason=reason, challenge=challenge.kind)
                 return Status.NEEDS_USER, reason
+            modelled = self.planner.name == "model"
+            if modelled:
+                self.events.emit(ev.MODEL_REQUEST, purpose="next step", steps=counters.steps)
+            asked = time.monotonic()
             try:
                 decision = self.planner.next(task, state, trajectory.steps, feedback=feedback, lessons=lessons)
             except HighhXError as exc:  # a model that is down or refuses: the task stops, resumable
+                if modelled:
+                    self.events.emit(ev.MODEL_ERROR, error=exc.message[:200], seconds=round(time.monotonic() - asked, 3))
                 return Status.FAILED, f"the planner failed: {exc.message} — resume with `highhx agent --resume {trajectory.id}`"
+            planning = round(time.monotonic() - asked, 4)
+            seconds_list = trajectory.metrics.setdefault("planning_seconds", [])
+            if len(seconds_list) < 500:
+                seconds_list.append(planning)
+            if modelled:
+                self.events.emit(ev.MODEL_RESPONSE, kind=decision.kind, seconds=planning)
             feedback = ""
             self._usage(decision, counters)
             if decision.kind == "done":
@@ -250,6 +280,8 @@ class AgentLoop:
                 return Status.NEEDS_USER, decision.summary
             if decision.kind == "fail" or decision.step is None:
                 return Status.FAILED, decision.summary or "the planner gave up"
+            if counters.steps >= task.max_steps:  # only another step is refused: "done" after the last step stands
+                return Status.FAILED, f"the task did not finish within {task.max_steps} steps"
             step = decision.step
             if step.parameters.get("__redacted__"):
                 return Status.NEEDS_USER, f"the text for '{step.describe()}' went into a secret field and was not stored; provide it again"
@@ -403,6 +435,25 @@ class AgentLoop:
         detail = "; ".join(c.detail for c in report.result.children if not c.satisfied) or report.result.detail
         return (None if report.verdict == Verdict.UNKNOWN else False), detail
 
+    def _skill_notes(self, task: AgentTask, surface: str) -> list[str]:
+        """What matching application skills know (data for the planner, never instructions)."""
+        try:
+            from highhx.skills import load, relevant
+
+            return [s.note() for s in relevant(load(self.executor.app.root), surface=surface, goal=task.goal, app=task.app)]
+        except Exception:
+            return []
+
+    def _remembered(self, goal: str) -> list[str]:
+        """Project memory related to the task (data for the planner, never instructions)."""
+        app = self.executor.app
+        try:
+            from highhx.agent.memory import ProjectMemory
+
+            return ProjectMemory.for_project(app.root, initialized=app.initialized, redactor=app.redactor).relevant(goal, limit=3)
+        except Exception:
+            return []
+
     def _usage(self, decision: Decision, counters: Counters) -> None:
         reply = decision.reply
         if reply is None:
@@ -511,3 +562,36 @@ def resume(
     with trace_context(trace_id=trajectory.trace_id, task_id=trajectory.id):
         executor.events.emit(ev.CHECKPOINT_RESUMED, task_id=trajectory.id, steps=len(trajectory.steps), cursor=checkpoint["planner"].get("cursor"))
     return AgentLoop(executor, planner, store=store, **loop_kwargs).run(task, trajectory=trajectory)
+
+
+def fork(store: TrajectoryStore, task_id: str, *, at: int | None = None) -> Trajectory:
+    """A new task (new id, new trace) continuing from step ``at`` of an earlier one, in any state:
+    its first ``at`` steps become the new task's history and its checkpoint is placed there, so
+    :func:`resume` runs it on. ``at=0`` is a duplicate: the same task and plan, from the start.
+    The original is never changed."""
+    import copy
+
+    from highhx.core.errors import UsageError
+    from highhx.trajectories import Trajectory
+
+    original = store.load(task_id)
+    checkpoint = original.metrics.get("checkpoint")
+    if not checkpoint:
+        raise ValidationError(f"Task {original.id} has no checkpoint to fork from.")
+    at = len(original.steps) if at is None else at
+    if not 0 <= at <= len(original.steps):
+        raise UsageError(f"Task {original.id} has {len(original.steps)} step(s); fork at 0 … {len(original.steps)}.")
+    steps = [copy.deepcopy(step) for step in original.steps[:at]]
+    planner_state = copy.deepcopy(checkpoint["planner"])
+    if "cursor" in planner_state:  # a script continues after the last step it had reached
+        planner_state["cursor"] = len({str((s.action.get("step") or {}).get("id") or s.index) for s in steps})
+    forked = Trajectory(original.task, original.surface, status="interrupted", planner=original.planner, agent=original.agent)
+    forked.plan = copy.deepcopy(original.plan)
+    forked.steps = steps
+    forked.environment = dict(original.environment)
+    forked.metrics = {
+        "checkpoint": {**copy.deepcopy(checkpoint), "planner": planner_state, "counters": {"steps": at}},
+        "forked_from": {"task": original.id, "trace": original.trace_id, "at": at},
+    }
+    store.save(forked)
+    return forked

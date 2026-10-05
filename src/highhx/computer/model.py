@@ -351,10 +351,17 @@ _ELEMENT_VERBS = {
     "select": ActionKind.UI_SELECT,
     "hover": ActionKind.UI_SCROLL,
     "double_click": ActionKind.UI_CLICK,
+    "right_click": ActionKind.UI_CLICK,
     "download": ActionKind.UI_CLICK,
     "drag": ActionKind.UI_CLICK,
 }
-_VERB_LABELS = {"double_click": "Double-click", "hover": "Hover over", "download": "Download via", "drag": "Drag"}
+_VERB_LABELS = {
+    "double_click": "Double-click",
+    "right_click": "Right-click",
+    "hover": "Hover over",
+    "download": "Download via",
+    "drag": "Drag",
+}
 
 _SAFETY_ATTRS = frozenset(
     {"type", "href", "form_method", "form_has_password", "class", "download", "value", "title", "tag"}

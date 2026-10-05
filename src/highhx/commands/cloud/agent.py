@@ -268,9 +268,29 @@ def agent_sessions(app: App, all_projects: bool, limit: int) -> int:
 
 
 @agent.command("models", short_help="AI providers and models the agent can use.")
+@click.option("--discover", is_flag=True, help="Also ask the model servers on this computer (Ollama, llama.cpp, vLLM …) what they offer.")
 @pass_app
-def agent_models(app: App) -> int:
-    """AI providers and models the HighhX gateway can route agent requests to."""
+def agent_models(app: App, discover: bool) -> int:
+    """AI providers and models the HighhX gateway can route agent requests to — and, with
+    --discover, the models local servers on this computer offer (only loopback is contacted)."""
+    if discover:
+        from highhx.models.discovery import discover as find_local
+
+        local, silent = find_local()
+        data = {"local": [m.to_dict() for m in local], "not_answering": silent}
+
+        def render_local() -> None:
+            if local:
+                app.output.table(["model", "vision", "server", "endpoint"], [(m.model, "yes" if m.vision else "no", m.server, m.endpoint) for m in local])
+            else:
+                app.output.info("No local model server answered.")
+            for endpoint, why in silent.items():
+                app.output.plain(f"  {endpoint}: {why}")
+            if local:
+                app.output.note("Use one: HIGHHX_PLANNER_BASE_URL=<endpoint> HIGHHX_PLANNER_MODEL=<model> (and HIGHHX_VISION_* for a vision model).")
+
+        app.output.emit(data, render_local)
+        return 0
     rows = []
     for name in PROVIDER_NAMES:
         info = provider_info(name)
@@ -332,3 +352,99 @@ def agent_stop(app: App, all_agents: bool, session_id: str | None) -> int:
 from highhx.commands.computer_use.agent import agent_loop  # noqa: E402
 
 agent.add_command(agent_loop)
+
+
+@agent.group("memory", cls=DefaultGroup, default_command="list", short_help="Project memory: strategies, failures, knowledge, preferences.")
+def agent_memory() -> None:
+    """What the agent keeps for this project between tasks — typed (task, strategy, failure,
+    application, environment, preference, fact), with who saved it. Used as data in planning,
+    never as instructions. Secret values are never saved."""
+
+
+def _project_memory(app: App) -> Any:
+    from highhx.agent.memory import ProjectMemory
+
+    return ProjectMemory.for_project(app.root, initialized=app.initialized, redactor=app.redactor)
+
+
+@agent_memory.command("list", short_help="Entries with type and provenance.")
+@click.option("--query", default="", help="Rank by relevance to this task instead.")
+@pass_app
+def agent_memory_list(app: App, query: str) -> int:
+    """List the project memory (or the entries most relevant to --query)."""
+    memory = _project_memory(app)
+    if query:
+        notes = memory.relevant(query)
+
+        def render() -> None:
+            for note in notes:
+                app.output.plain(f"  {note}")
+
+        app.output.emit({"relevant": notes}, render)
+        return 0
+    rows = memory.entries()
+    app.output.emit(rows, lambda: app.output.table(["#", "type", "fact", "saved", "source"], [(r["index"], r["kind"], r["text"][:80], r["saved"], r["source"]) for r in rows]))
+    return 0
+
+
+@agent_memory.command("add", short_help="Remember something (you can record preferences).")
+@click.argument("text")
+@click.option("--type", "kind", default="fact", type=click.Choice(["task", "strategy", "failure", "application", "environment", "preference", "fact"]))
+@pass_app
+def agent_memory_add(app: App, text: str, kind: str) -> int:
+    """Add an entry, recorded as yours (the only way a preference is recorded)."""
+    message = _project_memory(app).add(text, kind=kind, source="user")
+    ok = message.startswith("Saved")
+    app.output.emit({"ok": ok, "message": message}, lambda: (app.output.success if ok else app.output.warn)(message))
+    return 0 if ok else 1
+
+
+@agent_memory.command("forget", short_help="Delete one entry by its number.")
+@click.argument("index", type=int)
+@pass_app
+def agent_memory_forget(app: App, index: int) -> int:
+    """Delete entry INDEX (see `highhx agent memory list`)."""
+    ok = _project_memory(app).forget(index)
+    app.output.emit({"ok": ok}, lambda: app.output.success(f"forgot entry {index}") if ok else app.output.warn(f"no entry {index}"))
+    return 0 if ok else 1
+
+
+@agent_memory.command("prune", short_help="Drop old failures and task notes (retention).")
+@pass_app
+def agent_memory_prune(app: App) -> int:
+    """Remove entries past their type's retention (failures 90 days, task notes 180, knowledge a year)."""
+    removed = _project_memory(app).prune()
+    app.output.emit({"removed": removed}, lambda: app.output.success(f"removed {removed} entr{'y' if removed == 1 else 'ies'}"))
+    return 0
+
+
+@agent.command("fork", short_help="A new task continuing from step N of an earlier one.")
+@click.argument("task_id")
+@click.option("--at", "at", type=int, help="Keep the first N steps (default: all of them).")
+@click.option("--live/--no-live", default=True)
+@pass_app
+def agent_fork(app: App, task_id: str, at: int | None, live: bool) -> int:
+    """Fork TASK_ID: a new task (new id and trace) whose history is its first N steps, then run it
+    on from there. The original task is not changed."""
+    from highhx.agent.loop import fork
+    from highhx.commands.computer_use.agent import resume_goal
+    from highhx.trajectories import TrajectoryStore
+
+    forked = fork(TrajectoryStore.for_app(app), task_id, at=at)
+    app.output.info(f"forked {task_id} at step {len(forked.steps)} as {forked.id}")
+    return resume_goal(app, forked.id, live=live, model=False, remote_model=False)
+
+
+@agent.command("duplicate", short_help="Run an earlier task again as a new task.")
+@click.argument("task_id")
+@click.option("--live/--no-live", default=True)
+@pass_app
+def agent_duplicate(app: App, task_id: str, live: bool) -> int:
+    """Run TASK_ID's task and plan again from the start, as a new task with its own trajectory."""
+    from highhx.agent.loop import fork
+    from highhx.commands.computer_use.agent import resume_goal
+    from highhx.trajectories import TrajectoryStore
+
+    copy = fork(TrajectoryStore.for_app(app), task_id, at=0)
+    app.output.info(f"duplicated {task_id} as {copy.id}")
+    return resume_goal(app, copy.id, live=live, model=False, remote_model=False)

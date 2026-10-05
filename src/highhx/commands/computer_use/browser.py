@@ -161,3 +161,147 @@ def browser_delete(app: App, name: str) -> int:
     store.delete(name)
     app.output.emit({"deleted": name}, lambda: app.output.success(f"deleted {name}"))
     return 0
+
+
+# ------------------------------------------------------------------- profiles
+def _run_action(app: App, name: str, inputs: dict[str, Any]) -> int:
+    from highhx.actions.catalog import catalog_for
+    from highhx.actions.executor import ActionExecutor
+    from highhx.commands.computer.main import computer_session
+
+    session = computer_session(app)
+    executor = ActionExecutor(app, session.gate, actor=session.actor, catalog=catalog_for(app), computer=lambda: session)
+    try:
+        result = executor.run(name, inputs)
+    finally:
+        executor.close()
+        session.close()
+    out = app.output
+
+    def render() -> None:
+        if not result.ok:
+            out.error(result.error or result.summary)
+            return
+        rows = result.output.get("profiles")
+        if rows is None:
+            out.success(result.summary)
+            return
+        for row in rows:
+            flags = [f for f, on in (("running", row["running"]), (f"in use by {row['leased_by']}", bool(row["leased_by"]))) if on]
+            out.plain(f"  {row['name']:<20} {row['bytes'] / 1e6:8.1f} MB  {' · '.join(flags)}")
+
+    out.emit({"ok": result.ok, "status": result.status, **result.output, "error": result.error}, render)
+    return 0 if result.ok else 1
+
+
+@browser.group("profiles", cls=DefaultGroup, default_command="list", short_help="Isolated browser profiles (cookies, sign-ins).")
+def profiles() -> None:
+    """Each profile is its own browser with its own cookies, storage and signed-in sessions,
+    which HighhX never reads. Choose one with HIGHHX_BROWSER_PROFILE=NAME."""
+
+
+@profiles.command("list", short_help="Profiles: size, running, in use.")
+@pass_app
+def profiles_list(app: App) -> int:
+    """List the profiles (never their contents)."""
+    return _run_action(app, "browser.profiles", {})
+
+
+@profiles.command("create", short_help="Create a profile.")
+@click.argument("name")
+@pass_app
+def profiles_create(app: App, name: str) -> int:
+    """Create an empty, isolated profile."""
+    return _run_action(app, "browser.profile_create", {"name": name})
+
+
+@profiles.command("delete", short_help="Delete a profile and its sign-ins (asked).")
+@click.argument("name")
+@pass_app
+def profiles_delete(app: App, name: str) -> int:
+    """Delete a profile that is not running or in use (always asked)."""
+    return _run_action(app, "browser.profile_delete", {"name": name})
+
+
+@profiles.command("import", short_help="Copy a browser user-data directory into a new profile (asked).")
+@click.argument("name")
+@click.argument("source", type=click.Path(exists=True, file_okay=False))
+@pass_app
+def profiles_import(app: App, name: str, source: str) -> int:
+    """Copy SOURCE (a closed Chrome user-data directory) into profile NAME; brings its sign-ins,
+    so it is always asked. Locks and caches are left behind."""
+    return _run_action(app, "browser.profile_import", {"name": name, "source": source})
+
+
+# ------------------------------------------------------------------- sessions
+def _show_sessions(app: App, name: str, inputs: dict[str, Any]) -> int:
+    from highhx.actions.catalog import catalog_for
+    from highhx.actions.executor import ActionExecutor
+    from highhx.commands.computer.main import computer_session
+
+    session = computer_session(app)
+    executor = ActionExecutor(app, session.gate, actor=session.actor, catalog=catalog_for(app), computer=lambda: session)
+    try:
+        result = executor.run(name, inputs)
+    finally:
+        executor.close()
+        session.close()
+    out = app.output
+
+    def render() -> None:
+        if not result.ok:
+            out.error(result.error or result.summary)
+            return
+        rows = result.output.get("sessions")
+        if rows is None:
+            out.success(result.summary)
+            return
+        for row in rows:
+            state = "answering" if row["healthy"] else "not answering"
+            out.plain(f"  {row['id']}  {row['kind']:<6} {row['profile']:<12} {row['devtools']}  {state}")
+        if result.output.get("removed"):
+            out.note(f"cleaned up: {', '.join(result.output['removed'])}")
+
+    out.emit({"ok": result.ok, "status": result.status, **result.output, "error": result.error}, render)
+    return 0 if result.ok else 1
+
+
+@browser.group("sessions", cls=DefaultGroup, default_command="list", short_help="Managed browser sessions (local and remote).")
+def sessions() -> None:
+    """Start, check, reconnect and stop browser sessions: HighhX's own browsers (one per
+    profile) and remote browsers (an existing DevTools endpoint) through one interface."""
+
+
+@sessions.command("list", short_help="Sessions and whether they answer.")
+@click.option("--cleanup", is_flag=True, help="Forget sessions whose browser is gone or that idled for hours.")
+@pass_app
+def sessions_list(app: App, cleanup: bool) -> int:
+    """List the managed browser sessions."""
+    return _show_sessions(app, "browser.sessions", {"cleanup": cleanup})
+
+
+@sessions.command("start", short_help="Start a session on a profile, or connect to a remote browser.")
+@click.option("--profile", default="default", show_default=True)
+@click.option("--endpoint", default="", help="A remote browser's DevTools endpoint (HighhX never starts it).")
+@pass_app
+def sessions_start(app: App, profile: str, endpoint: str) -> int:
+    """Start HighhX's browser on PROFILE (leased to this session), or connect to ENDPOINT."""
+    inputs: dict[str, Any] = {"endpoint": endpoint} if endpoint else {"profile": profile}
+    return _show_sessions(app, "browser.session_start", inputs)
+
+
+@sessions.command("check", short_help="Heartbeat a session (optionally reconnect).")
+@click.argument("session_id")
+@click.option("--reconnect", is_flag=True, help="Restart a local browser that stopped answering.")
+@pass_app
+def sessions_check(app: App, session_id: str, reconnect: bool) -> int:
+    """Check that the session's browser answers."""
+    return _show_sessions(app, "browser.session_heartbeat", {"session": session_id, "reconnect": reconnect})
+
+
+@sessions.command("stop", short_help="Stop a session.")
+@click.argument("session_id")
+@pass_app
+def sessions_stop(app: App, session_id: str) -> int:
+    """Stop the session: a local browser quits gracefully (its profile is saved); a remote one is disconnected."""
+    return _show_sessions(app, "browser.session_stop", {"session": session_id})

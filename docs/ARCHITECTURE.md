@@ -234,3 +234,14 @@ platform), a versioned IPC protocol, and a second implementation of cancellation
 and audit. The action handler contract (`ActionContext` → `ActionResult`) is
 transport-agnostic, so a native worker can be added behind it if a real bottleneck (e.g.
 Windows UI Automation) ever justifies one; see [ROADMAP.md](ROADMAP.md).
+
+## The computer-use runtime (one runtime)
+
+Everything that acts — the agent loop and its specialists, workflows, recordings and replays,
+benchmarks, best-of-N attempts, the web console, MCP tool calls and skills — submits catalog actions
+to the one `ActionExecutor`, which classifies risk, applies policy, asks through the one approval path
+(terminal, TUI or the web console's queue), runs, verifies and audits. One event bus carries every event
+(with a canonical name) to the CLI, TUI, web console, task traces, trajectories and benchmarks; one
+trajectory store records every task. Browsers, desktops, Android devices, sandboxes, VMs and remote
+computers are drivers and runtimes behind that executor, never a second way to act. See
+[COMPUTER_USE.md](COMPUTER_USE.md).

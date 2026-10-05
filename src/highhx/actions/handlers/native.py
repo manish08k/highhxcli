@@ -400,7 +400,12 @@ def browser_screenshot(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     target.parent.mkdir(parents=True, exist_ok=True)
     Path(target).write_bytes(raw)
     rel = relative_to_root(ctx.app.root, target)
-    return ActionResult(True, output={"path": rel, "bytes": len(raw)}, summary=f"screenshot saved to {rel}")
+    from highhx.artifacts import record
+
+    artifact = record(ctx, target, kind="screenshot", action="browser.screenshot")
+    return ActionResult(
+        True, output={"path": rel, "bytes": len(raw), "artifact": artifact}, summary=f"screenshot saved to {rel}"
+    )
 
 
 def app_launch(ctx: ActionContext, inputs: Inputs) -> ActionResult:
@@ -452,6 +457,10 @@ def browser_double_click(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     return _flow_step(ctx, {"double_click": str(inputs["target"])}, float(inputs.get("timeout") or 10))
 
 
+def browser_right_click(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    return _flow_step(ctx, {"right_click": str(inputs["target"])}, float(inputs.get("timeout") or 10))
+
+
 def browser_drag(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     step = {"drag": {"from": str(inputs["source"]), "to": str(inputs["target"])}}
     return _flow_step(ctx, step, float(inputs.get("timeout") or 10))
@@ -474,4 +483,89 @@ def browser_download(ctx: ActionContext, inputs: Inputs) -> ActionResult:
         result.output["download"] = download
         if download.get("path"):
             result.summary = f"downloaded {download['path']}"
+            from highhx.artifacts import record
+
+            result.output["artifact"] = record(ctx, str(download["path"]), kind="download", action="browser.download")
     return result
+
+
+# ------------------------------------------------------------- browser profiles
+def _profiles(ctx: ActionContext) -> Any:
+    store = getattr(ctx.computer(), "profiles", None)
+    if store is None:
+        from highhx.computer.profiles import ProfileStore
+        from highhx.utils.paths import user_data_dir
+
+        store = ProfileStore(user_data_dir() / "computer")
+    return store
+
+
+def browser_profiles(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    found = [p.to_dict() for p in _profiles(ctx).list()]
+    return ActionResult(True, output={"profiles": found}, summary=f"{len(found)} profile(s)")
+
+
+def browser_profile_create(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    info = _profiles(ctx).create(str(inputs["name"]))
+    return ActionResult(True, output=info.to_dict(), summary=f"created browser profile {info.name}", verified=True)
+
+
+def browser_profile_delete(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    store = _profiles(ctx)
+    name = str(inputs["name"])
+    store.delete(name)
+    gone = not store.exists(name)
+    return ActionResult(gone, output={"name": name}, summary=f"deleted browser profile {name}", verified=gone)
+
+
+def browser_profile_import(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    info = _profiles(ctx).import_from(str(inputs["name"]), Path(str(inputs["source"])))
+    return ActionResult(True, output=info.to_dict(), summary=f"imported browser profile {info.name}", verified=True)
+
+
+# ------------------------------------------------------------- browser sessions
+def _sessions(ctx: ActionContext) -> Any:
+    from highhx.computer.browser_sessions import BrowserSessionManager
+
+    store = _profiles(ctx)
+    return BrowserSessionManager(store.base, headless=getattr(ctx.computer(), "headless", None))
+
+
+def browser_sessions(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    manager = _sessions(ctx)
+    removed = manager.cleanup() if inputs.get("cleanup") else []
+    found = [s.to_dict() for s in manager.list()]
+    return ActionResult(True, output={"sessions": found, "removed": removed}, summary=f"{len(found)} session(s)")
+
+
+def browser_session_start(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    session = _sessions(ctx).start(
+        profile=str(inputs.get("profile") or "default"), endpoint=str(inputs.get("endpoint") or ""), cancel=ctx.cancel
+    )
+    return ActionResult(
+        True,
+        output=session.to_dict(),
+        summary=f"browser session {session.id} ({session.kind}, {session.profile})",
+        verified=True,
+    )
+
+
+def browser_session_stop(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    _sessions(ctx).stop(str(inputs["session"]))
+    return ActionResult(
+        True, output={"session": inputs["session"]}, summary=f"stopped browser session {inputs['session']}"
+    )
+
+
+def browser_session_heartbeat(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    manager = _sessions(ctx)
+    session = manager.heartbeat(str(inputs["session"]))
+    if not session.healthy and inputs.get("reconnect"):
+        session = manager.reconnect(str(inputs["session"]), cancel=ctx.cancel)
+    return ActionResult(
+        session.healthy,
+        output=session.to_dict(),
+        summary=f"{session.id}: {'answering' if session.healthy else 'not answering'}",
+        verified=session.healthy,
+        error="" if session.healthy else "the browser does not answer (reconnect: true restarts a local one)",
+    )

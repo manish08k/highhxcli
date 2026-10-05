@@ -367,6 +367,17 @@ def _text(ctx: VerificationContext, value: Any) -> CheckResult:
     return _ok("text", _norm(value) in haystack, f"{value!r} {'is' if _norm(value) in haystack else 'is not'} shown")
 
 
+@check("ocr_text")
+def _ocr_text(ctx: VerificationContext, value: Any) -> CheckResult:
+    """Text read from the pixels by OCR (not the page structure): for canvases, images, remote screens."""
+    if ctx.after is None:
+        return _ok("ocr_text", None, "no observation after the action")
+    if not ctx.after.ocr_text:
+        return _ok("ocr_text", None, "no OCR text was read (OCR unavailable or not requested)")
+    found = _norm(value) in _norm(ctx.after.ocr_text)
+    return _ok("ocr_text", found, f"{value!r} {'was' if found else 'was not'} read on the screen")
+
+
 @check("text_absent")
 def _text_absent(ctx: VerificationContext, value: Any) -> CheckResult:
     inner = _text(ctx, value)

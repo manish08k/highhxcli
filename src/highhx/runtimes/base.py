@@ -11,8 +11,9 @@
     SandboxRuntime   a temporary workspace with filesystem, network, environment and resource
                      isolation (runtimes/sandbox.py)
     RemoteRuntime    another computer over SSH
-    VMRuntime · CloudRuntime
-                     not implemented: they report a capability error, never pretend
+    VMRuntime        a virtual machine through Lima or Tart (runtimes/vm.py); without either,
+                     a capability error saying what to install
+    CloudRuntime     not implemented: a capability error, never pretended
 
 The agent loop does not care which runtime it runs in. Catalog actions reach a runtime only
 after the executor approved them.
@@ -160,11 +161,6 @@ class _Unavailable:
 
     def __init__(self, *_args: Any, **_kwargs: Any) -> None:
         raise CapabilityError(f"The {self.kind} runtime is not implemented in this build: {self.detail}")
-
-
-class VMRuntime(_Unavailable):
-    kind = "vm"
-    detail = "no hypervisor backend; use `highhx sandbox` for isolation or an ssh:// computer"
 
 
 class CloudRuntime(_Unavailable):

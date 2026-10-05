@@ -70,6 +70,12 @@ def _duplicate_ids(data: dict[str, Any]) -> list[str]:
     return sorted({i for i in ids if i is not None and ids.count(i) > 1})
 
 
+def _branch(step_id: str, branch: dict[str, Any]) -> StepSpec:
+    from highhx.workflows.parser import branch_step
+
+    return branch_step(step_id, branch)
+
+
 def _refs(expr: str) -> list[tuple[str, ...]]:
     try:
         return list(conditions.references(expr))
@@ -93,9 +99,16 @@ def _check_expression(
                 f"{where}: unknown context '{root}'{did_you_mean(root, sorted(conditions.KNOWN_ROOTS))}"
             )
             continue
-        if root in conditions.LOOP_ROOTS and (step_id is None or spec.step(step_id).for_each is None):
-            report.errors.append(f"{where}: '{root}' is only available in a step with for_each")
-            continue
+        if root in conditions.LOOP_ROOTS:
+            owner = spec.step(step_id) if step_id is not None else None
+            in_for_each = owner is not None and owner.for_each is not None
+            in_while = owner is not None and owner.while_ is not None
+            if not (in_for_each or (in_while and root == "loop")):
+                report.errors.append(
+                    f"{where}: '{root}' is only available in a step with for_each"
+                    + (" (while has loop, not item)" if in_while else "")
+                )
+                continue
         if root == "inputs" and len(parts) > 1 and parts[1] not in spec.inputs:
             report.errors.append(f"{where}: unknown input '{parts[1]}'")
         if root == "vars" and len(parts) > 1 and parts[1] not in spec.vars:
@@ -220,6 +233,21 @@ def validate_spec(
                     report.errors.append(f"{where}.for_each: cannot refer to item or loop")
                 else:
                     _check_expression(expr, f"{where}.for_each", spec, step.id, graph, report)
+        if step.while_ is not None:
+            _check_expression(step.while_, f"{where}.while", spec, step.id, graph, report)
+        if isinstance(step.wait, dict):
+            _check_expression(step.wait["until"], f"{where}.wait.until", spec, step.id, graph, report)
+        for key, value in (step.set_ or {}).items():
+            for expr in find_expressions(str(value)):
+                _check_expression(expr, f"{where}.set.{key}", spec, step.id, graph, report)
+        for index, branch in enumerate(step.choose or []):
+            test = branch.get("if", branch.get("elif"))
+            if isinstance(test, str):
+                _check_expression(test, f"{where}.choose[{index}]", spec, step.id, graph, report)
+            if "action" in branch:
+                _check_action_step(
+                    _branch(step.id, branch), f"{where}.choose[{index}]", report, check_tools=check_tools
+                )
         if step.verify is not None:
             from highhx.verification.declarative import validate as validate_check
 

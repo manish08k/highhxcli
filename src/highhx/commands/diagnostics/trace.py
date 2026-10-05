@@ -67,6 +67,52 @@ def trace_export(app: App, trace_id: str, fmt: str, output: str | None) -> int:
     return 0
 
 
+@trace.command("timeline", short_help="Every event of a task trace, filterable (the debugger view).")
+@click.argument("trace_id")
+@click.option("--component", default="", help="Only events of this component: browser, action, model, grounding, network …")
+@click.option("--search", default="", help="Only events whose name or payload contains this text.")
+@click.option("--failures", is_flag=True, help="Only failures, denials, crashes and errors.")
+@click.option("--export", "fmt", type=click.Choice(["json", "jsonl", "csv"]), help="Print in this format instead of a table.")
+@click.option("--output", "-o", type=click.Path(dir_okay=False), help="Write the export to a file.")
+@pass_app
+def trace_timeline(app: App, trace_id: str, component: str, search: str, failures: bool, fmt: str | None, output: str | None) -> int:
+    """Time, event, component, step, action, latency, result and error for every event of a
+    task, filtered and searchable — and exportable as JSON, JSON Lines or CSV."""
+    import csv
+    import io
+    import json
+    from pathlib import Path
+
+    from highhx.observability.tasktrace import TraceStore
+
+    rows = TraceStore.for_app(app).load(trace_id).timeline(component=component, search=search, failures=failures)
+    if fmt:
+        if fmt == "json":
+            text = json.dumps(rows, indent=2, default=str)
+        elif fmt == "jsonl":
+            text = "\n".join(json.dumps(r, default=str) for r in rows)
+        else:
+            buffer = io.StringIO()
+            writer = csv.DictWriter(buffer, fieldnames=list(rows[0]) if rows else ["t", "event"])
+            writer.writeheader()
+            writer.writerows(rows)
+            text = buffer.getvalue().rstrip("\n")
+        if output:
+            Path(output).write_text(text + "\n", encoding="utf-8")
+            app.output.success(f"wrote {len(rows)} event(s) to {output}")
+        else:
+            click.echo(text)
+        return 0
+    app.output.emit(
+        rows,
+        lambda: app.output.table(
+            ["t", "event", "step", "action", "latency", "result", "error"],
+            [(f"{r['t']:.3f}", r["event"], r["step"], r["action"], "" if r["latency"] is None else f"{float(r['latency']):.3f}s", r["result"], r["error"][:60]) for r in rows],
+        ),
+    )
+    return 0
+
+
 def _execution_trace(app: App, execution_id: str | None) -> int:
     """Show where time went in EXECUTION_ID (default: latest)."""
     if app.history is None or app.db is None:

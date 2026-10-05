@@ -15,6 +15,7 @@ def discover() -> list[dict[str, object]]:
     from highhx.computer.browser import find_browser
     from highhx.drivers.android.adb import INSTALL_HINT, find_adb
     from highhx.drivers.vm import DETAIL as VM_DETAIL
+    from highhx.runtimes.vm import available_vm_backends
 
     adb = find_adb()
     browser = find_browser()
@@ -23,5 +24,5 @@ def discover() -> list[dict[str, object]]:
         {"driver": "browser", "available": bool(browser), "detail": browser or "no Chromium-family browser found"},
         {"driver": "android", "available": bool(adb), "detail": adb or f"adb not found. {INSTALL_HINT}"},
         {"driver": "remote", "available": True, "detail": "set HIGHHX_COMPUTER_TARGET=ssh://user@host (needs HighhX on that computer)"},
-        {"driver": "vm", "available": False, "detail": VM_DETAIL},
+        {"driver": "vm", "available": any(c.available for c in available_vm_backends().values()), "detail": VM_DETAIL},
     ]

@@ -1,0 +1,16 @@
+name: files
+version: 1
+description: Manage project files — find, read, parse, write, move — confined to the project, secret files refused.
+applies_to: {surfaces: [none]}
+requires: []
+actions: [filesystem.find, filesystem.read, filesystem.parse, filesystem.write, filesystem.move, filesystem.copy, filesystem.delete, artifact.save]
+permissions:
+  - Writes are journaled (/undo); deleting is high risk and asked; nothing outside the project; .env and keys are never read.
+examples:
+  - task: turn a CSV into one note per row
+    steps:
+      - {action: filesystem.parse, parameters: {path: data.csv}}
+verification:
+  - {when: write, check: {file: {path: "<path>"}}}
+failure_modes:
+  - {symptom: "outside the project", recovery: "work inside the project, or copy the file in yourself"}

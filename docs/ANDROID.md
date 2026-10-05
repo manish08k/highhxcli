@@ -39,6 +39,8 @@ has been driven by this build.**
 | `android.emulators` | safe | the SDK emulator's AVDs |
 | `android.emulator_start` | medium; high with `wipe` | starts an AVD detached (`-no-window`, `-grpc 8554` by default, `-no-snapshot-save`) and waits for `sys.boot_completed` |
 | `android.emulator_stop` | medium | `adb emu kill`; refuses serials that are not emulators |
+| `android.emulator_reset` | high | stop, then start the AVD again with its data wiped |
+| `android.health` | safe | booted, battery, screen on, free storage, model, Android version (read, never guessed) |
 
 Safety details: every adb call is an argv list (no host shell). Text for `input text` is quoted
 for the device shell (`; rm -rf /` stays text). Package names, activities, serials and property

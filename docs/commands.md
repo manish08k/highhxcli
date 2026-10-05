@@ -139,6 +139,65 @@ terminated, and the session is saved as cancelled.
 highhx agent stop [OPTIONS]
 ```
 
+### `highhx agent fork`
+
+Fork TASK_ID: a new task (new id and trace) whose history is its first N steps, then run it
+on from there. The original task is not changed.
+
+```
+highhx agent fork [OPTIONS] TASK_ID
+```
+
+### `highhx agent duplicate`
+
+Run TASK_ID's task and plan again from the start, as a new task with its own trajectory.
+
+```
+highhx agent duplicate [OPTIONS] TASK_ID
+```
+
+### `highhx agent memory`
+
+What the agent keeps for this project between tasks — typed (task, strategy, failure,
+application, environment, preference, fact), with who saved it. Used as data in planning,
+never as instructions. Secret values are never saved.
+
+```
+highhx agent memory [OPTIONS] COMMAND [ARGS]...
+```
+
+### `highhx agent memory list`
+
+List the project memory (or the entries most relevant to --query).
+
+```
+highhx agent memory list [OPTIONS]
+```
+
+### `highhx agent memory add`
+
+Add an entry, recorded as yours (the only way a preference is recorded).
+
+```
+highhx agent memory add [OPTIONS] TEXT
+```
+
+### `highhx agent memory forget`
+
+Delete entry INDEX (see `highhx agent memory list`).
+
+```
+highhx agent memory forget [OPTIONS] INDEX
+```
+
+### `highhx agent memory prune`
+
+Remove entries past their type's retention (failures 90 days, task notes 180, knowledge a year).
+
+```
+highhx agent memory prune [OPTIONS]
+```
+
 | Option | Description |
 |---|---|
 | `--all` | Stop agents in every project, not just this one. |
@@ -701,6 +760,89 @@ List recorded browser workflows.
 highhx browser workflows [OPTIONS]
 ```
 
+
+### `highhx browser profiles`
+
+Each profile is its own browser with its own cookies, storage and signed-in sessions,
+which HighhX never reads. Choose one with HIGHHX_BROWSER_PROFILE=NAME.
+
+```
+highhx browser profiles [OPTIONS] COMMAND [ARGS]...
+```
+
+### `highhx browser profiles list`
+
+List the profiles (never their contents).
+
+```
+highhx browser profiles list [OPTIONS]
+```
+
+### `highhx browser profiles create`
+
+Create an empty, isolated profile.
+
+```
+highhx browser profiles create [OPTIONS] NAME
+```
+
+### `highhx browser profiles delete`
+
+Delete a profile that is not running or in use (always asked).
+
+```
+highhx browser profiles delete [OPTIONS] NAME
+```
+
+### `highhx browser profiles import`
+
+Copy SOURCE (a closed Chrome user-data directory) into profile NAME; brings its sign-ins,
+so it is always asked. Locks and caches are left behind.
+
+```
+highhx browser profiles import [OPTIONS] NAME SOURCE
+```
+
+### `highhx browser sessions`
+
+Start, check, reconnect and stop browser sessions: HighhX's own browsers (one per
+profile) and remote browsers (an existing DevTools endpoint) through one interface.
+
+```
+highhx browser sessions [OPTIONS] COMMAND [ARGS]...
+```
+
+### `highhx browser sessions list`
+
+List the managed browser sessions.
+
+```
+highhx browser sessions list [OPTIONS]
+```
+
+### `highhx browser sessions start`
+
+Start HighhX's browser on PROFILE (leased to this session), or connect to ENDPOINT.
+
+```
+highhx browser sessions start [OPTIONS]
+```
+
+### `highhx browser sessions check`
+
+Check that the session's browser answers.
+
+```
+highhx browser sessions check [OPTIONS] SESSION_ID
+```
+
+### `highhx browser sessions stop`
+
+Stop the session: a local browser quits gracefully (its profile is saved); a remote one is disconnected.
+
+```
+highhx browser sessions stop [OPTIONS] SESSION_ID
+```
 ### `highhx android`
 
 Operate an Android phone, tablet or emulator through adb: observe the UI hierarchy, tap by
@@ -994,6 +1136,189 @@ Tasks that share words with QUERY (lexical; a model embedding can replace it).
 
 ```
 highhx trajectories search [OPTIONS] QUERY
+```
+
+### `highhx skills`
+
+Skills describe how to use an application or site with HighhX's actions: where they
+apply, what they need, their actions and permissions, runnable examples, checks and known
+failure modes. Built-in skills ship with HighhX; a project adds its own in .highhx/skills/.
+Skills grant nothing: their examples run through the executor like any plan.
+
+```
+highhx skills [OPTIONS] COMMAND [ARGS]...
+```
+
+### `highhx skills list`
+
+List the skills with their problems (if any) on this machine.
+
+```
+highhx skills list [OPTIONS]
+```
+
+### `highhx skills show`
+
+Everything a skill says: actions, permissions, examples, checks, failure modes.
+
+```
+highhx skills show [OPTIONS] NAME
+```
+
+### `highhx skills check`
+
+Exit 1 when a skill references unknown actions or is malformed (missing capabilities are reported, not failed).
+
+```
+highhx skills check [OPTIONS]
+```
+
+### `highhx skills run`
+
+Run example INDEX of skill NAME as a plan: every step classified, approved, verified, recorded.
+
+```
+highhx skills run [OPTIONS] NAME
+```
+
+### `highhx vm`
+
+Whole isolated computers: create, start, pause, resume, stop, snapshot, restore, destroy,
+and run commands inside — through Lima (Linux VMs) or Tart (macOS/Linux VMs on Apple silicon).
+Every operation is an action: classified, approved, audited. A VM's desktop is operated by
+HighhX inside it, as an ssh:// computer.
+
+```
+highhx vm [OPTIONS] COMMAND [ARGS]...
+```
+
+### `highhx vm list`
+
+List the virtual machines of the installed backend.
+
+```
+highhx vm list [OPTIONS]
+```
+
+### `highhx vm create`
+
+Create VM NAME with its own disk, network and limits.
+
+```
+highhx vm create [OPTIONS] NAME
+```
+
+### `highhx vm start`
+
+Start a VM.
+
+```
+highhx vm start [OPTIONS] NAME
+```
+
+### `highhx vm stop`
+
+Stop a VM (its disk is kept).
+
+```
+highhx vm stop [OPTIONS] NAME
+```
+
+### `highhx vm pause`
+
+Suspend a VM (Tart).
+
+```
+highhx vm pause [OPTIONS] NAME
+```
+
+### `highhx vm resume`
+
+Resume a suspended VM.
+
+```
+highhx vm resume [OPTIONS] NAME
+```
+
+### `highhx vm destroy`
+
+Delete a VM and its disk (asked).
+
+```
+highhx vm destroy [OPTIONS] NAME
+```
+
+### `highhx vm snapshot`
+
+Snapshot VM NAME under TAG.
+
+```
+highhx vm snapshot [OPTIONS] NAME TAG
+```
+
+### `highhx vm restore`
+
+Restore VM NAME to snapshot TAG; its current state is lost.
+
+```
+highhx vm restore [OPTIONS] NAME TAG
+```
+
+### `highhx vm exec`
+
+Run ARGV inside running VM NAME (classified like any command): highhx vm exec dev -- uname -a
+
+```
+highhx vm exec [OPTIONS] NAME ARGV...
+```
+
+### `highhx trajectories artifacts`
+
+Files computer-use actions produced — screenshots, downloads, generated files — stored once
+by checksum with an id, type, size, the task and action that made them, and a retention.
+
+```
+highhx trajectories artifacts [OPTIONS] COMMAND [ARGS]...
+```
+
+### `highhx trajectories artifacts list`
+
+List artifacts: id, kind, name, size, task.
+
+```
+highhx trajectories artifacts list [OPTIONS]
+```
+
+### `highhx trajectories artifacts show`
+
+An artifact's metadata (its checksum is verified).
+
+```
+highhx trajectories artifacts show [OPTIONS] ARTIFACT_ID
+```
+
+### `highhx trajectories artifacts export`
+
+Write the artifact to PATH inside the project (checksum verified first).
+
+```
+highhx trajectories artifacts export [OPTIONS] ARTIFACT_ID PATH
+```
+
+### `highhx trajectories artifacts delete`
+
+Delete one artifact (its content goes when nothing else refers to it).
+
+```
+highhx trajectories artifacts delete [OPTIONS] ARTIFACT_ID
+```
+
+### `highhx trajectories artifacts prune`
+
+Remove artifacts older than their retention (30 days unless set otherwise).
+
+```
+highhx trajectories artifacts prune [OPTIONS]
 ```
 
 #### `highhx trajectories show`
@@ -2368,6 +2693,15 @@ The trace with its tree and every (redacted) event.
 highhx trace export [OPTIONS] TRACE_ID
 ```
 
+### `highhx trace timeline`
+
+Time, event, component, step, action, latency, result and error for every event of a
+task, filtered and searchable — and exportable as JSON, JSON Lines or CSV.
+
+```
+highhx trace timeline [OPTIONS] TRACE_ID
+```
+
 | Option | Description |
 |---|---|
 | `--format` |  (default: `json`) |
@@ -2726,6 +3060,17 @@ what is implemented but not validated on a real platform in this build.
 
 ```
 highhx capabilities [OPTIONS]
+```
+
+### `highhx web`
+
+Open the HighhX web console on this computer: start tasks, watch the live view, the plan,
+actions, network evidence and the event timeline, answer approvals, and browse trajectories
+and benchmarks. Everything runs through the same executor, policy and audit as the CLI.
+The address carries a one-time token and is reachable only from this computer. Ctrl-C stops it.
+
+```
+highhx web [OPTIONS]
 ```
 
 ### `highhx diagnose`

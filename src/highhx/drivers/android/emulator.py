@@ -132,6 +132,14 @@ class Emulator:
             hint=f"See {log}.",
         )
 
+    def reset(self, serial: str, avd: str, *, log: Path, timeout: float = 300.0) -> dict[str, object]:
+        """A factory reset: stop the emulator, then start the AVD again with its data wiped."""
+        self.stop(serial)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and any(d.serial == serial for d in self.adb.devices()):
+            self.sleep(1.0)
+        return self.start(avd, log=log, wipe=True, timeout=timeout)
+
     def stop(self, serial: str) -> None:
         if not serial.startswith("emulator-"):
             raise UsageError(f"{serial!r} is not an emulator.")

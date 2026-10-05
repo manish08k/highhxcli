@@ -288,3 +288,26 @@ def test_diagnostics_move_with_the_data() -> None:
     assert empty["per_action"] == {} and empty["failure_categories"] == {} and empty["grounding_confidence"] is None
     one = diagnostics(trajectory("completed", [step(1, "a", "success")]))
     assert one["per_action"] == {"browser.click": {"runs": 1, "succeeded": 1}} and one["failure_categories"] == {}
+
+
+def test_latency_diagnostics_come_from_the_trajectory() -> None:
+    from highhx.benchmarks.model import aggregate_diagnostics
+    from highhx.benchmarks.runner import diagnostics
+
+    t = trajectory("completed", [step(1, "a", "success"), step(2, "b", "success")], recoveries=1)
+    t.planner = "model"
+    t.metrics["planning_seconds"] = [0.5, 1.5]
+    t.steps[0].grounding = {
+        "attempts": [{"strategy": "accessibility", "seconds": 0.02}, {"strategy": "dom", "seconds": 0.04}]
+    }
+    t.steps[1].verification = {"report": {"seconds": 0.3}}
+    d = diagnostics(t)
+    assert d["planning_seconds"] == [0.5, 1.5] and d["model_latency_measured"] is True
+    assert d["grounding_seconds"] == [0.02, 0.04] and d["verification_seconds"] == [0.3] and d["recoveries"] == 1
+    combined = aggregate_diagnostics([metrics(t, True)])
+    assert combined["model_latency"] == {"count": 2, "mean": 1.0, "p50": 0.5, "p95": 1.5, "max": 1.5}  # nearest rank
+    assert combined["grounding_latency"]["count"] == 2 and combined["verification_latency"]["max"] == 0.3
+    scripted = trajectory("completed", [step(1, "a", "success")])
+    scripted.planner = "scripted"
+    scripted.metrics["planning_seconds"] = [0.001]
+    assert aggregate_diagnostics([metrics(scripted, True)])["model_latency"] is None  # no model: no model latency

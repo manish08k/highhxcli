@@ -126,6 +126,7 @@ class McpClient:
         self.state = DISCONNECTED
         self.detail = ""
         self.tools: list[RemoteTool] = []
+        self.server_capabilities: dict[str, Any] = {}
         self.server_info: dict[str, Any] = {}
         self.connected_at: float | None = None
         self._process: subprocess.Popen[str] | None = None
@@ -170,6 +171,7 @@ class McpClient:
             )
             self._notify("notifications/initialized")
             self.server_info = dict(info.get("serverInfo") or {})
+            self.server_capabilities = dict(info.get("capabilities") or {})
             self.tools = self._list_tools()
         except McpError as exc:
             self._fail(exc.message)
@@ -240,6 +242,30 @@ class McpClient:
         if not text and structured is not None:
             text.append(json.dumps(structured, indent=1, default=str))
         return CallResult("\n".join(text), images, structured, bool(result.get("isError")))
+
+    # ---------------------------------------------------------- resources
+    def resources(self) -> list[dict[str, str]]:
+        """The server's resources (``resources/list``): uri, name, MIME type. Read-only."""
+        if "resources" not in getattr(self, "server_capabilities", {}):
+            raise McpError(f"MCP server {self.name} offers no resources.")
+        result = self._request("resources/list", {}, self.config.timeout)
+        return [
+            {"uri": str(r.get("uri") or ""), "name": str(r.get("name") or ""), "mimeType": str(r.get("mimeType") or "")}
+            for r in result.get("resources") or []
+            if isinstance(r, dict) and r.get("uri")
+        ]
+
+    def read_resource(self, uri: str) -> list[dict[str, str]]:
+        """One resource's contents (``resources/read``): text parts (binary parts are summarised)."""
+        if "resources" not in getattr(self, "server_capabilities", {}):
+            raise McpError(f"MCP server {self.name} offers no resources.")
+        result = self._request("resources/read", {"uri": uri}, self.config.timeout)
+        out = []
+        for item in result.get("contents") or []:
+            if isinstance(item, dict):
+                text = item.get("text")
+                out.append({"uri": str(item.get("uri") or uri), "mimeType": str(item.get("mimeType") or ""), "text": str(text) if text is not None else f"<{len(str(item.get('blob') or ''))} bytes of binary data>"})
+        return out
 
     def _list_tools(self) -> list[RemoteTool]:
         tools: list[RemoteTool] = []

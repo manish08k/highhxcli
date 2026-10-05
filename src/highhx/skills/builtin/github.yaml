@@ -1,0 +1,19 @@
+name: github
+version: 1
+description: Work with github.com in the browser — repositories, issues and pull requests — using the profile's own sign-in.
+applies_to: {surfaces: [browser], hosts: [github.com]}
+requires: [browser]
+actions: [browser.open, browser.search, browser.click, browser.fill, browser.extract, browser.wait]
+permissions:
+  - Reading is low risk. Commenting, merging, closing or deleting are recognised as publishing/destructive controls and asked.
+  - Sign in once in a HighhX browser profile (highhx browser profiles); HighhX never reads or stores the password.
+examples:
+  - task: open a repository's open issues
+    steps:
+      - {action: open, parameters: {url: "https://github.com/OWNER/REPO/issues"}}
+      - {action: browser.extract, parameters: {schema: {type: object, properties: {issues: {type: array, items: {type: string}}}}}}
+verification:
+  - {when: open, check: {url_contains: "github.com"}}
+failure_modes:
+  - {symptom: "sign-in page shown", recovery: "ask the person to sign in in the profile, then resume"}
+  - {symptom: "rate limited (429)", recovery: "wait (browser.wait seconds) and retry once; then stop"}

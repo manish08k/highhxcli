@@ -23,6 +23,7 @@ from highhx.actions.policy import Approval, Decision, decide
 from highhx.actions.spec import ActionContext, ActionResult, ActionSpec, Inputs
 from highhx.agent.tools.base import ToolError
 from highhx.agent.tools.files import ChangeJournal
+from highhx.approvals.queue import ApprovalModifiedError
 from highhx.core.errors import (
     ApprovalDeniedError,
     HighhXError,
@@ -42,15 +43,19 @@ if TYPE_CHECKING:
     from highhx.computer.session import ComputerSession
 
 
-TYPED_INPUTS = frozenset({"text", "password", "value", "body"})
+TYPED_INPUTS = frozenset({"text", "password", "value", "body", "html"})
 """Inputs that carry text a person or agent typed: never written to events as they are."""
+URL_INPUTS = frozenset({"url", "endpoint"})
+MAX_MODIFICATIONS = 3
+"""How many times one action's inputs may be modified at its approval before it is refused."""
+"""Inputs that are URLs: events show them without query values (tokens live there)."""
 
 
 def _shown(key: str, value: Any) -> Any:
     """An input as events show it: typed text by its length, URLs without query values."""
     if key in TYPED_INPUTS and isinstance(value, str):
         return f"<{len(value)} characters>"
-    if key == "url" and isinstance(value, str) and "?" in value:
+    if key in URL_INPUTS and isinstance(value, str) and "?" in value:
         from highhx.computer.network import sanitize_url
 
         return sanitize_url(value)
@@ -246,7 +251,12 @@ class ActionExecutor:
         return self.execute(self.plan(name, inputs), cancel=cancel)
 
     def execute(
-        self, planned: Planned, *, cancel: CancellationToken | None = None, preapproved: bool = False
+        self,
+        planned: Planned,
+        *,
+        cancel: CancellationToken | None = None,
+        preapproved: bool = False,
+        _modifications: int = 0,
     ) -> ActionResult:
         """Execute a planned action. ``preapproved``: the person already approved exactly this
         previewed action (``/approve``) — honoured only for their own actions below CRITICAL,
@@ -278,6 +288,17 @@ class ActionExecutor:
         except PolicyViolationError as exc:
             self.events.emit(ev.ACTION_FAILED, action=spec.name, status="blocked", error=exc.message)
             return ActionResult(False, status="blocked", error=exc.message, summary="blocked by policy")
+        except ApprovalModifiedError as exc:
+            # the person changed the inputs instead of approving: a new plan, classified and asked again
+            self.events.emit(ev.APPROVAL_DENIED, action=spec.name, risk=decision.risk.label, modified=True)
+            if _modifications >= MAX_MODIFICATIONS:
+                return ActionResult(False, status="denied", error="modified too many times", summary="not approved")
+            try:
+                replanned = self.plan(spec.name, {**inputs, **exc.inputs})
+            except HighhXError as invalid:
+                return ActionResult(False, status="denied", error=f"the modified inputs are invalid: {invalid.message}", summary="not approved")
+            self.gate.assume_yes = assume_yes
+            return self.execute(replanned, cancel=cancel, _modifications=_modifications + 1)
         except ApprovalDeniedError as exc:
             self.events.emit(ev.APPROVAL_DENIED, action=spec.name, risk=decision.risk.label)
             return ActionResult(False, status="denied", error=exc.message, summary="not approved")
@@ -337,7 +358,22 @@ class ActionExecutor:
                 self.events.emit(ev.ACTION_COMPLETED, action=spec.name, summary=result.summary, seconds=result.seconds, execution_id=result.execution_id)
             else:
                 self.events.emit(ev.ACTION_FAILED, action=spec.name, status=result.status, error=result.error, execution_id=result.execution_id)
+            self._domain_event(spec, result)
         return result
+
+    def _domain_event(self, spec: ActionSpec, result: ActionResult) -> None:
+        """The canonical per-surface events (computer.input, android.action, sandbox.*,
+        computer.screenshot), from the action that ran — payloads carry no typed text."""
+        category, _, verb = spec.name.partition(".")
+        status = result.status if not result.ok else "ok"
+        if category == "computer" and verb in ev.INPUT_ACTIONS and result.status not in ("denied", "blocked"):
+            self.events.emit("computer.input", action=spec.name, status=status)
+        elif category == "computer" and verb == "screenshot" and result.ok:
+            self.events.emit("computer.screenshot", action=spec.name)
+        elif category == "android" and result.status not in ("denied", "blocked"):
+            self.events.emit("android.action", action=spec.name, status=status)
+        elif category == "sandbox" and result.status in ("denied", "blocked"):
+            self.events.emit("sandbox.blocked", action=spec.name, status=result.status, error=result.error[:200])
 
     def _attempts(
         self,

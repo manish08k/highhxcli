@@ -389,9 +389,12 @@ def screenshot(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     capture = run(ctx, lambda d: store.take(d, window=window, region=region, max_size=max_size))
     shot = capture.shot
     ok = shot.path.is_file() and shot.width > 0
+    from highhx.artifacts import record
+
+    artifact = record(ctx, shot.path, kind="screenshot", action="computer.screenshot") if ok else None
     return ActionResult(
         ok,
-        output={**capture.to_dict(), "window": window, "region": list(region) if region else None},
+        output={**capture.to_dict(), "window": window, "region": list(region) if region else None, "artifact": artifact},
         summary=f"{shot.width}x{shot.height} {capture.id}: {shot.path}",
         verified=ok,
     )
@@ -482,6 +485,78 @@ def window_frame(ctx: ActionContext, inputs: Inputs) -> ActionResult:
         verified=ok,
         error="" if ok else f"the window is at {frame} (the application limits its size or position)",
     )
+
+
+def _window_of(ctx: ActionContext, inputs: Inputs) -> Any:
+    if inputs.get("window") is not None:
+        wanted = int(inputs["window"])
+        found = [w for w in run(ctx, lambda d: d.windows(None)) if w.id == wanted]
+    elif inputs.get("app"):
+        found = run(ctx, lambda d: d.windows(_app_name(str(inputs["app"]))))
+    else:
+        raise ToolError("give the window id or the application")
+    if not found:
+        raise ToolError("that window is not on screen")
+    return found[0]
+
+
+def window_state(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """Maximize (the window's frame becomes the display's; the window manager keeps it clear of
+    menu bars and docks) or minimize (macOS: the application's own Window > Minimize). Both are
+    verified: the new frame covers the display / the window has left the screen."""
+    import sys
+
+    state = str(inputs["state"])
+    window = _window_of(ctx, inputs)
+    if state == "maximize":
+        screen = run(ctx, lambda d: d.screen())
+        result = run(ctx, lambda d: d.set_window_frame(window.id, screen.x, screen.y, screen.width, screen.height))
+        frame = [int(v) for v in result.get("frame") or []]
+        ok = len(frame) == 4 and frame[2] >= 0.9 * screen.width and frame[3] >= 0.75 * screen.height
+        return ActionResult(
+            ok,
+            output={"window": window.id, "app": window.app, "frame": frame},
+            summary=f"maximized {window.app}",
+            verified=ok,
+            error="" if ok else f"the window is {frame} (the application limits its size)",
+        )
+    if sys.platform != "darwin":
+        raise ToolError("minimizing is supported on macOS (the application's Window menu); not on this platform yet")
+    run(ctx, lambda d: d.invoke_menu(window.app, ["Window", "Minimize"]))
+    gone = True
+    for _ in range(10):
+        gone = all(w.id != window.id for w in run(ctx, lambda d: d.windows(window.app)))
+        if gone or ctx.cancel.wait(0.2):
+            break
+    return ActionResult(
+        gone,
+        output={"window": window.id, "app": window.app},
+        summary=f"minimized {window.app}",
+        verified=gone,
+        error="" if gone else "the window is still on screen",
+    )
+
+
+EDIT_KEYS = {"copy": "c", "cut": "x", "paste": "v", "select_all": "a", "undo": "z"}
+
+
+def edit(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """Copy, cut, paste, select all or undo with this platform's shortcut (cmd on macOS, ctrl
+    elsewhere) — through the same keyboard path as computer.hotkey (never into a terminal)."""
+    import sys
+
+    op = str(inputs["op"])
+    modifier = "cmd" if sys.platform == "darwin" else "ctrl"
+    result = hotkey(ctx, {"keys": f"{modifier}+{EDIT_KEYS[op]}", **({"app": inputs["app"]} if inputs.get("app") else {})})
+    result.output["op"] = op
+    result.summary = f"{op.replace('_', ' ')} ({result.output.get('keys')}) in {result.output.get('app')}"
+    return result
+
+
+def wait(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    seconds = float(inputs.get("seconds") or 1)
+    ctx.cancel.wait(seconds)
+    return ActionResult(True, output={"waited": seconds}, summary=f"waited {seconds:g}s")
 
 
 def clipboard_read(ctx: ActionContext, inputs: Inputs) -> ActionResult:

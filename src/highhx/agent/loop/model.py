@@ -61,14 +61,17 @@ class AgentTask:
     app: str = ""
     settle: float = 0.4
     """Seconds to wait after a UI action before observing its effect."""
+    notes: tuple[str, ...] = ()
+    """Results handed over from earlier work (another specialist's outcome): data for the planner."""
 
     def to_dict(self) -> dict[str, Any]:
-        return dict(self.__dict__) | {"allowed": list(self.allowed)}
+        return dict(self.__dict__) | {"allowed": list(self.allowed), "notes": list(self.notes)}
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentTask:
         known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         known["allowed"] = tuple(known.get("allowed") or ())
+        known["notes"] = tuple(known.get("notes") or ())
         return cls(**known)
 
     def permits(self, action: str) -> bool:

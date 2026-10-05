@@ -38,3 +38,12 @@ trajectories show`.
 
 Network evidence appears as a `Network` node in the step that caused it (count, failures, the
 first requests with status and duration; URLs without query values).
+
+## Timeline (the debugger view)
+
+```text
+highhx trace timeline TRACE_ID [--component browser|action|model|network …] [--search TEXT] [--failures] [--export json|jsonl|csv] [-o FILE]
+```
+
+Every event with its time since the start, canonical name, component, step, action, latency, result
+and error. The web console serves the same rows at `/api/timeline/TRACE_ID`.

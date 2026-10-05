@@ -250,6 +250,8 @@ ANDROID_ACTIONS = {
     "android.install": {"apk": "app.apk"},
     "android.uninstall": {"package": "com.example.app"},
     "android.emulator_stop": {"device": "emulator-5554"},
+    "android.health": {},
+    "android.emulator_reset": {"device": "emulator-5554", "avd": "Pixel_6"},
 }
 
 

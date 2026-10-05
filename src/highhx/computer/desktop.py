@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess  # nosec B404 - subprocess used with fixed argv only
@@ -26,7 +27,7 @@ from typing import Any
 
 from highhx.computer.model import Observation, UIElement
 from highhx.computer.providers import Capability
-from highhx.core.errors import IntegrationError, OperationCancelledError, ToolNotFoundError
+from highhx.core.errors import IntegrationError, OperationCancelledError, ToolNotFoundError, UsageError
 from highhx.execution.cancellation import CancellationToken
 
 KNOWN_APPS = {
@@ -377,7 +378,17 @@ class TesseractOCR:
             return Capability(self.name, False, "tesseract is not installed")
         if not self._capture_command(Path("x.png")):
             return Capability(self.name, False, "no screenshot tool found")
-        return Capability(self.name, True, "tesseract")
+        lang = ocr_language()
+        # chosen languages are checked against the installed data (the default, eng, ships with tesseract)
+        installed = installed_languages() if os.environ.get("HIGHHX_OCR_LANG") else set()
+        missing = [
+            part for part in lang.split("+") if installed and part not in installed
+        ]  # unknown list: not a reason to refuse
+        if missing:
+            return Capability(
+                self.name, False, f"tesseract has no language data for {', '.join(missing)} (install tesseract-lang)"
+            )
+        return Capability(self.name, True, f"tesseract ({lang})")
 
     @staticmethod
     def _capture_command(path: Path) -> list[str] | None:
@@ -413,15 +424,43 @@ class TesseractOCR:
         """Text lines of an existing image, with their bounds in the image's pixels."""
         if not shutil.which("tesseract"):
             raise ToolNotFoundError("tesseract", purpose="read text from an image")
-        code, tsv, err = run_cancellable(["tesseract", str(image), "-", "tsv"], timeout=120, cancel=cancel, what="OCR")
+        lang = ocr_language()
+        code, tsv, err = run_cancellable(
+            ["tesseract", str(image), "-", "-l", lang, "tsv"], timeout=120, cancel=cancel, what="OCR"
+        )
         if code != 0:
             raise IntegrationError(f"tesseract failed: {err.strip()[:200] or f'exit code {code}'}")
         return parse_tesseract_tsv(tsv)
 
 
+_LANG = re.compile(r"^[a-z][a-z_]{1,15}(\+[a-z][a-z_]{1,15}){0,5}$")
+
+
+def ocr_language() -> str:
+    """The OCR languages (``HIGHHX_OCR_LANG``, e.g. ``eng+deu``; default ``eng``), validated."""
+    value = os.environ.get("HIGHHX_OCR_LANG", "eng").strip() or "eng"
+    if not _LANG.match(value):
+        raise UsageError(f"HIGHHX_OCR_LANG={value!r} is not a tesseract language list (e.g. eng or eng+deu).")
+    return value
+
+
+def installed_languages() -> set[str]:
+    """Languages tesseract has data for (``tesseract --list-langs``; empty when it is missing)."""
+    if not shutil.which("tesseract"):
+        return set()
+    try:
+        done = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    lines = (done.stdout or done.stderr).splitlines()
+    if not lines or not lines[0].startswith("List of available languages"):
+        return set()  # not tesseract's listing: unknown
+    return {line.strip() for line in lines[1:] if line.strip() and " " not in line.strip()}
+
+
 def parse_tesseract_tsv(tsv: str) -> Observation:
     """Group OCR words into lines of text elements (role ``text``)."""
-    lines: dict[tuple[str, str, str], list[tuple[str, int, int, int, int]]] = {}
+    lines: dict[tuple[str, str, str], list[tuple[str, int, int, int, int, float]]] = {}
     for row in tsv.splitlines()[1:]:
         cols = row.split("\t")
         if len(cols) < 12 or not cols[11].strip():
@@ -433,7 +472,7 @@ def parse_tesseract_tsv(tsv: str) -> Observation:
             continue
         if conf < 50:
             continue
-        lines.setdefault((cols[2], cols[3], cols[4]), []).append((cols[11], left, top, width, height))
+        lines.setdefault((cols[2], cols[3], cols[4]), []).append((cols[11], left, top, width, height, conf))
     elements = []
     for n, words in enumerate(lines.values(), start=1):
         text = " ".join(w[0] for w in words)
@@ -441,7 +480,17 @@ def parse_tesseract_tsv(tsv: str) -> Observation:
         top = min(w[2] for w in words)
         right = max(w[1] + w[3] for w in words)
         bottom = max(w[2] + w[4] for w in words)
-        elements.append(UIElement(f"o{n}", "text", text, bounds=(left, top, right - left, bottom - top), source="ocr"))
+        confidence = sum(w[5] for w in words) / len(words)  # tesseract's own 0-100, per line
+        elements.append(
+            UIElement(
+                f"o{n}",
+                "text",
+                text,
+                bounds=(left, top, right - left, bottom - top),
+                source="ocr",
+                attributes={"confidence": f"{confidence:.0f}"},
+            )
+        )
     return Observation(
         provider="ocr", application="screen", elements=elements, text="\n".join(e.name for e in elements)
     )

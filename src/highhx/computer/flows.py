@@ -62,6 +62,7 @@ STEP_KEYS = (
     "switch_tab",
     "hover",
     "double_click",
+    "right_click",
     "drag",
     "upload",
     "download",
@@ -95,6 +96,7 @@ STEP_SCHEMAS = {
     "switch_tab": Str(min_length=1),
     "hover": Str(min_length=1),
     "double_click": Str(min_length=1),
+    "right_click": Str(min_length=1),
     "download": Str(min_length=1),
     "drag": Obj({"from": Prop(Str(min_length=1), required=True), "to": Prop(Str(min_length=1), required=True)}),
     "upload": Obj(
@@ -261,7 +263,7 @@ class FlowRunner:
         if key in PAGE_STEPS:
             argument = value if isinstance(value, str) and key in ("new_tab", "switch_tab") else None
             return rt.page_action(key, argument)
-        if key in ("hover", "double_click", "download"):
+        if key in ("hover", "double_click", "right_click", "download"):
             element = self._wait_for(Selector.parse(str(value)), timeout)
             return rt.act(f"{key}:{element}")
         if key == "drag":

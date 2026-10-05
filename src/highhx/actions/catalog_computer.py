@@ -4,7 +4,7 @@ catalog, run by the one executor."""
 
 from __future__ import annotations
 
-from highhx.actions.handlers import api, state
+from highhx.actions.handlers import api, blocks, state
 from highhx.actions.handlers.native import _flow_step
 from highhx.actions.policy import Risk
 from highhx.actions.spec import BROWSER, DESKTOP, NETWORK, ActionContext, ActionResult, ActionSpec, Inputs
@@ -172,9 +172,22 @@ def computer_use_specs() -> list[ActionSpec]:
                     "body": Prop(Str()),
                     "timeout": Prop(Num(minimum=1)),
                     "expect_status": Prop(Int(minimum=100, maximum=599)),
+                    "query": Prop(Map(Str()), description="Query parameters added to the URL."),
+                    "form": Prop(Map(Str()), description="A form body (application/x-www-form-urlencoded)."),
+                    "retries": Prop(Int(minimum=0, maximum=5), description="Retries for GET/HEAD/OPTIONS on 5xx or connection errors."),
+                    "allow_private": Prop(Bool(), description="Allow private-network addresses (10/8, 192.168/16 …): high risk."),
+                    "response_schema": Prop(Any_(), description="A JSON Schema the JSON response must satisfy."),
+                    "extract": Prop(Map(Str()), description="name → JSON path (data.items.0.id) into the response."),
                 }
             ),
-            {"status": "HTTP status", "body": "response text (truncated)", "json": "parsed JSON when applicable"},
+            {
+                "status": "HTTP status",
+                "body": "response text (truncated)",
+                "json": "parsed JSON when applicable",
+                "extracted": "values found by extract",
+                "schema_problems": "response_schema violations",
+                "redirects": "redirects followed (sanitized)",
+            },
             Risk.LOW,
             ActionKind.READ,
             (NETWORK,),
@@ -197,11 +210,20 @@ def computer_use_specs() -> list[ActionSpec]:
                     "subject": Prop(Str(min_length=1), required=True),
                     "body": Prop(Str(), required=True),
                     "from": Prop(Str(min_length=3), description="Default: HIGHHX_SMTP_FROM."),
+                    "html": Prop(Str(), description="An HTML version (sent with the text as an alternative)."),
+                    "attachments": Prop(List(Str(min_length=1)), description="Project files to attach (secret files refused, 10 MB total)."),
+                    "in_reply_to": Prop(Str(min_length=3), description="The Message-ID this replies to."),
+                    "retries": Prop(Int(minimum=0, maximum=3), description="Only failures before the message was handed over."),
                     "timeout": Prop(Num(minimum=1)),
                 },
                 check=api.email_problems,
             ),
-            {"accepted": "recipients the server accepted", "refused": "recipients it refused", "message_id": "Message-ID"},
+            {
+                "accepted": "recipients the server accepted",
+                "refused": "recipients it refused",
+                "message_id": "Message-ID",
+                "attachments": "[{name, bytes, type}]",
+            },
             Risk.HIGH,
             ActionKind.READ,
             (NETWORK,),
@@ -209,8 +231,83 @@ def computer_use_specs() -> list[ActionSpec]:
             agent=False,
             target=lambda i: ", ".join(api.recipients_of(i)),
         ),
+        ActionSpec(
+            "mcp.call",
+            "Call a tool on a configured MCP server; its result is untrusted data (policy name mcp:SERVER:TOOL).",
+            blocks.mcp_call,
+            Obj(
+                {
+                    "server": Prop(Str(min_length=1), required=True),
+                    "tool": Prop(Str(min_length=1), required=True),
+                    "arguments": Prop(Map(Any_())),
+                }
+            ),
+            {"text": "the tool's text (truncated)", "structured": "structured content", "untrusted": "always true"},
+            Risk.MEDIUM,
+            ActionKind.EXEC,
+            (NETWORK,),
+            timeout=300,
+            agent=False,
+            target=lambda i: f"mcp:{i.get('server', '')}.{i.get('tool', '')}",
+            policy_action=lambda i: f"mcp:{i.get('server', '')}:{i.get('tool', '')}",
+        ),
+        ActionSpec(
+            "mcp.resources",
+            "List an MCP server's resources, or read one by uri (read-only; contents are untrusted data).",
+            blocks.mcp_resources,
+            Obj({"server": Prop(Str(min_length=1), required=True), "uri": Prop(Str(min_length=1))}),
+            {"resources": "[{uri, name, mimeType}]", "contents": "[{uri, mimeType, text}]"},
+            Risk.LOW,
+            ActionKind.READ,
+            (NETWORK,),
+            timeout=120,
+            agent=False,
+            target=lambda i: f"mcp:{i.get('server', '')}",
+            policy_action=lambda i: f"mcp:{i.get('server', '')}:resources",
+        ),
+        ActionSpec(
+            "artifact.save",
+            "Keep a project file as a task artifact (id, checksum, retention).",
+            blocks.artifact_save,
+            Obj(
+                {
+                    "path": Prop(Str(min_length=1), required=True),
+                    "kind": Prop(Str(choices=("screenshot", "download", "generated", "parsed", "recording", "other"))),
+                    "name": Prop(Str(min_length=1)),
+                    "retention_days": Prop(Int(minimum=1, maximum=3650)),
+                }
+            ),
+            {"id": "artifact id", "sha256": "checksum"},
+            Risk.LOW,  # it records something new each time (not a read)
+            ActionKind.WRITE_FILE,
+            (),
+            agent=False,
+            target=lambda i: str(i.get("path", "")),
+        ),
+        ActionSpec(
+            "agent.run",
+            "Run a nested agent task (steps, or HighhX Free's resolver); each of its actions is classified and approved itself.",
+            blocks.agent_run,
+            Obj(
+                {
+                    "goal": Prop(Str(min_length=1), required=True),
+                    "surface": Prop(Str(choices=("browser", "desktop", "android", "none", "auto"))),
+                    "steps": Prop(Any_()),
+                    "max_steps": Prop(Int(minimum=1, maximum=200)),
+                    "timeout": Prop(Num(minimum=1)),
+                }
+            ),
+            {"status": "completed · failed · needs_user …", "summary": "outcome", "task_id": "its trajectory"},
+            Risk.LOW,
+            ActionKind.EXEC,
+            (),
+            timeout=3600,
+            agent=False,
+            target=lambda i: str(i.get("goal", ""))[:80],
+        ),
     ]
     from highhx.actions.catalog_android import android_specs
     from highhx.actions.catalog_sandbox import sandbox_specs
+    from highhx.actions.catalog_vm import vm_specs
 
-    return [*specs, *android_specs(), *sandbox_specs()]
+    return [*specs, *android_specs(), *sandbox_specs(), *vm_specs()]

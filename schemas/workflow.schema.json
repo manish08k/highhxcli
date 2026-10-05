@@ -170,39 +170,15 @@
                 },
                 {
                   "type": "array",
-                  "items": {
-                    "oneOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "boolean"
-                      }
-                    ]
-                  }
+                  "items": {}
                 },
                 {
                   "type": "object",
-                  "additionalProperties": {
-                    "oneOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "boolean"
-                      }
-                    ]
-                  }
+                  "additionalProperties": {}
                 }
               ]
             },
-            "description": "Inputs for 'uses' (workflow inputs) or 'action' (action inputs)"
+            "description": "Inputs for 'uses' (workflow inputs) or 'action' (action inputs; each action validates its own)"
           },
           "rollback": {
             "oneOf": [
@@ -450,6 +426,90 @@
             "type": "object",
             "additionalProperties": {},
             "description": "A declarative check after the step succeeds (file, text, exit_code, network \u2026)"
+          },
+          "while": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Repeat the step while this condition holds (checked before each run)"
+          },
+          "max_iterations": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "description": "Bound for while (default 100)"
+          },
+          "choose": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "minItems": 1,
+            "description": "if / elif / else branches; the first that holds runs"
+          },
+          "wait": {
+            "oneOf": [
+              {
+                "oneOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^\\d+(\\.\\d+)?\\s*(ms|s|m|h|d)?$"
+                  }
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "until": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "interval": {
+                    "oneOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\d+(\\.\\d+)?\\s*(ms|s|m|h|d)?$"
+                      }
+                    ]
+                  },
+                  "timeout": {
+                    "oneOf": [
+                      {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\d+(\\.\\d+)?\\s*(ms|s|m|h|d)?$"
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "until"
+                ]
+              }
+            ],
+            "description": "Wait a duration, or until a condition holds"
+          },
+          "handoff": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Hand over to a person with this message; continue when they confirm"
+          },
+          "set": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Compute outputs from expressions (a transform; runs nothing)"
           }
         },
         "additionalProperties": false,

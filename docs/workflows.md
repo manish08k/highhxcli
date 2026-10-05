@@ -147,3 +147,16 @@ highhx workflow graph ci                  # stages (parallel groups)
 highhx workflow graph ci --format dot     # Graphviz
 highhx workflow graph ci --format mermaid
 ```
+
+## Control blocks (October 2026 phase)
+
+- **`while: EXPR`** with `max_iterations` (default 100, at most 1000): repeats the step while the
+  condition holds; `${{ loop.index }}` and the previous run's `${{ loop.outputs.KEY }}` are available.
+- **`choose:`** a list of branches `{if: …}` / `{elif: …}` / `{else: true}`, each with one body
+  (`action`, `run` or `uses`, plus `with`, `verify`, `env`); the first that holds runs; output `branch`.
+- **`wait:`** a duration (`30s`), or `{until: EXPR, interval, timeout}` (e.g. `exists('report.pdf')`).
+- **`handoff: MESSAGE`**: a person must act and confirm; never pre-approved by `--yes`.
+- **`set: {key: EXPR}`**: compute outputs (a transform; runs nothing).
+- Action blocks: `agent.run` (a nested agent task; each of its actions gated), `artifact.save`,
+  `mcp.call`, `mcp.resources`; `api.request` gained `query`, `form`, `retries`, `extract`,
+  `response_schema`, `allow_private`; `email.send` gained `html`, `attachments`, `in_reply_to`, `retries`.

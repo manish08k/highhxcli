@@ -101,7 +101,31 @@ def _step(data: dict[str, Any]) -> StepSpec:
         shell=data.get("shell"),  # nosec B604 - parses the user's workflow `shell` setting; no execution here
         for_each=data.get("for_each"),
         verify=dict(data["verify"]) if isinstance(data.get("verify"), dict) else None,
+        while_=str(data["while"]) if data.get("while") is not None else None,
+        max_iterations=int(data.get("max_iterations") or 100),
+        choose=[dict(b) for b in data["choose"]] if isinstance(data.get("choose"), list) else None,
+        wait=_wait(data.get("wait")),
+        handoff=str(data["handoff"]) if data.get("handoff") is not None else None,
+        set_=dict(data["set"]) if isinstance(data.get("set"), dict) else None,
     )
+
+
+def _wait(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return {
+            "until": str(value["until"]),
+            "interval": parse_duration(value.get("interval")) or 1.0,
+            "timeout": parse_duration(value.get("timeout")) or 300.0,
+        }
+    return parse_duration(value)
+
+
+def branch_step(step_id: str, branch: dict[str, Any]) -> StepSpec:
+    """A choose branch as a step body (its action/run/uses, with, verify and env)."""
+    body = {k: v for k, v in branch.items() if k not in ("if", "elif", "else")}
+    return _step({**body, "id": step_id})
 
 
 def parse_workflow(data: Any, *, source: Path | None = None, key: str | None = None) -> WorkflowSpec:

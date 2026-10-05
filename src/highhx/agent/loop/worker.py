@@ -272,7 +272,9 @@ class AgentWorker:
             if where is None:
                 raise UnsupportedStep("the target has no position")
             x, y = where
-        if button == "right":  # a context menu: by position (Android's equivalent is a long press)
+        if button == "right":  # a context menu (Android's equivalent is a long press)
+            if surface == "browser" and element is not None and set(element.sources) & STRUCTURED_SOURCES and state is not None:
+                return self._request("browser.right_click", {"target": _browser_selector(element, state)}, step, grounding)
             if surface == "android":
                 return self._request("android.long_press", {"x": x, "y": y, **self._device(surface)}, step, grounding)
             name = "browser.click_at" if surface == "browser" else "computer.click_at"

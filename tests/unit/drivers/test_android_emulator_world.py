@@ -202,3 +202,42 @@ def test_a_real_device_task_runs_and_is_scored_by_the_device(monkeypatch: pytest
     assert not by_id["claims-but-fails"].success  # the agent finished its script; the device says no
     assert any(call[-4:] == ["monkey", "-p", SETTINGS, "-c"] or SETTINGS in " ".join(call) for call in device.calls)
     assert result.environment["capabilities"]  # where it ran is recorded with the result
+
+
+def test_device_health_is_read_not_guessed() -> None:
+    device = FakeDevice()
+    adb = AdbClient("adb", serial=device.serial, runner=device)
+    report = adb.health()
+    assert report == {
+        "serial": device.serial,
+        "booted": True,
+        "android": "14",
+        "model": "Pixel 8",
+        "battery": 80,
+        "screen_on": True,
+        "free_storage": "3800000",
+        "healthy": True,
+        "problems": [],
+    }
+    device.battery, device.screen_on = 5, False
+    sick = adb.health()
+    assert not sick["healthy"] and sick["problems"] == ["battery at 5%", "screen is off"]
+
+
+def test_emulator_reset_wipes_and_restarts(tmp_path: Path) -> None:
+    sdk = FakeSDK()
+    emu = emulator(sdk)
+    emu.start("AndroidWorldAvd", log=tmp_path / "e.log", timeout=5)
+    sdk.started.clear()
+    sdk.boot_polls = 0
+    original_devices = sdk.__call__
+
+    def after_kill(argv: list[str], timeout: float, cancel: Any) -> tuple[int, bytes, bytes]:
+        if argv[1:] == ["-s", "emulator-5554", "emu", "kill"]:
+            sdk.started.clear()  # the emulator is gone until it is started again
+        return original_devices(argv, timeout, cancel)
+
+    emu.runner = after_kill
+    emu.adb = AdbClient("adb", runner=after_kill)
+    started = emu.reset("emulator-5554", "AndroidWorldAvd", log=tmp_path / "e.log", timeout=5)
+    assert started["serial"] == "emulator-5554" and "-wipe-data" in sdk.started[-1]

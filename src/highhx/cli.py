@@ -17,7 +17,7 @@ from highhx.core.lifecycle import Lifecycle
 SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Interactive session & AI agent (HighhX Pro)", ("agent", "voice")),
     ("Automation (no AI)", ("do", "computer")),
-    ("Computer use", ("tui", "browser", "android", "sandbox", "replay", "trajectories")),
+    ("Computer use", ("tui", "browser", "android", "sandbox", "replay", "trajectories", "skills", "vm")),
     ("Account", ("login", "logout", "account")),
     ("Project", ("init", "status", "info", "dev", "start", "stop", "restart", "check")),
     ("Code & tasks", ("run", "exec", "script", "task", "watch", "fix")),
@@ -31,7 +31,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Workflows & automation", ("workflow", "actions", "schedule", "hook", "trigger", "watchers")),
     ("Observability", ("logs", "history", "events", "audit", "report", "trace", "runs")),
     ("Extensibility & team", ("plugin", "mcp", "config", "policy", "workspace", "profile")),
-    ("Diagnostics", ("doctor", "capabilities", "diagnose", "repair", "debug")),
+    ("Diagnostics", ("doctor", "capabilities", "web", "diagnose", "repair", "debug")),
 )
 
 GLOBAL_EPILOG = (

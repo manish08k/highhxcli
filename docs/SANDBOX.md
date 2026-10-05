@@ -64,3 +64,9 @@ have not been exercised in this build's environment (neither is installed here):
 `LocalRuntime` (this computer), `SandboxRuntime`, `RemoteRuntime` (another computer over SSH:
 keys only, host keys checked). `VMRuntime` and `CloudRuntime` are **not implemented** and raise
 a capability error naming the alternatives. See [COMPUTER_RUNTIME.md](COMPUTER_RUNTIME.md).
+
+## Virtual machines
+
+Whole isolated computers (Lima, Tart) are managed with `highhx vm`; see
+[REMOTE_COMPUTER.md](REMOTE_COMPUTER.md#virtual-machines-lima-tart). Status: implemented, tested
+through fake command lines; pending real validation.

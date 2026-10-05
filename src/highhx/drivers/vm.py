@@ -1,17 +1,26 @@
-"""VMDriver: virtual machines are not implemented in this build.
+"""VMDriver: a virtual machine's desktop.
 
-The interface is here so a backend (a local hypervisor, a cloud desktop API, a Cua-style
-container computer) can be added behind ComputerDriver without touching the agent loop. Until
-then, every use is a clear :class:`~highhx.drivers.base.CapabilityError`. HighhX does not
-pretend to have a VM. For isolation today, use ``highhx sandbox`` (process and filesystem
-sandboxes) or a remote computer over SSH (``RemoteDriver``).
+VMs themselves are managed by :mod:`highhx.runtimes.vm` (Lima or Tart: create, start, pause,
+snapshot, restore, exec). Their desktop is operated by HighhX running *inside* the VM, reached
+as a remote computer over SSH — so this driver is the remote driver for that target. Without a
+backend, or without HighhX in the VM, every use is a clear capability error.
 """
 
 from __future__ import annotations
 
 from highhx.drivers.base import CapabilityError, DriverCapabilities, unsupported
 
-DETAIL = "no virtual-machine backend is implemented in this build (use `highhx sandbox` or an ssh:// computer)"
+
+def _detail() -> str:
+    from highhx.runtimes.vm import available_vm_backends
+
+    found = [n for n, c in available_vm_backends().items() if c.available]
+    if found:
+        return f"VM backends: {', '.join(found)}; a VM's desktop needs HighhX inside it (ssh://)"
+    return "no VM backend installed (lima or tart); use `highhx sandbox` or an ssh:// computer"
+
+
+DETAIL = "VMs through lima or tart (see `highhx vm`); a VM's desktop needs HighhX inside it (ssh://)"
 
 
 class VMDriver:
@@ -20,10 +29,10 @@ class VMDriver:
 
     def __init__(self, spec: str = "") -> None:
         raise CapabilityError(
-            "Virtual machines are not supported yet.",
-            hint="Use `highhx sandbox create` for an isolated workspace, or HIGHHX_COMPUTER_TARGET=ssh://… for another computer.",
+            "A VM's desktop is operated through HighhX running inside the VM.",
+            hint="Create and start it with `highhx vm`, install HighhX there, then use HIGHHX_COMPUTER_TARGET=ssh://… .",
         )
 
     @staticmethod
     def capabilities() -> DriverCapabilities:
-        return DriverCapabilities("vm", "desktop", unsupported("vm", DETAIL))
+        return DriverCapabilities("vm", "desktop", unsupported("vm", _detail()))

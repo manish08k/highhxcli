@@ -76,6 +76,12 @@ CHECKPOINT_RESUMED = "checkpoint.resumed"
 TASK_STARTED = "task.started"
 TASK_COMPLETED = "task.completed"
 TASK_FAILED = "task.failed"
+TASK_PAUSED = "task.paused"
+TASK_RESUMED = "task.resumed"
+TASK_CANCELLED = "task.cancelled"
+MODEL_REQUEST = "model.request"
+MODEL_RESPONSE = "model.response"
+MODEL_ERROR = "model.error"
 VERIFICATION_FAILED = "verification.failed"
 SELECTOR_HEALED = "selector.healed"
 TOOL_STARTED = "tool.started"
@@ -268,3 +274,66 @@ def read_events(
 
 def iter_names() -> Iterator[str]:
     yield from EVENT_NAMES
+
+
+# ------------------------------------------------------------- canonical names
+CANONICAL = {
+    "agent.planning": "planning.started",
+    "plan.created": "planning.completed",
+    "approval.requested": "approval.required",
+    "action.retry": "retry.started",
+    "action.planned": "action.proposed",
+    "computer.model.request": "model.request",
+    "computer.model.response": "model.response",
+    "sandbox.created": "sandbox.started",
+    "sandbox.exec": "sandbox.completed",
+}
+"""Older names → the canonical vocabulary (docs/EVENTS.md). Both are the same event: records carry
+``canonical`` so every consumer (web console, traces, exports) can filter on one vocabulary."""
+
+
+def canonical(name: str) -> str:
+    return CANONICAL.get(name, name)
+
+
+BROWSER_JOURNAL = {
+    "connected": "browser.started",
+    "browser_gone": "browser.crash",
+    "page_crashed": "browser.crash",
+    "browser_hung": "browser.crash",
+    "connection_lost": "browser.connection_lost",
+    "no_answer": "browser.connection_lost",
+    "recovered": "browser.recovered",
+    "navigation_confirmed": "browser.navigation",
+    "navigation_failed": "browser.navigation",
+    "site_timeout": "browser.navigation",
+    "tab_created": "browser.tab",
+    "tab_switched": "browser.tab",
+    "tab_closed": "browser.tab",
+    "page_closed": "browser.tab",
+    "download_started": "browser.download",
+    "download_completed": "browser.download",
+    "download_canceled": "browser.download",
+}
+"""What the browser went through (its journal), as bus events."""
+
+INPUT_ACTIONS = frozenset(
+    {
+        "click",
+        "click_at",
+        "type",
+        "press",
+        "hotkey",
+        "scroll",
+        "drag",
+        "move",
+        "mouse_button",
+        "edit",
+        "menu",
+        "window",
+        "window_state",
+        "focus",
+        "launch",
+        "quit",
+    }
+)

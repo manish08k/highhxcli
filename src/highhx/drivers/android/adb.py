@@ -260,6 +260,37 @@ class AdbClient:
             raise UsageError(f"Invalid property name {name!r}.")
         return self.shell("getprop", name).strip()
 
+    def health(self) -> dict[str, Any]:
+        """Is the device usable: booted, battery, screen on, free storage, model and Android version.
+        Read-only (getprop, dumpsys, df); values it cannot read are left out, never guessed."""
+        out: dict[str, Any] = {"serial": self.serial or ""}
+        out["booted"] = self.getprop("sys.boot_completed") == "1"
+        out["android"] = self.getprop("ro.build.version.release")
+        out["model"] = self.getprop("ro.product.model")
+        battery = self.shell("dumpsys", "battery")
+        level = re.search(r"level:\s*(\d+)", battery)
+        if level:
+            out["battery"] = int(level.group(1))
+        power = self.shell("dumpsys", "power")
+        awake = re.search(r"mWakefulness=(\w+)|Display Power: state=(\w+)", power)
+        if awake:
+            out["screen_on"] = (awake.group(1) or awake.group(2) or "").lower() in ("awake", "on")
+        storage = self.shell("df", "/data").splitlines()
+        if len(storage) >= 2:
+            fields = storage[-1].split()
+            if len(fields) >= 4 and fields[3].rstrip("KMGT%").isdigit():
+                out["free_storage"] = fields[3]
+        problems = []
+        if not out["booted"]:
+            problems.append("not finished booting")
+        if isinstance(out.get("battery"), int) and out["battery"] < 10:
+            problems.append(f"battery at {out['battery']}%")
+        if out.get("screen_on") is False:
+            problems.append("screen is off")
+        out["healthy"] = not problems
+        out["problems"] = problems
+        return out
+
     def current_app(self) -> tuple[str, str]:
         """The focused package and activity (empty when unknown)."""
         text = self.shell("dumpsys", "window")

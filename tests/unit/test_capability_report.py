@@ -29,12 +29,16 @@ def test_nothing_installed(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(var, raising=False)
     entries = by_name(caps.capability_report())
     assert entries["browser/automation (DOM + accessibility, CDP)"].status == caps.UNAVAILABLE
-    assert entries["browser/network evidence"].status == caps.UNAVAILABLE
+    assert entries["browser/network evidence and network waits"].status == caps.UNAVAILABLE
+    assert entries["browser/live viewing (screencast)"].status == caps.UNAVAILABLE
     android = entries["android/devices over adb"]
     assert android.status == caps.UNAVAILABLE and android.experimental and "adb" in android.detail
     assert entries["perception/OCR"].status == caps.UNAVAILABLE and "tesseract" in entries["perception/OCR"].detail
     assert entries["sandbox/docker"].status == caps.UNAVAILABLE and entries["sandbox/docker"].experimental
-    assert entries["sandbox/virtual machines / isolated desktop"].status == caps.NOT_IMPLEMENTED
+    for backend in ("lima", "tart"):
+        vm = entries[f"vm/virtual machines ({backend})"]
+        assert vm.status == caps.UNAVAILABLE and vm.experimental and "not installed" in vm.detail
+    assert entries["models/Ollama"].status == caps.UNAVAILABLE
     assert entries["remote/remote computer (ssh://, keys only)"].status == caps.UNAVAILABLE
     assert entries["models/local planner model (OpenAI-compatible)"].status == caps.NOT_CONFIGURED
     assert entries["workflows/e-mail (email.send)"].status == caps.NOT_CONFIGURED

@@ -1,0 +1,18 @@
+name: terminal
+version: 1
+description: Run commands as actions (shell.run, sandbox.exec) — never by typing into a terminal window.
+applies_to: {surfaces: [none, desktop], apps: [Terminal, iTerm2, Ghostty]}
+requires: []
+actions: [shell.run, sandbox.create, sandbox.exec, sandbox.patch]
+permissions:
+  - Every command is classified (rm -rf, force pushes, production deploys are high or critical) and asked accordingly.
+  - Untrusted code runs in a sandbox (sandbox.exec): no network, writes only inside the workspace.
+examples:
+  - task: run the tests
+    steps:
+      - {action: shell.run, parameters: {command: "pytest -q"}}
+verification:
+  - {when: run, check: {exit_code: 0}}
+failure_modes:
+  - {symptom: "keys refused in a terminal window", recovery: "that is by design: use shell.run"}
+  - {symptom: "command not found", recovery: "check with `highhx doctor`; install it yourself"}

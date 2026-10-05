@@ -32,8 +32,10 @@ def all_commands() -> list[click.Command]:
     from highhx.commands.computer_use.browser import browser
     from highhx.commands.computer_use.replay import replay
     from highhx.commands.computer_use.sandbox import sandbox
+    from highhx.commands.computer_use.skills import skills
     from highhx.commands.computer_use.trajectories import trajectories
     from highhx.commands.computer_use.tui import tui
+    from highhx.commands.computer_use.vm import vm
     from highhx.commands.database.main import db
     from highhx.commands.dependencies.main import deps
     from highhx.commands.deployment.deploy import deploy
@@ -45,6 +47,7 @@ def all_commands() -> list[click.Command]:
     from highhx.commands.diagnostics.repair import repair
     from highhx.commands.diagnostics.runs import runs
     from highhx.commands.diagnostics.trace import trace
+    from highhx.commands.diagnostics.web import web
     from highhx.commands.docker.main import docker
     from highhx.commands.environment.main import env
     from highhx.commands.git.main import git
@@ -89,6 +92,7 @@ def all_commands() -> list[click.Command]:
         check,
         doctor,
         capabilities,
+        web,
         run,
         exec_command,
         script,
@@ -145,6 +149,8 @@ def all_commands() -> list[click.Command]:
         sandbox,
         replay,
         trajectories,
+        skills,
+        vm,
         tui,
         audit,
         login,

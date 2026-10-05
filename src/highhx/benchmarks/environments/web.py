@@ -137,6 +137,9 @@ class FakeWebApp:
         elif spec["name"] == "Delete account":
             self.state["deleted"] = True
 
+    def right_click(self, element_id: str, *, cancel: Any = None) -> None:
+        self.log.append(("right_click", self._spec(element_id)["name"]))
+
     def type_text(self, element_id: str, text: str, *, cancel: Any = None) -> None:
         spec = self._spec(element_id)
         self.log.append(("type", (spec["name"], text)))

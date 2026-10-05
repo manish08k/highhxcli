@@ -34,3 +34,10 @@ highhx mcp tools [SERVER]
 
 Configured servers are mounted for the HighhX Pro agent; their tools go through the agent's
 permission layer.
+
+## MCP in workflows (October 2026 phase)
+
+- `mcp.call {server, tool, arguments}`: one tool call through the executor (medium risk, policy name
+  `mcp:SERVER:TOOL`, so `policies.yaml` can deny a tool). Results are marked untrusted data; events
+  `tool.started`, `tool.completed`, `tool.failed`.
+- `mcp.resources {server[, uri]}`: list a server's resources or read one (read-only, untrusted).

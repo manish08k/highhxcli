@@ -211,6 +211,10 @@ def aggregate_diagnostics(runs: list[RunMetrics]) -> dict[str, Any]:
     attempts: dict[str, int] = {}
     steps: list[float] = []
     actions: list[float] = []
+    model: list[float] = []
+    grounding: list[float] = []
+    verification: list[float] = []
+    recoveries = 0
     confidences: list[float] = []
     for run in runs:
         d = run.diagnostics or {}
@@ -224,6 +228,11 @@ def aggregate_diagnostics(runs: list[RunMetrics]) -> dict[str, Any]:
             attempts[n] = attempts.get(n, 0) + int(count)
         steps += [float(v) for v in d.get("step_seconds") or []]
         actions += [float(v) for v in d.get("action_seconds") or []]
+        if d.get("model_latency_measured"):
+            model += [float(v) for v in d.get("planning_seconds") or []]
+        grounding += [float(v) for v in d.get("grounding_seconds") or []]
+        verification += [float(v) for v in d.get("verification_seconds") or []]
+        recoveries += int(d.get("recoveries") or 0)
         if d.get("grounding_confidence") is not None:
             confidences.append(float(d["grounding_confidence"]))
     return {
@@ -233,6 +242,10 @@ def aggregate_diagnostics(runs: list[RunMetrics]) -> dict[str, Any]:
         },
         "step_latency": latency(steps),
         "action_latency": latency(actions),
+        "model_latency": latency(model),
+        "grounding_latency": latency(grounding),
+        "verification_latency": latency(verification),
+        "recoveries": recoveries,
         "attempts_per_intent": dict(sorted(attempts.items(), key=lambda kv: int(kv[0]))),
         "failure_categories": dict(sorted(failures.items())),
         "grounding_confidence": _mean(confidences),

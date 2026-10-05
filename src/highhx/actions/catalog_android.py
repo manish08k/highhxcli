@@ -69,6 +69,17 @@ def android_specs() -> list[ActionSpec]:
             timeout=1900,
             outputs={"serial": "the emulator's adb serial", "pid": "emulator process", "log": "its log file"},
         ),
+        _spec("android.health", "Is the device usable: booted, battery, screen, free storage, model, Android version (read-only).", android.health, Obj({"device": DEVICE}), Risk.SAFE, ActionKind.READ, idempotent=True),
+        _spec(
+            "android.emulator_reset",
+            "Factory-reset an emulator: stop it and start its AVD again with all data wiped (always asked).",
+            android.emulator_reset,
+            Obj({"device": Prop(Str(min_length=1), required=True), "avd": Prop(Str(min_length=1), required=True), "timeout": Prop(Int(minimum=10, maximum=1800))}),
+            Risk.HIGH,
+            ActionKind.DELETE_FILE,
+            target=lambda i: f"{i.get('device', '')} ({i.get('avd', '')})",
+            timeout=1900,
+        ),
         _spec(
             "android.emulator_stop",
             "Stop a running emulator (adb emu kill).",

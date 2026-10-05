@@ -85,9 +85,23 @@ class SubTask:
     specialist: str
     goal: str
     success: dict[str, Any] | list[Any] | None = None
+    id: str = field(default_factory=lambda: new_id("sub"))
+    """Ownership: which delegated piece of work this is (its trajectory records the specialist)."""
 
     def to_dict(self) -> dict[str, Any]:
-        return {"specialist": self.specialist, "goal": self.goal, "success": self.success}
+        return {"id": self.id, "specialist": self.specialist, "goal": self.goal, "success": self.success}
+
+
+@dataclass
+class Budget:
+    """Limits for everything the specialists do together; each sub-task gets what is left."""
+
+    steps: int = 100
+    seconds: float = 1800.0
+    tokens: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"steps": self.steps, "seconds": self.seconds, "tokens": self.tokens}
 
 
 @dataclass
@@ -101,12 +115,29 @@ class SupervisedResult:
     def ok(self) -> bool:
         return self.status == Status.COMPLETED
 
+    used: dict[str, Any] = field(default_factory=dict)
+
+    def aggregate(self) -> dict[str, dict[str, Any]]:
+        """Per specialist: sub-tasks, steps, tokens and seconds spent, and how they ended."""
+        out: dict[str, dict[str, Any]] = {}
+        for sub, outcome in self.results:
+            entry = out.setdefault(sub.specialist, {"subtasks": 0, "steps": 0, "tokens": 0, "seconds": 0.0, "statuses": []})
+            m = outcome.metrics
+            entry["subtasks"] += 1
+            entry["steps"] += int(m.get("steps") or 0)
+            entry["tokens"] += int(m.get("tokens_in") or 0) + int(m.get("tokens_out") or 0)
+            entry["seconds"] = round(entry["seconds"] + float(m.get("seconds") or 0.0), 3)
+            entry["statuses"].append(str(outcome.status))
+        return out
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": str(self.status),
             "summary": self.summary,
             "trace_id": self.trace_id,
             "subtasks": [{**s.to_dict(), **r.to_dict()} for s, r in self.results],
+            "by_specialist": self.aggregate(),
+            "used": self.used,
         }
 
 
@@ -186,23 +217,50 @@ class SupervisorAgent:
     def needed(self, goal: str) -> bool:
         return self.router.needs_specialists(goal)
 
-    def run(self, task: AgentTask, subtasks: Sequence[SubTask] | None = None) -> SupervisedResult:
+    def run(self, task: AgentTask, subtasks: Sequence[SubTask] | None = None, *, budget: Budget | None = None) -> SupervisedResult:
+        import time
+
         trace_id = new_id("tr")
         plan = list(subtasks or self.splitter.split(task.goal))
+        budget = budget or Budget(steps=task.max_steps * max(1, len(plan)), seconds=task.timeout)
         result = SupervisedResult(Status.RUNNING, "", trace_id=trace_id)
+        started = time.monotonic()
+        steps_used = tokens_used = 0
+        handed_over: list[str] = []
+        cancel = self.executor.app.ctx.cancel
         with trace_context(trace_id=trace_id, source="supervisor"):
-            self.executor.events.emit("plan.created", steps=[f"{s.specialist}: {s.goal}" for s in plan], planner="supervisor")
+            self.executor.events.emit("plan.created", steps=[f"{s.specialist}: {s.goal}" for s in plan], planner="supervisor", budget=budget.to_dict())
             for sub in plan:
+                left_seconds = budget.seconds - (time.monotonic() - started)
+                left_steps = budget.steps - steps_used
+                over_tokens = budget.tokens is not None and tokens_used >= budget.tokens
+                if cancel.cancelled:
+                    result.status, result.summary = Status.CANCELLED, f"cancelled before {sub.specialist}: {sub.goal!r}"
+                    break
+                if left_seconds <= 0 or left_steps <= 0 or over_tokens:
+                    which = "time" if left_seconds <= 0 else "steps" if left_steps <= 0 else "tokens"
+                    result.status, result.summary = Status.FAILED, f"the {which} budget ran out before {sub.specialist}: {sub.goal!r}"
+                    break
                 specialist = SPECIALISTS[sub.specialist]
                 loop = AgentLoop(self.executor, self.planner_for(specialist, sub.goal), store=self.store, router=self.router, agent=f"{specialist.name}-agent")
                 child = specialist.task(sub.goal, task)
                 child.success = sub.success
+                child.max_steps = max(1, min(child.max_steps, left_steps))
+                child.timeout = max(1.0, min(child.timeout, left_seconds))
+                child.notes = tuple(handed_over[-3:])  # earlier results, as data: the specialist's context is its own
+                self.executor.events.emit("agent.delegated", subtask=sub.id, specialist=specialist.name, goal=sub.goal, steps=child.max_steps, seconds=round(child.timeout, 1))
                 outcome = loop.run(child)
                 result.results.append((sub, outcome))
+                steps_used += int(outcome.metrics.get("steps") or 0)
+                tokens_used += int(outcome.metrics.get("tokens_in") or 0) + int(outcome.metrics.get("tokens_out") or 0)
+                handed_over.append(f"{specialist.name} ({sub.id}) {outcome.status}: {outcome.summary}"[:300])
                 if not outcome.ok:
                     result.status = Status.NEEDS_USER if outcome.status == Status.NEEDS_USER else Status.FAILED
                     result.summary = f"{specialist.name} could not finish {sub.goal!r}: {outcome.summary}"
-                    return result
+                    break
+            result.used = {"steps": steps_used, "tokens": tokens_used, "seconds": round(time.monotonic() - started, 3)}
+            if result.status != Status.RUNNING:
+                return result
             surface = task.surface if task.surface != "auto" else self.router.surface(task.goal)
             verdict, detail = VerifierAgent(self.executor).check(task.success, surface)
             if verdict == Verdict.SATISFIED:

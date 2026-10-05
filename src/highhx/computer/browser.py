@@ -543,8 +543,32 @@ class ChromeBrowser:
         self.state = BrowserState.STOPPED
         if state is None:
             return self._stop_unresponsive()
-        _terminate(int(state["pid"]))
+        if not self._close_gracefully(state):
+            _terminate(int(state["pid"]))
         return True
+
+    def _close_gracefully(self, state: dict[str, Any], timeout: float = 10.0) -> bool:
+        """Ask the browser to quit (``Browser.close``): it writes cookies, storage and preferences to
+        the profile first. A signal can lose a sign-in made seconds before. False: it did not exit."""
+        pid = int(state.get("pid") or 0)
+        try:
+            version = self._devtools(int(state["port"]), "/json/version") or {}
+            conn = CDPConnection(str(version["webSocketDebuggerUrl"]))
+        except (OSError, ValueError, KeyError, IntegrationError):
+            return False
+        try:
+            with contextlib.suppress(Exception):  # the connection drops as the browser exits
+                conn.call("Browser.close", timeout=5)
+        finally:
+            conn.close()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with contextlib.suppress(ChildProcessError, OSError):
+                os.waitpid(pid, os.WNOHANG)  # reap it when it is our child
+            if not _alive(pid):
+                return True
+            time.sleep(0.1)
+        return False
 
     def _stop_unresponsive(self) -> bool:
         """A browser HighhX started that is still running but no longer answers DevTools (hung,
@@ -1562,6 +1586,19 @@ class ChromeBrowser:
 
         self._run(f"double-click {element_id}", Retry.UNSAFE, double, cancel)
 
+    def right_click(self, element_id: str, *, cancel: CancellationToken | None = None) -> None:
+        """A right-button click on the element (the page's ``contextmenu`` handler, or the browser's
+        context menu, which DevTools closes with Escape like any native menu)."""
+        x, y = self._center(element_id, cancel)
+        self._before_action(cancel)
+
+        def right(conn: CDPConnection, session: str) -> None:
+            self._mouse(conn, session, cancel, type="mouseMoved", x=x, y=y)
+            for kind in ("mousePressed", "mouseReleased"):
+                self._mouse(conn, session, cancel, type=kind, x=x, y=y, button="right", clickCount=1)
+
+        self._run(f"right-click {element_id}", Retry.UNSAFE, right, cancel)
+
     def drag(self, source_id: str, target_id: str, *, cancel: CancellationToken | None = None) -> None:
         """Drag one element onto another: HTML5 drag and drop (intercepted and replayed at the
         drop target) and pointer-driven drags (mouse events) both work."""
@@ -1735,9 +1772,12 @@ class RemoteBrowser(ChromeBrowser):
     def _ws_url(self) -> str:
         from urllib.parse import urlparse
 
-        if urlparse(self.endpoint).scheme in ("ws", "wss"):
+        parts = urlparse(self.endpoint)
+        if parts.scheme in ("ws", "wss"):
             return self.endpoint
-        request = urllib.request.Request(f"{self.endpoint}/json/version")
+        # the query (a token) stays a query: http://host:9222/json/version?token=…
+        version_url = parts._replace(path=parts.path.rstrip("/") + "/json/version").geturl()
+        request = urllib.request.Request(version_url)
         try:
             with urllib.request.urlopen(request, timeout=10) as r:  # nosec B310 - the configured endpoint
                 version = json.loads(r.read())

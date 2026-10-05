@@ -43,3 +43,14 @@ typed text in action inputs is replaced by its length before the event is emitte
 
 The pre-existing names `action.planned`, `approval.requested` and `action.retry` are kept for
 compatibility; the table shows the names the specification uses for them.
+
+## Canonical names (October 2026 phase)
+
+Every record carries `canonical`: the older names map to the spec's vocabulary
+(`approval.requested` → `approval.required`, `action.retry` → `retry.started`, `agent.planning` →
+`planning.started`, `plan.created` → `planning.completed`, `sandbox.created` → `sandbox.started`,
+`sandbox.exec` → `sandbox.completed`, `computer.model.*` → `model.*`). New events: `task.paused`,
+`task.resumed`, `task.cancelled`, `model.request|response|error`, `grounding.failed`,
+`browser.started|navigation|crash|connection_lost|recovered|tab|download`, `computer.input`,
+`computer.screenshot`, `android.action`, `sandbox.blocked`, `artifact.created`, `agent.delegated`,
+`attempt.completed`, `approval.required|approved|rejected|modified|deferred|expired`.

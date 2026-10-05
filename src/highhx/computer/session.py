@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -41,12 +42,28 @@ class ComputerSession:
         headless: bool | None = None,
         target: str = "local",
         browser_endpoint: str = "",
+        profile: str | None = None,
     ) -> None:
         self.gate = gate
         self.actor = actor
         self.tool = tool
         self.cancel = cancel or CancellationToken()
-        self.state_dir = state_dir or user_data_dir() / "computer"
+        base = state_dir or user_data_dir() / "computer"
+        self.profile = (
+            profile if profile is not None else os.environ.get("HIGHHX_BROWSER_PROFILE", "default") or "default"
+        )
+        """The HighhX browser profile (``computer/profiles.py``); ``default`` is the original one."""
+        from highhx.computer.profiles import ProfileStore
+
+        self.profiles = ProfileStore(base)
+        if not self.profiles.exists(self.profile):
+            from highhx.core.errors import UsageError
+
+            raise UsageError(
+                f"No browser profile named {self.profile!r}.",
+                hint="Create it with `highhx browser profiles create NAME`.",
+            )
+        self.state_dir = self.profiles.state_dir(self.profile)
         self.headless = headless
         self.target = target
         """The computer operated: ``local``, or ``ssh://user@host``."""
@@ -118,6 +135,7 @@ class ComputerSession:
                 self._browser = RemoteBrowser(self.state_dir, self.browser_endpoint)
             else:
                 self._browser = ChromeBrowser(self.state_dir, headless=self.headless)
+                self.profiles.touch(self.profile)
         return self._browser
 
     def provider(self, source: str) -> ComputerUseProvider:

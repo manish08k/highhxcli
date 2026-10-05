@@ -47,7 +47,9 @@ class EventRecord:
     source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"seq": self.seq, "event": self.name, "ts": self.timestamp}
+        from highhx.actions.events import canonical
+
+        out: dict[str, Any] = {"seq": self.seq, "event": self.name, "canonical": canonical(self.name), "ts": self.timestamp}
         for key in CONTEXT_KEYS:
             value = getattr(self, key)
             if value:

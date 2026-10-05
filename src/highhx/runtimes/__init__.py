@@ -1,9 +1,10 @@
 """Runtimes: local, sandbox, remote (VM and cloud report a capability error). See
 docs/COMPUTER_RUNTIME.md and docs/SANDBOX.md."""
 
-from highhx.runtimes.base import CloudRuntime, ExecResult, LocalRuntime, ResourceLimits, Runtime, RuntimeInfo, VMRuntime
+from highhx.runtimes.base import CloudRuntime, ExecResult, LocalRuntime, ResourceLimits, Runtime, RuntimeInfo
 from highhx.runtimes.remote import RemoteRuntime
 from highhx.runtimes.sandbox import SandboxManager, SandboxRuntime, available_backends, choose_backend
+from highhx.runtimes.vm import VMRuntime
 
 __all__ = [
     "CloudRuntime",

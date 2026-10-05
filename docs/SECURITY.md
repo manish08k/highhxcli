@@ -234,3 +234,20 @@ project secrets) and are never offered to the AI agent.
 Voice uses local programs only (recorders, a speech-to-text engine you installed with a model
 on disk, the OS speech synthesizer). Audio is written to a private temporary directory and
 deleted after transcription; nothing is uploaded. See [VOICE.md](VOICE.md).
+
+## October 2026 phase
+
+- **HTTP (SSRF).** `api.request` decides on the address actually dialled, for every hop: link-local and
+  cloud-metadata addresses are always refused, private networks need `allow_private` (high risk), and a
+  redirect can never move from a public host to this computer or a private one. Before, urllib followed
+  redirects anywhere. **Credentials are never forwarded to another host on a redirect** — before,
+  urllib forwarded `Authorization` (reproduced, then fixed; `tests/security/test_http_ssrf.py`).
+- **Approvals** can be answered from the web console: approve, reject, modify (the new inputs are a new
+  plan, classified and asked again), defer, and timeout (= reject); critical actions need the typed word.
+- **Web console**: loopback only, per-run token, Host check, CSRF header and Origin check, strict CSP,
+  output as text only.
+- **Browser profiles** are never read; deleting/importing is high risk. Remote browser tokens are never
+  stored. `endpoint` inputs are shown without their query, like URLs.
+- **VMs**: `vm.exec` is classified by its command; restore/destroy are high risk.
+- **Memory**: preferences only from the person; secrets refused; notes bounded and labelled as data.
+- **OCR confidence** is tesseract's own (a constant 0.9 was reported before).

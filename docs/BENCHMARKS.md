@@ -82,3 +82,6 @@ task).
 
 Model-planned tasks (`planner: {kind: model}`) run only with `--model` and are otherwise
 skipped, never faked. Results are saved as JSON in `.highhx/state/benchmarks/`.
+
+Latency diagnostics (also beside the metrics): planning/model latency (when a model planned),
+grounding latency (per attempt), verification latency, recoveries.

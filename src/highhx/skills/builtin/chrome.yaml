@@ -1,0 +1,24 @@
+name: chrome
+version: 1
+description: Browse with the HighhX browser (its own profile) — open pages, find controls, read and extract data, wait on the network.
+applies_to: {surfaces: [browser]}
+requires: [browser]
+actions: [browser.open, browser.click, browser.fill, browser.wait, browser.extract, browser.screenshot, browser.tabs, browser.back]
+permissions:
+  - Opening pages is low risk; file:, javascript: and account/payment URLs are high risk and asked.
+  - Never types passwords or card numbers for the agent; secret fields take text_from_env or ask the person.
+examples:
+  - task: open a page and read its title and headings
+    steps:
+      - {action: open, parameters: {url: "https://example.com"}}
+      - {action: browser.extract, parameters: {roles: [heading]}}
+  - task: wait until the page's requests settle before reading it
+    steps:
+      - {action: browser.wait, parameters: {network_idle: true, timeout: 20}}
+verification:
+  - {when: open, check: {url_contains: "<host>"}}
+  - {when: submit, check: {network: {method: POST, status: 201}}}
+failure_modes:
+  - {symptom: "target not found", recovery: "scroll, then look again with OCR; re-plan with the visible label"}
+  - {symptom: "several equal matches", recovery: "name the control more precisely (role and nearby text)"}
+  - {symptom: "a CAPTCHA appears", recovery: "hand over to the person (needs_user); never solve it"}

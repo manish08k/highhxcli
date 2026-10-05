@@ -143,6 +143,9 @@ class SimulatedDesktop:
         return {"keys": "+".join([*modifiers, key])}
 
     def op_menu(self, app: str, path: list[str]) -> dict[str, Any]:
+        if path == ["Window", "Minimize"]:  # every macOS application has it
+            self.app(app)["window"]["minimized"] = True
+            return {"app": app, "path": path}
         items = self.app(app).get("menus", {}).get(path[0], [])
         if len(path) != 2 or path[1] not in items:
             raise EngineError("not_found", f"{app} has no menu item {path[-1]!r}")
@@ -152,7 +155,11 @@ class SimulatedDesktop:
 
     def op_windows(self, app: str | None = None) -> dict[str, Any]:
         return {
-            "windows": [a["window"] for n, a in self.apps.items() if a.get("running", True) and (not app or n == app)]
+            "windows": [
+                {k: v for k, v in a["window"].items() if k != "minimized"}
+                for n, a in self.apps.items()
+                if a.get("running", True) and not a["window"].get("minimized") and (not app or n == app)
+            ]
         }
 
     def op_window_frame(self, window: int, x: int, y: int, width: int, height: int) -> dict[str, Any]:

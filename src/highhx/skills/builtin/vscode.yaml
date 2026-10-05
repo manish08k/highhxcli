@@ -1,0 +1,20 @@
+name: vscode
+version: 1
+description: Drive Visual Studio Code on the desktop — open it, use the command palette, save — through the desktop driver.
+applies_to: {surfaces: [desktop], apps: [Visual Studio Code, Code]}
+requires: [desktop]
+actions: [computer.launch, computer.focus, computer.hotkey, computer.type, computer.press, computer.edit, computer.window_state]
+permissions:
+  - Typing and key combinations are medium risk; they are refused when the target is a terminal (VS Code's integrated terminal included).
+examples:
+  - task: open the command palette and run "Format Document"
+    steps:
+      - {action: launch, parameters: {name: Visual Studio Code}}
+      - {action: hotkey, parameters: {keys: "cmd+shift+p"}}
+      - {action: computer.type, parameters: {text: "Format Document"}}
+      - {action: press, parameters: {key: enter}}
+verification:
+  - {when: launch, check: {application: "Code"}}
+failure_modes:
+  - {symptom: "the palette did not open", recovery: "focus the editor window first (computer.focus), then retry the hotkey"}
+  - {symptom: "keys refused: terminal focused", recovery: "click into the editor; use shell.run for commands"}

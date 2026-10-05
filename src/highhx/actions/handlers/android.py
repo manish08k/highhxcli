@@ -100,6 +100,27 @@ def emulator_start(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     return ActionResult(True, output=started, summary=f"{avd} booted as {started['serial']}", verified=True)
 
 
+def health(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    adb = _adb(ctx, inputs.get("device"))
+    if not adb.capability().available:
+        raise ToolError(adb.capability().detail)
+    try:
+        adb.require_device()
+    except AdbError as exc:
+        raise ToolError(exc.message + (f" ({exc.hint})" if exc.hint else "")) from None
+    report = adb.health()
+    summary = f"{report['serial']}: " + ("healthy" if report["healthy"] else "; ".join(report["problems"]))
+    return ActionResult(True, output=report, summary=summary, verified=report["healthy"])
+
+
+def emulator_reset(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    from highhx.utils.paths import user_data_dir
+
+    avd = str(inputs["avd"])
+    started = _emulator(ctx).reset(str(inputs["device"]), avd, log=user_data_dir() / "android" / f"emulator-{avd}.log", timeout=float(inputs.get("timeout") or 300))
+    return ActionResult(True, output=started, summary=f"reset {avd}: booted as {started['serial']}", verified=True)
+
+
 def emulator_stop(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     serial = str(inputs["device"])
     _emulator(ctx).stop(serial)
@@ -124,7 +145,10 @@ def screenshot(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     from highhx.perception.png import png_size
 
     width, height = png_size(data)
-    return ActionResult(True, output={"path": str(path), "width": width, "height": height}, summary=f"saved {path.name} ({width}x{height})")
+    from highhx.artifacts import record
+
+    artifact = record(ctx, path, kind="screenshot", action="android.screenshot")
+    return ActionResult(True, output={"path": str(path), "width": width, "height": height, "artifact": artifact}, summary=f"saved {path.name} ({width}x{height})")
 
 
 def observe(ctx: ActionContext, inputs: Inputs) -> ActionResult:

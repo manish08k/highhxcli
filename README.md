@@ -386,6 +386,9 @@ highhx android devices                                                        # 
 highhx trace tr_…                                                             # what happened, step by step
 highhx benchmark run browser desktop                                          # measure it
 highhx tui                                                                    # the console with a live dashboard
+highhx web                                                                    # the web console (127.0.0.1, token)
+highhx browser profiles create work && HIGHHX_BROWSER_PROFILE=work highhx …   # isolated sign-ins
+highhx vm create dev && highhx vm start dev                                   # a virtual machine (Lima/Tart)
 ```
 
 ### Architecture
@@ -421,56 +424,69 @@ Agent S, Browser Use, Skyvern, AndroidWorld and Cua).
 
 ### Capability matrix
 
-Filled from the repository and its test runs at the end of the October 2026 phase on macOS
-(Apple silicon). Status words:
+Filled from the repository and its test runs on macOS (Apple silicon) with Chrome, `sandbox-exec`
+and `pdftotext`. Not on the build machine (and not installed): adb/Android SDK, Docker, bubblewrap,
+Lima/Tart, tesseract, Ollama or any model server/key.
 
-- **Validated**: implemented and exercised against the real thing in this environment.
-- **Implemented, not validated here**: code and automated tests exist, but the real platform,
-  tool or model was not available (or the opt-in test was not run) on the build machine.
-- **Experimental**: implemented, never validated on a real platform in this build.
-- **Optional dependency**: needs something HighhX does not install.
-- **Unavailable**: no backend in this build.
+🟢 GREEN = implemented + validated · 🟡 YELLOW = implemented, environment validation pending ·
+🟠 ORANGE = experimental · 🔴 RED = unavailable/missing
 
-| Capability | Status | Platform | Dependency | Tested |
-|---|---|---|---|---|
-| Browser automation (DOM + accessibility) | Validated | macOS; any OS with Chrome | a Chromium-family browser | unit + real Chrome (opt-in) |
-| Computer use: agent loop, verification, recovery | Validated (scripted planner) | all | — | unit + simulated web/desktop + real Chrome |
-| Visual grounding (vision model) | Implemented, not validated here | all | a vision model (local, or Pro / key + consent) | unit with a scripted model |
-| DOM grounding | Validated | — | browser | unit + real Chrome |
-| Network evidence, network waits, timing | Validated | — | browser | unit + real Chrome |
-| JSON-schema extraction | Validated | — | browser | unit + real Chrome |
-| Desktop control | Implemented, not validated here (macOS opt-in input tests not run this phase); Windows/Linux experimental | macOS, Windows, Linux | Accessibility permission (macOS) | unit + simulated desktop |
-| Android | Implemented, **unavailable here** (no adb) | any with adb | Android platform tools; SDK emulator | unit with simulated adb only |
-| AndroidWorld-style tasks, emulator lifecycle | Experimental | — | adb, emulator | simulated adb / fake SDK only |
-| macOS sandbox (Seatbelt) | Validated | macOS | `sandbox-exec` (built in) | real Seatbelt |
-| Docker sandbox | Experimental, unavailable here | any | Docker | runs only where installed |
-| bubblewrap sandbox | Experimental, unavailable here | Linux | `bwrap` | runs only where installed |
-| Virtual machines / isolated desktop | Unavailable | — | — | capability error tested |
-| OCR | Optional dependency, unavailable here | all | tesseract | opt-in test skipped |
-| Local model | Optional dependency, not validated here | all | an OpenAI-compatible local server | scripted model only |
-| Remote model | Requires HighhX Pro, not validated here | all | HighhX Pro (through the platform; no provider key on this machine), plus consent | scripted model |
-| MCP (client and server) | Validated (automated) | all | — | unit + stdio integration |
-| Remote computer (SSH) | Experimental | — | ssh, HighhX on the other side | unit |
-| Remote browser (wss DevTools) | Implemented, not validated here | — | a browser you run | unit |
-| Workflow engine (loops, verify, rollback, resume) | Validated (automated) | all | — | unit + integration |
-| File parsing (CSV/JSON/YAML/text) / PDF text | Validated / Validated (pdftotext present) | all | poppler for PDF | unit |
-| E-mail block | Implemented, not validated against a real server | all | an SMTP server | fake local SMTP |
-| Recording / replay | Validated (browser) | — | browser | unit + real Chrome |
-| Trajectories, search, traces | Validated (automated) | all | — | unit |
-| Benchmarks (8 metrics + diagnostics) | Validated (simulated environments + real browser) | all | — | unit + real Chrome |
+| Feature | Implemented | Integrated (executor, policy, events, trajectory) | Tested | Real environment | Status |
+|---|---|---|---|---|---|
+| Browser automation (DOM, accessibility, tabs, popups, dialogs, downloads, recovery) | yes | yes | unit + real Chrome | Chrome ✓ | 🟢 |
+| Network evidence, network waits, timing, redirects | yes | yes | unit + real Chrome | Chrome ✓ | 🟢 |
+| Schema / DOM / accessibility extraction | yes | yes | unit + real Chrome | Chrome ✓ | 🟢 |
+| Browser profiles (isolation, persistence, leases, import) | yes | yes | unit + real Chrome | Chrome ✓ | 🟢 |
+| Managed / remote browser sessions | yes | yes | unit + real Chrome (local + endpoint) | Chrome ✓; hosted wss service not tested | 🟢 |
+| Live viewing (browser screencast; desktop screenshots) | yes | yes (web console) | unit + real Chrome | browser ✓; desktop pending | 🟢 / 🟡 |
+| Recording / replay / selector healing | yes | yes | unit + real Chrome | Chrome ✓ | 🟢 |
+| Computer-use agent loop (plan, ground, act, verify, reflect, recover, pause, resume, fork) | yes | yes | unit + simulated + real Chrome | ✓ (scripted planner) | 🟢 |
+| DOM / accessibility grounding | yes | yes | unit + real Chrome | ✓ | 🟢 |
+| OCR grounding (tesseract, confidence, languages) | yes | yes | unit (stand-in tesseract) | tesseract not installed | 🟡 |
+| Vision grounding / model planning | yes | yes | scripted models | no model available | 🟡 |
+| Desktop control (macOS) | yes | yes | unit + simulated desktop | opt-in input tests not run (need the owner) | 🟡 |
+| Desktop control (Windows, Linux X11) | yes | yes | unit | not on this OS | 🟠 |
+| Android (adb, emulator lifecycle, health, AndroidWorld-style tasks) | yes | yes | simulated adb / fake SDK | no Android SDK | 🟡 |
+| macOS sandbox (Seatbelt) | yes | yes | real Seatbelt | ✓ | 🟢 |
+| Docker sandbox | yes | yes | where installed | not installed | 🟠 |
+| bubblewrap sandbox | yes | yes | where installed | not installed (Linux) | 🟠 |
+| Virtual machines (Lima, Tart: lifecycle, snapshots, exec) | yes | yes | fake command lines | not installed | 🟡 |
+| Remote computer (SSH, heartbeat) | yes | yes | stand-in ssh | no second machine | 🟠 |
+| Local models (Ollama, OpenAI-compatible), discovery | yes | yes | fake local servers, scripted models | no model server | 🟡 |
+| Remote models (HighhX Pro platform) | yes | yes | scripted models | not exercised | 🟡 |
+| MCP (client, server, tool calls, resources, events) | yes | yes | unit + stdio servers | ✓ (local processes) | 🟢 |
+| Workflow engine (for_each, while, choose, wait, handoff, set, verify, retry, rollback, resume) | yes | yes | unit + integration | ✓ | 🟢 |
+| HTTP block (query, form, retries, extraction, schema, SSRF protection) | yes | yes | unit + local servers | ✓ | 🟢 |
+| E-mail block (SMTP/TLS, HTML, attachments, replies, safe retries) | yes | yes | fake local SMTP | no real server | 🟡 |
+| File parsing (CSV/JSON/YAML/text, PDF via pdftotext, Office) | yes | yes | unit | pdftotext ✓ | 🟢 |
+| Task artifacts (ids, checksums, retention) | yes | yes | unit | ✓ | 🟢 |
+| Approvals (approve, reject, modify, defer, timeout, typed word) | yes | yes | unit (real gate and executor) | ✓ | 🟢 |
+| Web console (`highhx web`) and TUI | yes | yes | unit + real Chrome (page, live frames, injection) | ✓ | 🟢 |
+| Events (one bus, canonical names) and timeline debugger | yes | yes | unit | ✓ | 🟢 |
+| Trajectories (search, reproducibility metadata), project memory, skills | yes | yes | unit | ✓ | 🟢 |
+| Multi-agent supervisor (budgets, hand-over) and best-of-N | yes | yes | unit | ✓ scripted; with a model pending | 🟢 / 🟡 |
+| Benchmarks (8 metrics + diagnostics) | yes | yes | unit + real browser benchmark | ✓ | 🟢 |
+| Wayland, Windows Sandbox, cloud computers, CAPTCHA solving, password managers/TOTP | no | — | — | — | 🔴 |
 
 `highhx capabilities` prints the same picture for *your* machine, detected without starting a
-browser or contacting a model (`--json` for scripts).
+browser or contacting a model (`--json` for scripts). The full comparison with the six reference
+projects is in [docs/REFERENCE_FEATURE_MATRIX.md](docs/REFERENCE_FEATURE_MATRIX.md).
 
 ### What it can do
 
-- **Browser**: open, tabs, back/forward/refresh, click, fill, select, press, hover, scroll,
-  drag, upload, download, screenshots, page extraction, **schema extraction**, waits for text,
-  URLs, controls, **network idle or a specific request**; visual clicks for targets found by OCR
-  or vision; recording and replay with healing; HighhX's own persistent profile; remote
-  browsers over wss. [BROWSER_AUTOMATION.md](docs/BROWSER_AUTOMATION.md)
-- **Desktop**: observe (accessibility, OCR, vision), click (left/right/middle, double), type,
-  hotkeys, scroll, drag, windows, apps, clipboard, menus. [COMPUTER_RUNTIME.md](docs/COMPUTER_RUNTIME.md)
+- **Browser**: open, tabs, back/forward/refresh, click, right-click, fill, select, press, hover,
+  scroll, drag, upload, download, screenshots, page and schema extraction, waits for text, URLs,
+  controls, network idle or a specific request; visual clicks for targets found by OCR or vision;
+  recording and replay with healing; isolated **profiles**; managed local and remote **sessions**;
+  **live viewing**. [BROWSER_AUTOMATION.md](docs/BROWSER_AUTOMATION.md)
+- **Desktop**: observe (accessibility, OCR, vision), click (left/right/middle, double), move,
+  mouse down/up, drag, scroll, type, keys, hotkeys, copy/paste/select all, windows (focus, resize,
+  maximize, minimize), apps, clipboard, menus. [DESKTOP.md](docs/DESKTOP.md)
+- **Virtual machines and remote computers**: `highhx vm` (Lima, Tart), ssh:// computers with a
+  heartbeat. [REMOTE_COMPUTER.md](docs/REMOTE_COMPUTER.md)
+- **Web console**: `highhx web` — tasks, live view, approvals, history, timeline. [WEB_UI.md](docs/WEB_UI.md)
+- **Memory and skills**: typed project memory and application skills, both data for the planner.
+  [MEMORY.md](docs/MEMORY.md) · [SKILLS.md](docs/SKILLS.md)
 - **Android**: devices, connect, observe (hierarchy, screenshot), tap, long press, swipe, type,
   keys, back, home, recents, launch/stop apps, packages, install/uninstall (asked),
   **emulators**. [ANDROID.md](docs/ANDROID.md)
@@ -546,14 +562,20 @@ steps:
 | Remote computer | `HIGHHX_COMPUTER_TARGET=ssh://user@host` (HighhX installed there) |
 | Remote browser | `HIGHHX_BROWSER_ENDPOINT=wss://…` (or `http://127.0.0.1:9222` through `ssh -L`) |
 | E-mail | `HIGHHX_SMTP_HOST`, `HIGHHX_SMTP_PORT`, `HIGHHX_SMTP_USER`, `HIGHHX_SMTP_PASSWORD`, `HIGHHX_SMTP_FROM` |
+| Virtual machines | `brew install lima` or Tart (`brew install cirruslabs/cli/tart`) |
+| OCR languages | `HIGHHX_OCR_LANG=eng+deu` (with the tesseract language packs) |
+| Browser profile | `HIGHHX_BROWSER_PROFILE=NAME` (`highhx browser profiles create NAME`) |
 
 ### Experimental and unavailable
 
-- **Experimental**: Windows and Linux desktop backends, bubblewrap and Docker sandboxes,
-  Android emulator lifecycle and AndroidWorld-style tasks, remote computers over SSH.
-- **Unavailable in this build**: virtual machines and isolated desktops, cloud runtimes,
-  CAPTCHA solving (deliberately: challenges are handed to the person), password-manager and
-  TOTP integration, a viewport video stream, best-of-N rollouts, model-assisted extraction.
+- **Experimental**: Windows and Linux desktop backends, bubblewrap and Docker sandboxes, remote
+  computers over SSH.
+- **Implemented, pending real validation**: Android (adb, emulator, AndroidWorld-style tasks),
+  virtual machines (Lima, Tart), OCR, model-driven planning and vision grounding, the e-mail block
+  against a real server, macOS desktop input.
+- **Unavailable**: Wayland, Windows Sandbox, cloud computers, CAPTCHA solving (deliberately:
+  challenges are handed to the person), password-manager and TOTP integration, model-assisted
+  extraction.
 
 ### Known limitations
 
@@ -578,10 +600,20 @@ diagnostics and environment capability records, Android emulator lifecycle, Andr
 tasks and real-device benchmark environments, and a security fix (`browser.extract` with a URL
 is classified like opening it). See [REFERENCE_AUDIT.md](docs/REFERENCE_AUDIT.md).
 
+The October 2026 implementation phase then added: browser profiles and managed sessions, live
+viewing and the web console, the approval framework (modify, defer, timeout), workflow control
+blocks (`while`, `choose`, `wait`, `handoff`, `set`) and `agent.run` / `mcp.call` / `mcp.resources` /
+`artifact.save`, HTTP hardening (SSRF protection, no credential forwarding), e-mail attachments and
+replies, task artifacts, typed project memory, application skills, multi-agent budgets, best-of-N,
+task fork/duplicate and pause, canonical events and the timeline debugger, VM lifecycle (Lima,
+Tart), remote heartbeat, Android health/reset, OCR languages and confidence, local model discovery,
+reproducibility metadata on trajectories, and latency diagnostics. See
+[docs/REFERENCE_FEATURE_MATRIX.md](docs/REFERENCE_FEATURE_MATRIX.md).
+
 ### Testing
 
 ```bash
-pytest                                        # everything that needs no real platform (2,400+ tests)
+pytest                                        # everything that needs no real platform (2,500 tests)
 HIGHHX_TEST_BROWSER=1 pytest tests/unit/computer tests/unit/benchmarks   # + real Chrome
 HIGHHX_TEST_OCR=1 pytest tests/unit/computer/test_live_ocr.py            # + tesseract
 HIGHHX_TEST_DESKTOP_INPUT=1 pytest tests/e2e/test_desktop_live.py        # drives YOUR mouse and keyboard

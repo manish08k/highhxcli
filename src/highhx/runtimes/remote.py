@@ -57,6 +57,21 @@ class RemoteRuntime:
             raise CapabilityError("ssh is not installed.")
         return run_process([*self._ssh(), shlex.join(argv)], cwd=self.cwd, timeout=timeout or 600.0, cancel=cancel)
 
+    def heartbeat(self, *, timeout: float = 15.0) -> dict[str, Any]:
+        """Is the computer reachable, how fast, and does HighhX run there (for its desktop)? One
+        fixed, read-only command over the same SSH options (keys only, host keys checked)."""
+        import time
+
+        if not shutil.which("ssh"):
+            return {"target": self.url, "reachable": False, "error": "ssh is not installed"}
+        started = time.monotonic()
+        result = run_process([*self._ssh(), "highhx --version"], cwd=self.cwd, timeout=timeout)
+        latency = round((time.monotonic() - started) * 1000)
+        if result.exit_code == 255 or result.timed_out:  # ssh's own failure: not reachable
+            return {"target": self.url, "reachable": False, "latency_ms": latency, "error": (result.stderr.strip() or "timed out")[:300]}
+        version = result.stdout.strip().split()[-1] if result.ok and result.stdout.strip() else ""
+        return {"target": self.url, "reachable": True, "latency_ms": latency, "highhx": version, "desktop": bool(version), "error": "" if version else "HighhX is not installed on that computer (its desktop needs it)"}
+
     def driver(self) -> ComputerDriver:
         if self._driver_factory is None:
             raise CapabilityError("No remote desktop driver was configured.")

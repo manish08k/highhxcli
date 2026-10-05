@@ -10,6 +10,7 @@ it was dispatched.
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -368,6 +369,19 @@ class ComputerRuntime:
         entries = drain() if drain is not None else []
         if entries:
             event.details["browser"] = entries
+            from highhx.actions.events import BROWSER_JOURNAL
+
+            bus = getattr(getattr(getattr(self.gate, "engine", None), "ctx", None), "events", None)
+            for entry in entries:
+                name = BROWSER_JOURNAL.get(str(entry.get("event")))
+                if bus is not None and name is not None:
+                    with contextlib.suppress(Exception):
+                        bus.emit(
+                            name,
+                            kind=entry.get("event"),
+                            detail=str(entry.get("detail") or "")[:300],
+                            state=entry.get("state"),
+                        )
 
     # ---------------------------------------------------------------- helpers
     def _perform(self, candidate: ActionCandidate, text: str | None) -> None:

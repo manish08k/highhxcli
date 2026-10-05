@@ -80,7 +80,8 @@ def test_remote_driver_needs_an_ssh_target(desktop) -> None:
 def test_vm_driver_is_honest() -> None:
     with pytest.raises(CapabilityError) as caught:
         VMDriver()
-    assert "not supported" in caught.value.message and "sandbox" in (caught.value.hint or "")
+    assert "inside the VM" in caught.value.message  # the VM's desktop is HighhX inside it, over ssh://
+    assert "highhx vm" in (caught.value.hint or "") and "ssh://" in (caught.value.hint or "")
     caps = VMDriver.capabilities()
     assert not any(caps.supports(op) for op in OPERATIONS)
     with pytest.raises(CapabilityError):

@@ -420,12 +420,92 @@ class WorkflowEngine:
         depth: int,
         completed_actions: list[tuple[str, Planned, ActionResult]] | None = None,
     ) -> StepResult:
+        if step.while_ is not None:
+            return self._execute_while(
+                spec, step, token, scheduler, inputs, workflow_env, execution_id, depth, completed_actions
+            )
         if step.for_each is None:
             return self._execute_once(
                 spec, step, token, scheduler, inputs, workflow_env, execution_id, depth, completed_actions
             )
         return self._execute_loop(
             spec, step, token, scheduler, inputs, workflow_env, execution_id, depth, completed_actions
+        )
+
+    def _execute_while(
+        self,
+        spec: WorkflowSpec,
+        step: StepSpec,
+        token: CancellationToken,
+        scheduler: Any,
+        inputs: Mapping[str, Any],
+        workflow_env: Mapping[str, str],
+        execution_id: str,
+        depth: int,
+        completed_actions: list[tuple[str, Planned, ActionResult]] | None,
+    ) -> StepResult:
+        """Run the step while its condition holds (checked before each run, with ``loop.index`` and
+        the previous run's ``loop.outputs``), at most ``max_iterations`` times."""
+        assert step.while_ is not None
+        began = time.monotonic()
+        commands: list[CommandResult] = []
+        collected: list[dict[str, str]] = []
+        previous: dict[str, str] = {}
+        for index in range(step.max_iterations):
+            if token.cancelled:
+                return StepResult(step.id, Status.CANCELLED, commands, message=f"cancelled after {index} run(s)")
+            loop = {"index": index, "number": index + 1, "outputs": previous}
+            ctx = self._base_context(
+                spec, inputs, scheduler.snapshot(), execution_id, workflow_env, extra={"loop": loop}
+            )
+            try:
+                holds = evaluate_condition(step.while_, ctx)
+            except ExpressionError as exc:
+                return StepResult(
+                    step.id, Status.FAILED, commands, message=f"while: {exc}", duration=time.monotonic() - began
+                )
+            if not holds:
+                return StepResult(
+                    step.id,
+                    Status.SUCCESS,
+                    commands,
+                    outputs={**previous, "results": json.dumps(collected), "count": str(index)},
+                    message=f"{index} run(s)",
+                    duration=time.monotonic() - began,
+                )
+            result = self._execute_once(
+                spec,
+                step,
+                token,
+                scheduler,
+                inputs,
+                workflow_env,
+                execution_id,
+                depth,
+                completed_actions,
+                extra={"loop": loop},
+                preapproved=index > 0,
+            )
+            commands += result.commands
+            collected.append(result.outputs)
+            previous = result.outputs
+            if result.status != Status.SUCCESS:
+                return StepResult(
+                    step.id,
+                    result.status,
+                    commands,
+                    outputs={"results": json.dumps(collected), "count": str(index)},
+                    message=f"run {index + 1}: {result.message}",
+                    duration=time.monotonic() - began,
+                    allowed_failure=step.continue_on_error and result.status in (Status.FAILED, Status.TIMEOUT),
+                )
+        return StepResult(
+            step.id,
+            Status.FAILED,
+            commands,
+            outputs={"results": json.dumps(collected), "count": str(step.max_iterations)},
+            message=f"still true after {step.max_iterations} run(s) (max_iterations)",
+            duration=time.monotonic() - began,
         )
 
     def _loop_items(self, step: StepSpec, ctx: EvalContext) -> list[Any]:
@@ -516,6 +596,61 @@ class WorkflowEngine:
             duration=time.monotonic() - began,
         )
 
+    def _wait(
+        self,
+        spec: WorkflowSpec,
+        step: StepSpec,
+        token: CancellationToken,
+        scheduler: Any,
+        inputs: Mapping[str, Any],
+        env: Mapping[str, str],
+        execution_id: str,
+        extra: Mapping[str, Any] | None,
+        began: float,
+    ) -> StepResult:
+        """Wait a duration, or until a condition holds (re-evaluated every ``interval``, e.g.
+        ``exists('report.pdf')``), at most ``timeout`` seconds. Cancellable."""
+        if not isinstance(step.wait, dict):
+            seconds = float(step.wait or 0)
+            if token.wait(min(seconds, 3600.0)):
+                return StepResult(
+                    step.id, Status.CANCELLED, message="cancelled while waiting", duration=time.monotonic() - began
+                )
+            return StepResult(
+                step.id,
+                Status.SUCCESS,
+                outputs={"waited": str(seconds)},
+                message=f"waited {seconds:g}s",
+                duration=time.monotonic() - began,
+            )
+        deadline = time.monotonic() + float(step.wait["timeout"])
+        checks = 0
+        while True:
+            checks += 1
+            ctx = self._base_context(spec, inputs, scheduler.snapshot(), execution_id, env, extra=extra)
+            try:
+                if evaluate_condition(step.wait["until"], ctx):
+                    return StepResult(
+                        step.id,
+                        Status.SUCCESS,
+                        outputs={"checks": str(checks)},
+                        message=f"condition held after {checks} check(s)",
+                        duration=time.monotonic() - began,
+                    )
+            except ExpressionError as exc:
+                return StepResult(step.id, Status.FAILED, message=f"wait: {exc}", duration=time.monotonic() - began)
+            if time.monotonic() >= deadline:
+                return StepResult(
+                    step.id,
+                    Status.TIMEOUT,
+                    message=f"still not true after {step.wait['timeout']:g}s",
+                    duration=time.monotonic() - began,
+                )
+            if token.wait(float(step.wait["interval"])):
+                return StepResult(
+                    step.id, Status.CANCELLED, message="cancelled while waiting", duration=time.monotonic() - began
+                )
+
     def _verify(self, step: StepSpec, ctx: EvalContext, outcome: StepResult, result: ActionResult | None) -> StepResult:
         """The step's ``verify`` check, after it succeeded (a validation block). Strings in the check
         may use expressions. A check that is not satisfied — or cannot be decided — fails the step."""
@@ -590,6 +725,82 @@ class WorkflowEngine:
         if step.action:
             outcome, action_result = self._action_step(step, token, ctx, began, completed_actions)
             return self._verify(step, ctx, outcome, action_result)
+
+        if step.set_ is not None:
+            try:
+                values = self._action_inputs(step.set_, ctx)
+            except ExpressionError as exc:
+                return StepResult(step.id, Status.FAILED, message=f"set: {exc}", duration=time.monotonic() - began)
+            outputs = {k: v if isinstance(v, str) else json.dumps(v, default=str) for k, v in values.items()}
+            return StepResult(
+                step.id,
+                Status.SUCCESS,
+                outputs=outputs,
+                message=f"{len(outputs)} value(s)",
+                duration=time.monotonic() - began,
+            )
+
+        if step.wait is not None:
+            return self._wait(spec, step, token, scheduler, inputs, step_env, execution_id, extra, began)
+
+        if step.handoff is not None:
+            message = try_interpolate(step.handoff, ctx)
+            # a person has to act: never pre-approved by --yes, refused without a terminal or console
+            self.engine.approve(
+                f"Hand-off in workflow '{spec.name}': {message}",
+                RiskLevel.DANGEROUS,
+                details=["Do it yourself, then confirm to continue the workflow."],
+                bypassable=False,
+                policy_action=f"workflow:{spec.key}:{step.id}:handoff",
+            )
+            return StepResult(
+                step.id,
+                Status.SUCCESS,
+                outputs={"handed_off": "true", "message": message},
+                message="the person confirmed",
+                duration=time.monotonic() - began,
+            )
+
+        if step.choose is not None:
+            from highhx.workflows.parser import branch_step
+
+            for index, branch in enumerate(step.choose):
+                test = branch.get("if", branch.get("elif"))
+                try:
+                    taken = "else" in branch or evaluate_condition(
+                        test if isinstance(test, str) else str(test).lower(), ctx
+                    )
+                except ExpressionError as exc:
+                    return StepResult(
+                        step.id,
+                        Status.FAILED,
+                        message=f"choose branch {index + 1}: {exc}",
+                        duration=time.monotonic() - began,
+                    )
+                if taken:
+                    body = branch_step(step.id, branch)
+                    chosen = self._execute_once(
+                        spec,
+                        body,
+                        token,
+                        scheduler,
+                        inputs,
+                        workflow_env,
+                        execution_id,
+                        depth,
+                        completed_actions,
+                        extra=extra,
+                        preapproved=approved,
+                    )
+                    chosen.outputs = {**chosen.outputs, "branch": str(index)}
+                    return chosen
+            return StepResult(
+                step.id,
+                Status.SUCCESS,
+                outputs={"branch": ""},
+                message="no branch applied",
+                duration=time.monotonic() - began,
+            )
 
         if step.uses:
             try:

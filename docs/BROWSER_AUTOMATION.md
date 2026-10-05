@@ -135,3 +135,20 @@ to *waiting for* a message. A message that has started arriving gets a bounded g
 connection. Regression tests: `test_websocket_message_straddling_a_deadline_keeps_the_connection`,
 `test_websocket_peer_stalling_mid_message_beyond_the_grace_closes`, and the real-internet test
 (`test_github_then_wikipedia_repeatedly_on_the_real_internet`: 0 reconnects).
+
+## Profiles, managed sessions and live viewing (October 2026 phase)
+
+- **Profiles** (`highhx browser profiles list|create|delete|import`, `HIGHHX_BROWSER_PROFILE=NAME`):
+  each profile is its own browser with its own cookies, storage and sign-ins, owner-only on disk and
+  never read by HighhX. Deleting and importing are high risk and asked. A profile can be leased by
+  one session. Stopping a browser now asks Chrome to quit (`Browser.close`) so a sign-in made seconds
+  before is saved (a signal used to lose it — regression test in `test_profiles.py`).
+- **Managed sessions** (`highhx browser sessions list|start|check|stop`): HighhX's own browsers and
+  remote ones (`--endpoint`) through one interface — session id, browser id, DevTools endpoint,
+  heartbeat, reconnect (a dead local browser is restarted on its profile), cleanup. Remote tokens are
+  never stored. A remote http endpoint carrying `?token=…` used to be unreachable; fixed.
+- **Live viewing**: Chrome's screencast on a separate DevTools connection, shown by `highhx web`; it
+  follows tab switches and reconnects after a crash. Frame rate and size are capped; frames are never
+  stored.
+- **Right-click on a control**: `browser.right_click 'button:"Export"'` (the agent's `right_click`
+  verb uses it for DOM elements, and `click_at button=right` for points).

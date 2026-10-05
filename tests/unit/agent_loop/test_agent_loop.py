@@ -480,8 +480,14 @@ def test_right_click_and_hotkey_verbs(kit: Kit) -> None:
     ]
     result = kit.loop(ScriptedPlanner(script)).run(AgentTask("context menu", surface="browser"))
     step = result.trajectory.steps[1]
-    assert step.action["action_type"] == "browser.click_at" and step.action["parameters"]["button"] == "right"
-    assert any(entry[0] == "pointer" and "right" in str(entry[1]) for entry in kit.web.log)
+    assert step.action["action_type"] == "browser.right_click"  # a DOM element: by role and name
+    assert step.action["parameters"]["target"] == 'button:"Export"' and ("right_click", "Export") in kit.web.log
+    by_point = kit.loop(ScriptedPlanner([{"action": "right_click", "parameters": {"x": 40, "y": 60}}])).run(
+        AgentTask("context menu at a point", surface="browser")
+    )
+    assert by_point.trajectory.steps[0].action["action_type"] == "browser.click_at"
+    assert by_point.trajectory.steps[0].action["parameters"] == {"x": 40, "y": 60, "button": "right"}
+    assert ("pointer", ("click", 40, 60, "right")) in kit.web.log
     hotkey = kit.loop(ScriptedPlanner([{"action": "hotkey", "parameters": {"keys": "cmd+c"}}])).run(
         AgentTask("copy", surface="browser", max_failures=0)
     )
@@ -527,3 +533,65 @@ def test_a_poisoned_past_trajectory_is_data_and_cannot_widen_the_task(kit: Kit, 
     result = kit.loop(limited, memory=True).run(AgentTask("export the invoices", surface="browser", allowed=("browser.",)))
     assert result.status == Status.FAILED and "no usable step" in result.summary
     assert len(kit.ui.requests) == 1  # refused by the task's own limits: not even asked
+
+
+def test_the_supervisor_delegates_within_a_budget_and_hands_results_over(kit: Kit, agent_project: Path) -> None:
+    from highhx.agent.loop.specialists import Budget
+
+    seen_notes: list[tuple[str, ...]] = []
+
+    class Recording(ScriptedPlanner):
+        def next(self, task, state, history, *, feedback="", lessons=()):  # type: ignore[no-untyped-def]
+            seen_notes.append(tuple(lessons))
+            return super().next(task, state, history, feedback=feedback, lessons=lessons)
+
+    def planner_for(specialist, goal):  # type: ignore[no-untyped-def]
+        return Recording([{"action": "filesystem.write", "parameters": {"path": f"{specialist.name}.txt", "content": "x\n"}}])
+
+    supervisor = SupervisorAgent(kit.executor, planner_for, store=kit.store)
+    subtasks = [SubTask("code", "write the code file"), SubTask("testing", "read it back")]
+    subtasks[1] = SubTask("code", "write a second file")
+    result = supervisor.run(AgentTask("two pieces", surface="none"), subtasks)
+    assert result.ok and [s.id.startswith("sub_") for s, _ in result.results] == [True, True]
+    assert any(note.startswith("handed over: code (sub_") for note in seen_notes[-1])  # the second saw the first's result
+    by = result.to_dict()["by_specialist"]["code"]
+    assert by["subtasks"] == 2 and by["steps"] == 2 and by["statuses"] == ["completed", "completed"]
+    assert result.used["steps"] == 2 and "agent.delegated" in kit.names()
+
+    tight = supervisor.run(AgentTask("over budget", surface="none"), [SubTask("code", "one"), SubTask("code", "two")], budget=Budget(steps=1))
+    assert tight.status == Status.FAILED and "steps budget ran out before code: 'two'" in tight.summary
+    assert [str(o.status) for _, o in tight.results] == ["completed"]  # the first fit exactly; the second was never started
+    no_tokens = supervisor.run(AgentTask("no tokens", surface="none"), [SubTask("code", "one")], budget=Budget(tokens=0))
+    assert no_tokens.status == Status.FAILED and "tokens budget" in no_tokens.summary and no_tokens.results == []
+
+
+def test_a_task_that_finishes_in_exactly_max_steps_completes(kit: Kit) -> None:
+    """Regression: the step limit was checked before the planner could say done, so a task that
+    needed exactly max_steps steps was reported as failed."""
+    steps = [{"action": "filesystem.write", "parameters": {"path": f"s{i}.txt", "content": "x\n"}} for i in range(2)]
+    exact = kit.loop(ScriptedPlanner(steps)).run(AgentTask("two writes", surface="none", max_steps=2))
+    assert exact.status == Status.COMPLETED and len(exact.trajectory.steps) == 2
+    over = kit.loop(ScriptedPlanner(steps)).run(AgentTask("two writes", surface="none", max_steps=1))
+    assert over.status == Status.FAILED and "within 1 steps" in over.summary and len(over.trajectory.steps) == 1
+
+
+def test_fork_and_duplicate(kit: Kit, agent_project: Path) -> None:
+    from highhx.agent.loop import fork
+
+    steps = [{"action": "filesystem.write", "parameters": {"path": f"f{i}.txt", "content": f"{i}\\n"}} for i in range(3)]
+    first = kit.loop(ScriptedPlanner(steps)).run(AgentTask("three files", surface="none"))
+    assert first.status == Status.COMPLETED
+    for i in range(3):
+        (agent_project / f"f{i}.txt").unlink()
+    forked = fork(kit.store, first.trajectory.id, at=1)
+    assert forked.id != first.trajectory.id and forked.trace_id != first.trajectory.trace_id
+    assert len(forked.steps) == 1 and forked.metrics["forked_from"] == {"task": first.trajectory.id, "trace": first.trajectory.trace_id, "at": 1}
+    finished = resume(kit.executor, kit.store, forked.id, sleep=lambda _s: None)
+    assert finished.status == Status.COMPLETED and len(finished.trajectory.steps) == 3
+    assert not (agent_project / "f0.txt").exists() and (agent_project / "f1.txt").exists() and (agent_project / "f2.txt").exists()  # continued after step 1
+    assert len(kit.store.load(first.trajectory.id).steps) == 3  # the original is untouched
+    again = fork(kit.store, first.trajectory.id, at=0)
+    assert resume(kit.executor, kit.store, again.id, sleep=lambda _s: None).status == Status.COMPLETED
+    assert (agent_project / "f0.txt").exists()  # a duplicate runs every step again
+    with pytest.raises(Exception, match="fork at 0"):
+        fork(kit.store, first.trajectory.id, at=9)

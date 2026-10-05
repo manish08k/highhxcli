@@ -34,6 +34,8 @@ class FakeDevice:
     taps: list[tuple[int, int]] = field(default_factory=list)
     typed: list[str] = field(default_factory=list)
     extra_devices: list[str] = field(default_factory=list)
+    battery: int = 80
+    screen_on: bool = True
 
     @property
     def tapped(self) -> bool:
@@ -123,5 +125,12 @@ class FakeDevice:
                 self.focused_app = "com.android.launcher3"
             return 0, b"", b""
         if cmd[:1] == ["getprop"]:
-            return 0, b"Pixel 8\n", b""
+            props = {"sys.boot_completed": "1", "ro.build.version.release": "14", "ro.product.model": "Pixel 8"}
+            return 0, (props.get(cmd[1], "Pixel 8") if len(cmd) > 1 else "Pixel 8").encode() + b"\n", b""
+        if cmd[:2] == ["dumpsys", "battery"]:
+            return 0, f"Current Battery Service state:\n  level: {self.battery}\n".encode(), b""
+        if cmd[:2] == ["dumpsys", "power"]:
+            return 0, f"  mWakefulness={'Awake' if self.screen_on else 'Asleep'}\n".encode(), b""
+        if cmd[:2] == ["df", "/data"]:
+            return 0, b"Filesystem 1K-blocks Used Available Use% Mounted on\n/dev/block/dm-5 5000000 1200000 3800000 24% /data\n", b""
         return 1, b"", f"unexpected shell {cmd}".encode()

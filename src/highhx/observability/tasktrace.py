@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -174,6 +175,52 @@ class TaskTrace:
 
     def render(self) -> str:
         return "\n".join(self.tree().render())
+
+    def timeline(self, *, component: str = "", search: str = "", failures: bool = False) -> list[dict[str, Any]]:
+        """Every event as a row — time since the start, event, canonical name, component, step,
+        action, latency, result, error — filtered by component (``browser``, ``action`` …), a text
+        search over the (redacted) payload, or failures only. The debugger's view of a run."""
+        import json
+
+        from highhx.actions.events import canonical
+
+        def seconds(stamp: Any) -> float:
+            if isinstance(stamp, int | float):
+                return float(stamp)
+            try:
+                return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return 0.0
+
+        start = seconds(self.records[0].timestamp) if self.records else 0.0
+        rows = []
+        for record in self.records:
+            p = record.payload
+            name = canonical(record.name)
+            result = p.get("status") or p.get("verdict") or p.get("outcome") or p.get("decision") or ""
+            error = str(p.get("error") or "")
+            failed = bool(error) or name.endswith((".failed", ".denied", ".crash", ".error", ".expired")) or str(result) in ("failed", "denied", "blocked", "unsatisfied")
+            if component and not name.startswith(component.rstrip(".") + "."):
+                continue
+            if failures and not failed:
+                continue
+            if search and search.lower() not in f"{record.name} {json.dumps(p, default=str)}".lower():
+                continue
+            rows.append(
+                {
+                    "t": round(seconds(record.timestamp) - start, 3),
+                    "event": record.name,
+                    "canonical": name,
+                    "component": name.split(".", 1)[0],
+                    "step": record.step_id,
+                    "action": str(p.get("action") or ""),
+                    "latency": p.get("seconds"),
+                    "result": str(result),
+                    "error": error[:300],
+                    "failed": failed,
+                }
+            )
+        return rows
 
     def to_dict(self) -> dict[str, Any]:
         return {

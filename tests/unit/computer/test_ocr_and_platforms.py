@@ -167,3 +167,58 @@ def test_macos_elements_are_addressed_by_position_and_rechecked(monkeypatch: pyt
     answer["act"] = "stale"  # the UI changed: another element (or none) is at that path now
     with pytest.raises(ElementNotFoundError, match="no longer where it was observed"):
         provider.type_text(second.id, "x")
+
+
+def test_ocr_keeps_tesseracts_confidence_and_language(
+    fake_bin: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Regression: the TSV parser dropped each word's confidence, so every OCR element reported a
+    made-up 0.9 to grounding. Lines now carry the mean confidence of their words."""
+    args_file = tmp_path / "args.txt"
+    _script(fake_bin, "tesseract", f'echo "$@" > "{args_file}"; printf "{TSV}"')
+    observation = TesseractOCR().read_screen()
+    assert [e.attributes["confidence"] for e in observation.elements] == ["96", "91"]  # (96+95)/2 rounds to 96
+    assert "-l eng" in args_file.read_text()
+    from highhx.perception.png import encode, solid
+    from highhx.perception.providers import TesseractOCRProvider
+    from highhx.perception.state import ScreenshotRef
+
+    shot = ScreenshotRef.from_bytes(encode(4, 4, bytes(solid(4, 4))))
+    grounded = TesseractOCRProvider().read(shot)
+    assert [round(e.confidence, 2) for e in grounded] == [0.96, 0.91]  # what grounding now sees
+    monkeypatch.setenv("HIGHHX_OCR_LANG", "eng+deu")
+    TesseractOCR().read_screen()
+    assert "-l eng+deu" in args_file.read_text()
+
+
+def test_ocr_languages_are_validated_and_checked(fake_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from highhx.core.errors import UsageError
+
+    _script(
+        fake_bin,
+        "tesseract",
+        'if [ "$1" = "--list-langs" ]; then printf "List of available languages in /x (2):\\neng\\nosd\\n"; else printf ""; fi',
+    )
+    monkeypatch.setenv("HIGHHX_OCR_LANG", "eng; rm -rf ~")
+    with pytest.raises(UsageError, match="not a tesseract language list"):
+        TesseractOCR().read_screen()
+    monkeypatch.setenv("HIGHHX_OCR_LANG", "jpn")
+    capability = TesseractOCR().capability()
+    assert not capability.available and "no language data for jpn" in capability.detail
+    monkeypatch.setenv("HIGHHX_OCR_LANG", "eng")
+    assert TesseractOCR().capability().available
+
+
+def test_the_ocr_text_check_reads_only_ocr_text() -> None:
+    from highhx.perception.state import ComputerState
+    from highhx.verification.declarative import Verdict, VerificationContext, evaluate
+
+    read = ComputerState("desktop", text="Invoice", ocr_text="Total 42 EUR")
+    assert evaluate({"ocr_text": "total 42"}, VerificationContext(after=read)).verdict == Verdict.SATISFIED
+    assert (
+        evaluate({"ocr_text": "Invoice"}, VerificationContext(after=read)).verdict == Verdict.UNSATISFIED
+    )  # structure, not pixels
+    unread = ComputerState("desktop", text="Invoice")
+    assert (
+        evaluate({"ocr_text": "Invoice"}, VerificationContext(after=unread)).verdict == Verdict.UNKNOWN
+    )  # no OCR: unknown, not false

@@ -1,0 +1,20 @@
+name: gmail
+version: 1
+description: Read and search Gmail in the browser with the profile's sign-in; sending mail is asked every time.
+applies_to: {surfaces: [browser], hosts: [mail.google.com]}
+requires: [browser]
+actions: [browser.open, browser.fill, browser.press, browser.click, browser.extract, email.send]
+permissions:
+  - Searching and reading are low risk. "Send" is a publishing control — always asked; email.send (SMTP) is high risk and always asked.
+  - HighhX never types the Google password; sign in yourself in a HighhX browser profile.
+examples:
+  - task: search the inbox for a subject
+    steps:
+      - {action: open, parameters: {url: "https://mail.google.com/"}}
+      - {action: browser.fill, parameters: {target: 'textbox:"Search mail"', text: "invoice"}}
+      - {action: browser.press, parameters: {key: enter}}
+verification:
+  - {when: search, check: {url_contains: "#search"}}
+failure_modes:
+  - {symptom: "sign-in page shown", recovery: "ask the person to sign in, then resume"}
+  - {symptom: "a CAPTCHA appears", recovery: "hand over to the person (needs_user)"}

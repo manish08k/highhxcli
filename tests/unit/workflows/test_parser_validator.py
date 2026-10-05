@@ -43,7 +43,7 @@ def test_schema_errors_are_reported_together() -> None:
         parse_workflow({"name": "x", "steps": [{"id": "a", "run": "x", "bogus": 1}, {"id": "b"}], "extra": True})
     details = "\n".join(info.value.details)
     assert "bogus: unknown field" in details
-    assert "exactly one of 'run', 'uses' or 'action'" in details
+    assert "exactly one of 'run', 'uses', 'action', 'choose', 'wait', 'handoff' or 'set'" in details
     assert "extra: unknown field" in details
 
 

@@ -377,10 +377,27 @@ def diagnostics(trajectory: Trajectory) -> dict[str, Any]:
         seconds = (step.result or {}).get("seconds")
         if isinstance(seconds, int | float) and not isinstance(seconds, bool):
             action_seconds.append(float(seconds))
+    grounding_seconds = [
+        float(a.get("seconds") or 0.0)
+        for step in trajectory.steps
+        for a in ((step.grounding or {}).get("attempts") or [])
+        if isinstance(a, dict)
+    ]
+    verification_seconds = [
+        float(((step.verification or {}).get("report") or {}).get("seconds") or 0.0)
+        for step in trajectory.steps
+        if ((step.verification or {}).get("report") or {}).get("seconds") is not None
+    ]
+    planning = [float(v) for v in trajectory.metrics.get("planning_seconds") or []]
     distribution: dict[str, int] = {}
     for count in attempts.values():
         distribution[str(count)] = distribution.get(str(count), 0) + 1
     return {
+        "planning_seconds": [round(v, 4) for v in planning[:500]],
+        "model_latency_measured": trajectory.planner == "model",
+        "grounding_seconds": [round(v, 4) for v in grounding_seconds[:500]],
+        "verification_seconds": [round(v, 4) for v in verification_seconds[:500]],
+        "recoveries": int(trajectory.metrics.get("recoveries") or 0),
         "per_action": per_action,
         "step_seconds": [round(v, 4) for v in step_seconds[:500]],
         "action_seconds": [round(v, 4) for v in action_seconds[:500]],

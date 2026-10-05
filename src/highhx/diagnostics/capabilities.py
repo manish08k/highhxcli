@@ -65,7 +65,15 @@ def capability_report(app: App | None = None) -> list[CapabilityEntry]:
             "a Chromium-family browser",
         )
     )
-    for name in ("network evidence", "schema extraction", "recording and replay", "visual click (click_at)"):
+    for name in (
+        "CDP (DevTools)",
+        "network evidence and network waits",
+        "schema extraction",
+        "recording and replay",
+        "visual click (click_at)",
+        "profiles and managed sessions",
+        "live viewing (screencast)",
+    ):
         add(
             CapabilityEntry(
                 "browser",
@@ -151,14 +159,19 @@ def capability_report(app: App | None = None) -> list[CapabilityEntry]:
                 experimental=name != "seatbelt",
             )
         )
-    add(
-        CapabilityEntry(
-            "sandbox",
-            "virtual machines / isolated desktop",
-            NOT_IMPLEMENTED,
-            "no VM backend in this build; use `highhx sandbox` or an ssh:// computer",
+    from highhx.runtimes.vm import available_vm_backends
+
+    for name, cap in available_vm_backends().items():
+        add(
+            CapabilityEntry(
+                "vm",
+                f"virtual machines ({name})",
+                AVAILABLE if cap.available else UNAVAILABLE,
+                cap.detail,
+                {"lima": "Lima (limactl)", "tart": "Tart (Apple silicon)"}[name],
+                experimental=True,
+            )
         )
-    )
     ssh = _which("ssh")
     target = os.environ.get("HIGHHX_COMPUTER_TARGET", "")
     add(
@@ -179,6 +192,18 @@ def capability_report(app: App | None = None) -> list[CapabilityEntry]:
         from highhx.computer.operator.models import vision_config
 
         vision = vision_config(app)
+    ollama = _which("ollama")
+    add(
+        CapabilityEntry(
+            "models",
+            "Ollama",
+            AVAILABLE if ollama else UNAVAILABLE,
+            (ollama + " (installed; `highhx agent models --discover` lists its models)")
+            if ollama
+            else "not installed (ollama.com); any OpenAI-compatible local server works too",
+            "Ollama or another local model server",
+        )
+    )
     planner_local = bool(os.environ.get("HIGHHX_PLANNER_BASE_URL") and os.environ.get("HIGHHX_PLANNER_MODEL"))
     add(
         CapabilityEntry(
@@ -212,10 +237,17 @@ def capability_report(app: App | None = None) -> list[CapabilityEntry]:
 
     for name in (
         "MCP client and server",
-        "workflows (loops, verify, rollback, resume)",
-        "trajectories and search",
-        "task traces and events",
-        "benchmarks (8 metrics)",
+        "workflows (for_each, while, choose, wait, handoff, verify, rollback, resume)",
+        "trajectories, search and reproducibility metadata",
+        "task traces, events and timeline",
+        "benchmarks (8 metrics + diagnostics)",
+        "web console (highhx web)",
+        "approvals (approve, reject, modify, defer, timeout)",
+        "project memory",
+        "application skills",
+        "task artifacts",
+        "multi-agent supervisor with budgets",
+        "best-of-N on project copies",
     ):
         add(CapabilityEntry("platform", name, AVAILABLE, "built in"))
     pdftotext = _which("pdftotext")

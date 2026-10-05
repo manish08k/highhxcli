@@ -103,6 +103,9 @@ class Trajectory:
     planner: str = ""
     agent: str = "agent"
     """Which agent ran it (``agent``, or a specialist's name)."""
+    environment: dict[str, Any] = field(default_factory=dict)
+    """Where and how it ran, for reproducing it: HighhX and Python versions, platform, planner,
+    model, browser, the project's commit (``reproducibility()``). Never secrets."""
 
     def add(self, step: TrajectoryStep) -> None:
         self.steps.append(step)
@@ -154,6 +157,7 @@ class Trajectory:
             "ended": self.ended,
             "planner": self.planner,
             "agent": self.agent,
+            "environment": self.environment,
         }
 
     @classmethod
@@ -174,6 +178,7 @@ class Trajectory:
             ended=data.get("ended"),
             planner=str(data.get("planner", "")),
             agent=str(data.get("agent", "agent")),
+            environment=dict(data.get("environment") or {}),
         )
 
 
@@ -350,3 +355,39 @@ def replay_steps(trajectory: Trajectory, *, only_successful: bool = True) -> lis
             }
         )
     return steps
+
+
+def reproducibility(root: Path | None, planner: Any = None) -> dict[str, Any]:
+    """What a trajectory records about its run (cheap: no subprocesses, no network)."""
+    import platform
+
+    from highhx import __version__
+
+    out: dict[str, Any] = {
+        "highhx": __version__,
+        "python": platform.python_version(),
+        "platform": f"{platform.system()} {platform.release()} ({platform.machine()})",
+        "planner": getattr(planner, "name", ""),
+        "recorded": time.time(),
+    }
+    model = getattr(getattr(planner, "model", None), "capabilities", None)
+    if model is not None:
+        out["model"] = f"{getattr(model, 'provider', '')}/{getattr(model, 'model', '')}"
+    try:
+        from highhx.computer.browser import find_browser
+
+        found = find_browser()
+        if found:
+            out["browser"] = Path(str(found)).name
+    except Exception:
+        pass
+    if root is not None:
+        head = root / ".git" / "HEAD"
+        try:
+            ref = head.read_text(encoding="utf-8").strip()
+            commit = (root / ".git" / ref[5:]).read_text(encoding="utf-8").strip() if ref.startswith("ref: ") else ref
+            if len(commit) == 40:
+                out["project_commit"] = commit
+        except OSError:
+            pass
+    return out

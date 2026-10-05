@@ -64,12 +64,47 @@ APPROVAL_SCHEMA = OneOf(
 )
 
 
+STEP_KINDS = ("run", "uses", "action", "choose", "wait", "handoff", "set")
+BODY_KINDS = ("run", "uses", "action")
+
+
+def _branch_check(branch: Any) -> list[str]:
+    if not isinstance(branch, dict):
+        return ["a choose branch is a mapping"]
+    tests = [k for k in ("if", "elif", "else") if k in branch]
+    bodies = [k for k in BODY_KINDS if k in branch]
+    problems = []
+    if len(tests) != 1:
+        problems.append("a choose branch needs exactly one of 'if', 'elif' or 'else'")
+    if len(bodies) != 1:
+        problems.append("a choose branch needs exactly one of 'run', 'uses' or 'action'")
+    unknown = set(branch) - {"if", "elif", "else", *BODY_KINDS, "with", "verify", "env"}
+    if unknown:
+        problems.append(f"unknown key(s) in a choose branch: {', '.join(sorted(unknown))}")
+    return problems
+
+
 def _step_check(step: dict[str, Any]) -> list[str]:
-    kinds = [k for k in ("run", "uses", "action") if k in step]
+    kinds = [k for k in STEP_KINDS if k in step]
     if len(kinds) != 1:
-        return ["a step needs exactly one of 'run', 'uses' or 'action'"]
-    if "with" in step and kinds[0] == "run":
+        return ["a step needs exactly one of 'run', 'uses', 'action', 'choose', 'wait', 'handoff' or 'set'"]
+    if "with" in step and kinds[0] not in ("uses", "action"):
         return ["'with' is only valid together with 'uses' or 'action'"]
+    if kinds[0] == "choose":
+        branches = step["choose"]
+        problems = (
+            [p for b in branches for p in _branch_check(b)]
+            if isinstance(branches, list)
+            else ["choose is a list of branches"]
+        )
+        tests = [next((k for k in ("if", "elif", "else") if k in b), "") for b in branches if isinstance(b, dict)]
+        if tests and tests[0] != "if":
+            problems.append("the first choose branch must use 'if'")
+        if "else" in tests[:-1]:
+            problems.append("'else' must be the last choose branch")
+        return problems
+    if "while" in step and "for_each" in step:
+        return ["a step loops with 'for_each' or 'while', not both"]
     return []
 
 
@@ -92,8 +127,8 @@ STEP_SCHEMA = Obj(
         "uses": Prop(Str(min_length=1), description="Name of another workflow to run as this step"),
         "action": Prop(Str(min_length=1), description="A HighhX action to run (see `highhx actions`)"),
         "with": Prop(
-            Map(OneOf([SCALAR, List(SCALAR), Map(SCALAR)])),
-            description="Inputs for 'uses' (workflow inputs) or 'action' (action inputs)",
+            Map(OneOf([SCALAR, List(Any_()), Map(Any_())])),
+            description="Inputs for 'uses' (workflow inputs) or 'action' (action inputs; each action validates its own)",
         ),
         "rollback": Prop(
             ROLLBACK_SCHEMA, description="How to undo this step when the workflow fails (on_failure: rollback)"
@@ -114,6 +149,32 @@ STEP_SCHEMA = Obj(
         "verify": Prop(
             Map(Any_()), description="A declarative check after the step succeeds (file, text, exit_code, network …)"
         ),
+        "while": Prop(
+            Str(min_length=1), description="Repeat the step while this condition holds (checked before each run)"
+        ),
+        "max_iterations": Prop(Int(minimum=1, maximum=MAX_ITERATIONS), description="Bound for while (default 100)"),
+        "choose": Prop(
+            List(Map(Any_()), min_items=1), description="if / elif / else branches; the first that holds runs"
+        ),
+        "wait": Prop(
+            OneOf(
+                [
+                    Duration(),
+                    Obj(
+                        {
+                            "until": Prop(Str(min_length=1), required=True),
+                            "interval": Prop(Duration()),
+                            "timeout": Prop(Duration()),
+                        }
+                    ),
+                ]
+            ),
+            description="Wait a duration, or until a condition holds",
+        ),
+        "handoff": Prop(
+            Str(min_length=1), description="Hand over to a person with this message; continue when they confirm"
+        ),
+        "set": Prop(Map(Any_()), description="Compute outputs from expressions (a transform; runs nothing)"),
     },
     check=_step_check,
 )
@@ -211,6 +272,14 @@ class StepSpec:
     shell: bool | None = None
     for_each: list[Any] | str | None = None
     """Items to run the step for (a list, or an expression evaluated when the step starts)."""
+    while_: str | None = None
+    """Repeat while this condition holds (``loop.outputs`` is the previous run's outputs)."""
+    max_iterations: int = 100
+    choose: list[dict[str, Any]] | None = None
+    wait: Any = None
+    """Seconds, or ``{until, interval, timeout}``."""
+    handoff: str | None = None
+    set_: dict[str, Any] | None = None
     verify: dict[str, Any] | None = None
     """A declarative check (``highhx.verification.declarative``) the step must pass after it succeeds."""
 

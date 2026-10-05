@@ -48,3 +48,6 @@ terminal).
 
 The header facts (project, branch, Free/Pro, account, computer target) come from the
 repository and the cached account. Starting the console makes no network call.
+
+The browser counterpart is the [web console](WEB_UI.md) (`highhx web`): the same events, plus a live
+view, approvals and task controls.
