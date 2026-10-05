@@ -72,6 +72,22 @@ def test_candidates_are_a_finite_valid_set(app: App, shop: FakeShop) -> None:
         rt.act("run:rm -rf /")  # the model cannot invent primitives
 
 
+def test_every_key_the_cli_offers_is_an_action_and_invisible_keys_are_unverified(app: App, shop: FakeShop) -> None:
+    # Regression: only enter/tab/escape were actions, so "press:backspace" (offered by flows and
+    # the CLI) was refused; and a caret key that changes nothing visible counted as a failure.
+    rt, _ = runtime(app, shop, actor=Actor.USER)
+    for key in ("shift+tab", "arrowleft", "home", "escape", "cmd+c"):
+        outcome = rt.act(f"press:{key}")
+        assert outcome.ok and outcome.verified is None, (key, outcome.problems)
+    assert not rt.act("press:backspace").ok  # an editing key that changed nothing did not work
+    for direction in ("left", "right"):
+        assert rt.act(f"scroll:{direction}").ok
+    assert [a for a in shop.actions if a.startswith(("press", "scroll"))][-2:] == ["scroll left", "scroll right"]
+    for bad in ("press:hyper+x", "press:f13", "press:", "scroll:diagonal"):
+        with pytest.raises(InvalidActionError):
+            rt.act(bad)
+
+
 def test_semantic_observation_hides_secret_values(app: App, shop: FakeShop) -> None:
     shop.controls[3].value = "hunter2"
     observation = ComputerRuntime(shop, ActionGate(app.engine, RecordingUI(), source="c"), actor=Actor.USER).observe()
@@ -374,8 +390,14 @@ def _split_frame_server(pause: float) -> tuple[socket.socket, list[bytes]]:
     def serve() -> None:
         conn, _ = server.accept()
         request = conn.recv(4096).decode()
-        key = next(line.split(":", 1)[1].strip() for line in request.split("\r\n") if line.lower().startswith("sec-websocket-key"))
-        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        key = next(
+            line.split(":", 1)[1].strip()
+            for line in request.split("\r\n")
+            if line.lower().startswith("sec-websocket-key")
+        )
+        accept = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+        ).decode()
         conn.sendall(
             f"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n".encode()
         )
@@ -449,6 +471,9 @@ def test_flow_labels_never_show_text_typed_into_secret_fields() -> None:
     step, by what the runtime found the field to be."""
     from highhx.computer.flows import SECRET_MASK, _describe
 
-    assert _describe({"type": {"into": "textbox:Password", "text": "hunter2"}}) == f"type {SECRET_MASK} into textbox:Password"
+    assert (
+        _describe({"type": {"into": "textbox:Password", "text": "hunter2"}})
+        == f"type {SECRET_MASK} into textbox:Password"
+    )
     assert _describe({"type": {"into": "textbox:Email", "text": "me@x.test"}}) == "type 'me@x.test' into textbox:Email"
     assert "s3cret" not in _describe({"type": {"into": "textbox:Login", "text": "s3cret"}}, secret=True)

@@ -25,7 +25,7 @@ import contextlib
 import json
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -124,19 +124,30 @@ class BrowserSessionManager:
         endpoint = self._remote_endpoints.get(session.id, session.devtools) if session.kind == "remote" else ""
         return self.factory(self.profiles.state_dir(session.profile), endpoint)
 
+    @contextlib.contextmanager
+    def _using(self, browser: Any) -> Iterator[Any]:
+        """A browser object for one call: its DevTools connection is closed after it (the
+        browser itself keeps running). Each call made a new object and left its socket open."""
+        try:
+            yield browser
+        finally:
+            with contextlib.suppress(Exception):
+                browser.close()
+
     # -------------------------------------------------------------- lifecycle
     def start(self, *, profile: str = DEFAULT, endpoint: str = "", cancel: Any = None) -> BrowserSession:
         session_id = new_id("bs")
         if endpoint:
-            browser = self.factory(self.profiles.state_dir(DEFAULT), endpoint)
-            browser.start(cancel=cancel)
+            with self._using(self.factory(self.profiles.state_dir(DEFAULT), endpoint)) as browser:
+                browser.start(cancel=cancel)
             shown = endpoint.split("?", 1)[0]
             session = BrowserSession(session_id, "remote", DEFAULT, shown, shown, os.getpid())
             self._remote_endpoints[session_id] = endpoint
         else:
             self.profiles.lease(profile, session_id)
             try:
-                state = self.factory(self.profiles.state_dir(profile), "").start(cancel=cancel)
+                with self._using(self.factory(self.profiles.state_dir(profile), "")) as browser:
+                    state = browser.start(cancel=cancel)
             except Exception:
                 self.profiles.release(profile, session_id)
                 raise
@@ -161,8 +172,8 @@ class BrowserSessionManager:
         session = sessions.get(session_id)
         if session is None:
             raise UsageError(f"No browser session {session_id!r}.")
-        browser = self._browser(session)
-        session.healthy = browser._state() is not None
+        with self._using(self._browser(session)) as browser:
+            session.healthy = browser._state() is not None
         if session.healthy:
             session.last_heartbeat = time.time()
         self._save(sessions)
@@ -174,9 +185,9 @@ class BrowserSessionManager:
         session = sessions.get(session_id)
         if session is None:
             raise UsageError(f"No browser session {session_id!r}.")
-        browser = self._browser(session)
         try:
-            state = browser.start(cancel=cancel)  # local: restarts a dead browser on the same profile
+            with self._using(self._browser(session)) as browser:
+                state = browser.start(cancel=cancel)  # local: restarts a dead browser on the same profile
         except IntegrationError:
             session.healthy = False
             self._save(sessions)
@@ -219,4 +230,5 @@ class BrowserSessionManager:
         return removed
 
     def screenshot(self, session_id: str, *, cancel: Any = None) -> bytes:
-        return bytes(self._browser(self.get(session_id)).screenshot(cancel=cancel))
+        with self._using(self._browser(self.get(session_id))) as browser:
+            return bytes(browser.screenshot(cancel=cancel))

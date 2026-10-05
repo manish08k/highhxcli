@@ -62,6 +62,18 @@ PAGE_ACTIONS = ("back", "forward", "refresh", "new_tab", "close_tab", "switch_ta
 
 def _extended(candidate_id: str, valid: dict[str, ActionCandidate], observation: Observation) -> ActionCandidate | None:
     verb, _, element_id = candidate_id.partition(":")
+    if verb == "press" and element_id:
+        # any key or combination the browser can send (only enter/tab/escape are listed, to keep
+        # the choices short); "press:backspace" was refused although flows and the CLI offered it
+        from highhx.computer.browser import parse_key
+
+        try:
+            parse_key(element_id)
+        except IntegrationError:
+            return None
+        return ActionCandidate(candidate_id, "press", None, f"press {element_id}")
+    if verb == "scroll" and element_id in ("left", "right"):
+        return ActionCandidate(candidate_id, "scroll", None, f"scroll {element_id}")
     base = EXTENDED_VERBS.get(verb)
     if base is None or f"{base}:{element_id}" not in valid:
         return None
@@ -452,11 +464,27 @@ class ComputerRuntime:
             return (same is not None and same.focused) or None, []
         if candidate.verb in ("scroll", "hover"):
             return None, []
+        if candidate.verb == "press" and not changed and not _edits(candidate.id.split(":", 1)[1]):
+            return None, []  # a caret, focus or copy key may change nothing visible: unverified, not failed
         if candidate.verb == "upload" and same is not None:
             names = [Path(p).name for p in (text or "").split("\n") if p]
             ok = bool(names) and same.value.replace("\\", "/").rsplit("/", 1)[-1] == names[0]
             return ok, [] if ok else ["the file field does not show the chosen file"]
         return (True, []) if changed else (False, ["no visible change after the action"])
+
+
+def _edits(key: str) -> bool:
+    """Whether pressing ``key`` changes content when it works: Enter, the delete keys and plain
+    characters do; navigation keys, Escape, Tab and shortcuts may change nothing that is seen."""
+    from highhx.computer.browser import parse_key
+
+    try:
+        modifiers, base = parse_key(key)
+    except IntegrationError:
+        return True
+    if set(modifiers) - {"shift"}:
+        return False
+    return base in ("enter", "return", "backspace", "delete", "forwarddelete", "space") or len(base) == 1
 
 
 def _same_page(requested: str, actual: str) -> bool:

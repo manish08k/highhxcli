@@ -164,11 +164,13 @@ class CaptureStore:
         path = Path(folder / f"page-{number}-{int(time.time())}.png")
         path.write_bytes(data)
         width, height = png_size(path)
-        view_width = float(view.get("width") or width)
+        shown = view.get("visual") or view  # what the image shows: the visual viewport (pinch zoom)
+        view_width = float(shown.get("width") or width)
         shot = Screenshot(path, width, height, width / view_width if view_width else 1.0)
-        page = {k: view.get(k) for k in ("url", "x", "y", "width", "height")}
+        page = {k: view.get(k) for k in ("url", "x", "y", "width", "height", "visual")}
         target = f"the page {view.get('title') or view.get('url') or ''}".strip()
-        capture = Capture(f"c{number}", shot, [], (int(view_width), int(view.get("height") or height), float(view.get("dpr") or 1)), target, page=page)
+        size = (int(view_width), int(shown.get("height") or height), float(view.get("dpr") or 1))
+        capture = Capture(f"c{number}", shot, [], size, target, page=page)
         self._items[capture.id] = capture
         self.latest = capture.id
         for old in list(self._items)[:-3]:
@@ -185,7 +187,15 @@ class CaptureStore:
             raise StaleCapture(f"Screenshot {capture_id} shows the desktop, not the browser page.")
         point = self._pixel(capture, x, y, space)
         now = browser.viewport(cancel=cancel)
-        for key, what in (("url", "the page changed"), ("x", "the page scrolled"), ("y", "the page scrolled"), ("width", "the window resized"), ("height", "the window resized")):
+        checks = (
+            ("url", "the page changed"),
+            ("x", "the page scrolled"),
+            ("y", "the page scrolled"),
+            ("width", "the window resized"),
+            ("height", "the window resized"),
+            ("visual", "the page was zoomed or panned"),
+        )
+        for key, what in checks:
             if now.get(key) != capture.page.get(key):
                 raise StaleCapture(f"{what.capitalize()} since screenshot {capture_id}; take a new one.")
         return point

@@ -63,10 +63,14 @@ def site(tmp_path: Path) -> Iterator[tuple[str, Path]]:
         server.server_close()
 
 
-def test_record_then_heal_after_a_redesign(site: tuple[str, Path], agent_project: Path, make_app, tmp_path: Path) -> None:
+def test_record_then_heal_after_a_redesign(
+    site: tuple[str, Path], agent_project: Path, make_app, tmp_path: Path
+) -> None:
     base, root = site
     app = make_app(agent_project)
-    gate = ActionGate(app.engine, RecordingUI(), source="test", mode=ApprovalMode.ASK, audit=AuditLog(app.db, app.redactor))
+    gate = ActionGate(
+        app.engine, RecordingUI(), source="test", mode=ApprovalMode.ASK, audit=AuditLog(app.db, app.redactor)
+    )
     session = ComputerSession(gate, actor=Actor.USER, state_dir=tmp_path / "state", headless=True)
     executor = ActionExecutor(app, gate, actor=Actor.USER, computer=lambda: session)
     try:
@@ -98,7 +102,11 @@ def test_record_then_heal_after_a_redesign(site: tuple[str, Path], agent_project
         store.save(workflow)
 
         shot = state_from_result(executor.run("computer.state", {"surface": "browser", "screenshot": True}))
-        assert shot is not None and shot.screenshot is not None and png_size(Path(shot.screenshot.path).read_bytes())[0] > 100
+        assert (
+            shot is not None
+            and shot.screenshot is not None
+            and png_size(Path(shot.screenshot.path).read_bytes())[0] > 100
+        )
 
         for name, html in V2.items():
             (root / name).write_text(html)
@@ -106,9 +114,16 @@ def test_record_then_heal_after_a_redesign(site: tuple[str, Path], agent_project
 
         trajectories = TrajectoryStore(tmp_path / "trajectories")
         report = replay(executor, store.load("export"), workflows=store, trajectories=trajectories)
-        assert report.status == "completed", trajectories.load(report.task_id).describe() + str([s.result.get("error") for s in trajectories.load(report.task_id).steps])
-        assert [(h["was"], h["now"]) for h in report.healed] == [("Invoices", "Billing documents"), ("Export", "Download CSV")]
+        assert report.status == "completed", trajectories.load(report.task_id).describe() + str(
+            [s.result.get("error") for s in trajectories.load(report.task_id).steps]
+        )
+        assert [(h["was"], h["now"]) for h in report.healed] == [
+            ("Invoices", "Billing documents"),
+            ("Export", "Download CSV"),
+        ]
         assert all(h["strategy"] == "dom" for h in report.healed) and report.saved
         assert "Export ready" in browser.observe().text
     finally:
+        if session._browser is not None:
+            session._browser.stop()  # its own throwaway profile: quit the browser, not just disconnect
         session.close()

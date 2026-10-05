@@ -10,7 +10,7 @@ import click
 from rich.markup import escape
 
 from highhx.commands import App, pass_app
-from highhx.core.errors import UsageError
+from highhx.core.errors import IntegrationError, UsageError
 
 if TYPE_CHECKING:
     from highhx.computer.runtime import ActionOutcome
@@ -307,15 +307,20 @@ def computer_select(app: App, selector: str, option: str, source: str) -> int:
     return _act(app, source, "select", selector, option)
 
 
-@computer.command("press", short_help="Press a key (enter, tab, escape …).")
-@click.argument(
-    "key",
-    type=click.Choice(["enter", "tab", "escape", "backspace", "arrowdown", "arrowup", "pagedown", "pageup", "space"]),
-)
+@computer.command("press", short_help="Press a key or combination (enter, shift+tab, cmd+a …).")
+@click.argument("key")
 @SOURCE_OPTION
 @pass_app
 def computer_press(app: App, key: str, source: str) -> int:
-    """Press KEY in the focused control. Enter in a form counts as submitting it."""
+    """Press KEY in the focused control: a named key (enter, tab, escape, backspace, forwarddelete,
+    arrows, home, end, pageup, pagedown, space, f1-f12), a character, or a combination such as
+    shift+tab or cmd+a. Enter in a form (with or without modifiers) counts as submitting it."""
+    from highhx.computer.browser import parse_key
+
+    try:
+        parse_key(key)
+    except IntegrationError as exc:
+        raise click.BadParameter(str(exc), param_hint="KEY") from None
     return _act(app, source, f"press:{key}", None)
 
 
@@ -855,7 +860,7 @@ def _desktop_task(
     from highhx.computer.verify import check_predicates
 
     if not goal.strip():
-        raise UsageError("Describe the task, e.g. highhx computer task --desktop \"turn on Auto Save in VS Code\".")
+        raise UsageError('Describe the task, e.g. highhx computer task --desktop "turn on Auto Save in VS Code".')
     try:
         expect = check_predicates([json.loads(e) for e in raw_expect]) if raw_expect else None
     except ValueError:
@@ -906,7 +911,9 @@ def _task_line(event: str, data: dict[str, Any]) -> str:
     """One line per task event (the same events the REPL and the event log see)."""
     if event == "computer.task.started":
         where = "local" if data.get("local") else "remote"
-        return f"[bold]TASK:[/bold]     {escape(str(data['goal']))} [dim]({data.get('model') or 'model'}, {where})[/dim]"
+        return (
+            f"[bold]TASK:[/bold]     {escape(str(data['goal']))} [dim]({data.get('model') or 'model'}, {where})[/dim]"
+        )
     if event == "computer.screenshot":
         return f"[dim]OBSERVE:  {data['capture']} {data['size'][0]}x{data['size'][1]}[/dim]"
     if event == "computer.action.predicted":
@@ -1013,11 +1020,16 @@ def computer_ground(app: App, target: str, surface: str, ocr: bool) -> int:
     def escalate(level: str, query: str) -> Any:
         if level != "ocr" or not ocr:
             return None
-        richer = executor.run("computer.state", {"surface": surface, "screenshot": True, "ocr": "always", "query": query})
+        richer = executor.run(
+            "computer.state", {"surface": surface, "screenshot": True, "ocr": "always", "query": query}
+        )
         return state_from_result(richer) if richer.ok else None
 
     found = HybridGrounder(emit=executor.events.emit).ground(state, Target.parse(target), escalate=escalate)
-    app.output.emit(found.to_dict(), lambda: app.output.plain(found.explain() + (f"\n  point: {list(found.point)}" if found.point else "")))
+    app.output.emit(
+        found.to_dict(),
+        lambda: app.output.plain(found.explain() + (f"\n  point: {list(found.point)}" if found.point else "")),
+    )
     return 0 if found.grounded else 1
 
 
@@ -1033,8 +1045,16 @@ def computer_drivers(app: App) -> int:
     backends = [{"backend": n, "available": c.available, "detail": c.detail} for n, c in available_backends().items()]
 
     def render() -> None:
-        app.output.table(["driver", "available", "detail"], [(d["driver"], "yes" if d["available"] else "no", d["detail"]) for d in drivers], title="Drivers")
-        app.output.table(["sandbox", "available", "detail"], [(b["backend"], "yes" if b["available"] else "no", b["detail"]) for b in backends], title="Sandbox isolation")
+        app.output.table(
+            ["driver", "available", "detail"],
+            [(d["driver"], "yes" if d["available"] else "no", d["detail"]) for d in drivers],
+            title="Drivers",
+        )
+        app.output.table(
+            ["sandbox", "available", "detail"],
+            [(b["backend"], "yes" if b["available"] else "no", b["detail"]) for b in backends],
+            title="Sandbox isolation",
+        )
 
     app.output.emit({"drivers": drivers, "sandbox": backends}, render)
     return 0

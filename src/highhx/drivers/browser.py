@@ -19,7 +19,15 @@ if TYPE_CHECKING:
     from highhx.execution.cancellation import CancellationToken
     from highhx.perception.state import ComputerState, ScreenshotRef
 
-MODIFIERS = {"cmd": "command", "command": "command", "ctrl": "control", "control": "control", "alt": "option", "option": "option", "shift": "shift"}
+MODIFIERS = {
+    "cmd": "command",
+    "command": "command",
+    "ctrl": "control",
+    "control": "control",
+    "alt": "option",
+    "option": "option",
+    "shift": "shift",
+}
 
 
 class BrowserDriver(DriverHelpers):
@@ -39,8 +47,12 @@ class BrowserDriver(DriverHelpers):
         from highhx.perception.engine import PerceptionEngine, PerceptionPolicy
         from highhx.perception.providers import BrowserDOM, BrowserScreenshots
 
-        engine = PerceptionEngine("browser", structure=[BrowserDOM(self.browser)], screenshot=BrowserScreenshots(self.browser))
-        state = engine.observe(policy=PerceptionPolicy(screenshot=screenshot, ocr="never", cache_ttl=0.0), cancel=self.cancel)
+        engine = PerceptionEngine(
+            "browser", structure=[BrowserDOM(self.browser)], screenshot=BrowserScreenshots(self.browser)
+        )
+        state = engine.observe(
+            policy=PerceptionPolicy(screenshot=screenshot, ocr="never", cache_ttl=0.0), cancel=self.cancel
+        )
         try:
             view = self.browser.viewport(cancel=self.cancel)
         except Exception:  # the viewport is context; the page itself was observed
@@ -83,8 +95,8 @@ class BrowserDriver(DriverHelpers):
         self.browser.key_combo([MODIFIERS[m] for m in mods], key, cancel=self.cancel)
 
     def scroll(self, direction: str, amount: int = 3, *, at: tuple[int, int] | None = None) -> None:
-        if direction not in ("up", "down"):
-            raise CapabilityError(f"the browser scrolls up or down, not {direction}")
+        if direction not in ("up", "down", "left", "right"):
+            raise CapabilityError(f"the browser scrolls up, down, left or right, not {direction}")
         if at is not None:
             self.browser.pointer("wheel", at[0], at[1], direction=direction, cancel=self.cancel)
         else:

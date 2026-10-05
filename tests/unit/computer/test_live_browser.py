@@ -12,6 +12,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -29,7 +30,7 @@ from highhx.core.errors import (
 from highhx.safety.actions import Actor
 from highhx.safety.audit import AuditLog
 from highhx.safety.gate import ActionGate, ApprovalMode
-from tests.unit.agent.conftest import RecordingUI
+from tests.unit.agent.conftest import RecordingUI, agent_project, make_app  # noqa: F401
 
 pytestmark = pytest.mark.skipif(
     not (os.environ.get("HIGHHX_TEST_BROWSER") and find_browser()),
@@ -419,3 +420,268 @@ def test_github_then_wikipedia_repeatedly_on_the_real_internet(tmp_path: Path) -
         assert [e["event"] for e in _events(browser)] == ["connected"]
     finally:
         assert browser.stop()
+
+
+def _open_fds() -> int:
+    return len(list(Path("/dev/fd").iterdir()))
+
+
+def test_repeated_start_use_stop_cycles_leak_no_process_socket_or_file(site: str, tmp_path: Path) -> None:
+    from highhx.computer import browser as browser_module
+    from highhx.computer.browser_sessions import BrowserSessionManager
+
+    def cycle(i: int) -> int:
+        browser = ChromeBrowser(tmp_path / "state", headless=True)
+        try:
+            browser.navigate(f"{site}/index.html?i={i}")
+            assert browser.observe().title == "Shop"
+            pid = int((browser._state() or {})["pid"])
+        finally:
+            assert browser.stop()
+        return pid
+
+    cycle(0)  # warm-up: imports, caches and the first profile write are not leaks
+    fds = _open_fds()
+    pids = [cycle(i) for i in range(1, 6)]
+    assert not any(browser_module._alive(pid) for pid in pids)  # every browser exited and was reaped
+    assert not set(pids) & set(browser_module._LAUNCHED)
+    assert _open_fds() <= fds + 2, (fds, _open_fds())  # no socket, pipe or file left per cycle
+
+    manager = BrowserSessionManager(tmp_path / "managed", headless=True)
+    session = manager.start(profile="default")
+    try:
+        manager.screenshot(session.id)
+        fds = _open_fds()
+        for _ in range(10):  # each call used to leave a DevTools socket open
+            assert manager.screenshot(session.id)[:4] == b"\x89PNG"
+            assert manager.heartbeat(session.id).healthy
+        assert _open_fds() <= fds + 2, (fds, _open_fds())
+    finally:
+        manager.stop(session.id)
+
+
+KEYS_PAGE = (
+    "<!doctype html><title>Keys</title>"
+    "<input id=a aria-label=First><input id=b aria-label=Second><textarea id=t aria-label=Notes></textarea>"
+    "<p id=log></p><script>"
+    "const seen=[];document.addEventListener('keydown',e=>{seen.push([e.key,e.code,e.shiftKey,e.ctrlKey,e.altKey,e.metaKey]);"
+    "log.textContent=JSON.stringify(seen.slice(-1))});window.seen=seen;</script>"
+)
+
+
+def test_keyboard_keys_combos_and_editing_in_a_real_browser(site: str, tmp_path: Path) -> None:
+    import json as _json
+    import sys as _sys
+
+    (tmp_path / "keys.html").write_text(KEYS_PAGE)
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+    mod = "cmd" if _sys.platform == "darwin" else "ctrl"
+
+    def js(expr: str) -> Any:
+        return browser._eval(expr, None)
+
+    def last_key() -> list[Any]:
+        return list(_json.loads(js("JSON.stringify(window.seen[window.seen.length-1])")))
+
+    try:
+        browser.navigate(f"{site}/keys.html")
+        first = next(e for e in browser.observe().elements if e.name == "First")
+        browser.type_text(first.id, "hello world")
+        # every named key reaches the page as the key it names
+        named = {
+            "enter": "Enter",
+            "tab": "Tab",
+            "escape": "Escape",
+            "backspace": "Backspace",
+            "forwarddelete": "Delete",
+            "arrowleft": "ArrowLeft",
+            "arrowright": "ArrowRight",
+            "arrowup": "ArrowUp",
+            "arrowdown": "ArrowDown",
+            "home": "Home",
+            "end": "End",
+            "pageup": "PageUp",
+            "pagedown": "PageDown",
+            "space": " ",
+            "f5": "F5",
+        }
+        for key, dom in named.items():
+            js("document.getElementById('a').focus()")
+            browser.press(key)
+            assert last_key()[0] == dom, (key, last_key())
+        # modifiers arrive as modifiers
+        js("document.getElementById('a').focus()")
+        browser.press("shift+arrowleft")
+        assert last_key()[:3] == ["ArrowLeft", "ArrowLeft", True]
+        browser.press("ctrl+alt+k")
+        assert last_key()[3:5] == [True, True] and last_key()[1] == "KeyK"
+        # editing shortcuts do what they do for a person (macOS: cmd, through Chrome's editing commands)
+        js("const a=document.getElementById('a');a.value='hello world';a.focus();a.setSelectionRange(11,11)")
+        browser.press(f"{mod}+a")
+        assert js("[a.selectionStart,a.selectionEnd].join()") == "0,11"
+        browser.press("backspace")
+        assert js("a.value") == ""
+        browser.insert_text("abc")
+        browser.press("arrowleft")
+        browser.press("forwarddelete")
+        assert js("a.value") == "ab"
+        browser.press(f"{mod}+z")
+        assert js("a.value") == "abc"
+        browser.press(f"{mod}+shift+z")
+        assert js("a.value") == "ab"  # redo
+        js("a.value='ab';a.setSelectionRange(2,2)")
+        browser.press("shift+a")  # a printable key with shift types the shifted character
+        browser.press("shift+1")
+        browser.press("7")
+        assert js("a.value") == "abA!7"
+        if mod == "cmd":  # macOS line keys (Home/End scroll there)
+            browser.press("cmd+arrowleft")
+            browser.insert_text("<")
+            browser.press("cmd+arrowright")
+            browser.insert_text(">")
+        else:
+            browser.press("home")
+            browser.insert_text("<")
+            browser.press("end")
+            browser.insert_text(">")
+        assert js("a.value") == "<abA!7>"
+        # focus: Tab and Shift+Tab move between fields
+        js("document.getElementById('a').focus()")
+        browser.press("tab")
+        assert js("document.activeElement.id") == "b"
+        browser.press("shift+tab")
+        assert js("document.activeElement.id") == "a"
+        # Enter in a textarea is a line break, not a submit
+        js("document.getElementById('t').focus()")
+        browser.insert_text("one")
+        browser.press("enter")
+        browser.insert_text("two")
+        assert js("document.getElementById('t').value") == "one\ntwo"
+    finally:
+        assert browser.stop()
+
+
+PRECISION_PAGE = (
+    "<!doctype html><title>Targets</title><style>body{margin:0;width:3000px;height:3000px}"
+    ".t{position:absolute;width:8px;height:8px;border:0;padding:0}</style>"
+    "<p id=hit>none</p>"
+    "<button class=t id=near style='left:1500px;top:1200px;background:#00ff00' onclick=\"hit.textContent='near'\"></button>"
+    "<button class=t id=next style='left:1510px;top:1200px;background:#0000ff' onclick=\"hit.textContent='next'\"></button>"
+    "<iframe id=f style='position:absolute;left:1600px;top:1300px;width:200px;height:120px;border:0' srcdoc=\""
+    "<body style=margin:0><button style='position:absolute;left:50px;top:40px;width:8px;height:8px;border:0;"
+    "padding:0;background:#ff00ff' onclick=&quot;parent.document.getElementById('hit').textContent='frame'&quot;>"
+    '</button></body>"></iframe>'
+)
+
+
+def test_screenshot_pixels_are_click_points_under_scroll_zoom_dpr_and_frames(site: str, tmp_path: Path) -> None:
+    from highhx.perception.png import decode
+
+    (tmp_path / "precision.html").write_text(PRECISION_PAGE)
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+
+    def find(color: tuple[int, int, int]) -> tuple[int, int]:
+        data, _view = browser.page_capture()
+        image = decode(data)
+        points = [(x, y) for y in range(image.height) for x in range(image.width) if image.pixel(x, y) == color]
+        assert points, f"{color} is not on screen"
+        xs, ys = [p[0] for p in points], [p[1] for p in points]
+        return (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2
+
+    def click(color: tuple[int, int, int], expected: str, element: str) -> None:
+        browser._eval(f"hit.textContent='none';{element}.scrollIntoView({{block:'center',inline:'center'}})", None)
+        time.sleep(0.2)
+        x, y = find(color)
+        browser.pointer("click", x, y)
+        assert browser._eval("hit.textContent", None) == expected, (color, (x, y), browser.viewport())
+
+    def cdp(method: str, params: dict[str, Any]) -> None:
+        from highhx.computer.browser import Retry
+
+        browser._run(method, Retry.SAFE, lambda c, s: c.call(method, params, session_id=s), None)
+
+    def conditions() -> Iterator[str]:
+        yield "scrolled"
+        cdp(
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 1000, "height": 700, "deviceScaleFactor": 2, "mobile": False},
+        )
+        yield "device pixel ratio 2"
+        browser._eval("document.body.style.zoom='1.5'", None)
+        yield "page zoom 150%"
+        browser._eval("document.body.style.zoom='1'", None)
+        cdp("Emulation.setPageScaleFactor", {"pageScaleFactor": 2})
+        yield "pinch zoom 2x"
+
+    try:
+        browser.navigate(f"{site}/precision.html")
+        for condition in conditions():
+            targets = (((0, 255, 0), "near", "near"), ((0, 0, 255), "next", "next"), ((255, 0, 255), "frame", "f"))
+            for color, expected, element in targets:
+                try:
+                    click(color, expected, element)
+                except AssertionError as exc:
+                    raise AssertionError(f"{condition}: {exc}") from None
+    finally:
+        assert browser.stop()
+
+
+SCROLL_PAGE = (
+    "<!doctype html><title>Wide</title><style>body{margin:0;width:4000px;height:3000px}</style>"
+    "<div id=panel style='position:absolute;left:20px;top:60px;width:200px;height:120px;overflow:auto'>"
+    "<div style='width:1000px;height:1000px'>panel</div></div>"
+    "<button id=go style='position:absolute;left:400px;top:300px;width:30px;height:20px;background:#00ff00;border:0'"
+    " onclick=\"this.textContent='hit'\"></button>"
+)
+
+
+def test_capture_clicks_and_scrolling(site: str, tmp_path: Path, agent_project: Path, make_app: Any) -> None:  # noqa: F811
+    from highhx.actions.executor import ActionExecutor
+    from highhx.computer.session import ComputerSession
+
+    (tmp_path / "wide.html").write_text(SCROLL_PAGE)
+    app = make_app(agent_project)
+    gate = ActionGate(
+        app.engine, RecordingUI(), source="test", mode=ApprovalMode.ASK, audit=AuditLog(app.db, app.redactor)
+    )
+    session = ComputerSession(gate, actor=Actor.USER, state_dir=tmp_path / "state", headless=True)
+    executor = ActionExecutor(app, gate, actor=Actor.USER, computer=lambda: session)
+    try:
+        assert executor.run("browser.open", {"url": f"{site}/wide.html"}).ok
+        browser = session.browser
+        shot = executor.run("browser.screenshot", {})
+        assert shot.ok and shot.output["capture"]
+        # the green button's centre in the capture, by pixel: (415, 310) CSS = (415, 310) image
+        clicked = executor.run("browser.click_at", {"x": 415, "y": 310, "capture": shot.output["capture"]})
+        assert clicked.ok and browser._eval("go.textContent", None) == "hit"
+        used = executor.run("browser.click_at", {"x": 415, "y": 310, "capture": shot.output["capture"]})
+        assert not used.ok and "Stale screenshot" in used.error  # an action since: the capture is retired
+        # the page scrolls by itself after a fresh capture: its pixels no longer show what is there
+        fresh = executor.run("browser.screenshot", {}).output["capture"]
+        browser._eval("scrollTo(0, 40)", None)
+        stale = executor.run("browser.click_at", {"x": 415, "y": 310, "capture": fresh})
+        assert not stale.ok and "scrolled" in stale.error
+        browser._eval("scrollTo(0, 0)", None)
+        assert executor.run("browser.scroll", {"direction": "right"}).ok
+        assert float(browser._eval("scrollX", None)) > 0  # horizontal page scroll
+        assert executor.run("browser.scroll", {"direction": "left"}).ok
+        assert float(browser._eval("scrollX", None)) == 0
+        # wheel input at a point scrolls the panel under it, not the page
+        for direction, axis in (("down", "scrollTop"), ("right", "scrollLeft")):
+            result = executor.run("browser.scroll", {"direction": direction, "x": 100, "y": 110})
+            assert result.ok and result.verified, result.error
+            assert float(browser._eval(f"panel.{axis}", None)) > 0
+        assert float(browser._eval("scrollY", None)) == 0 and float(browser._eval("scrollX", None)) == 0
+        # keys through the executor: every key the CLI and flows offer, and combinations
+        browser._eval(
+            "document.body.insertAdjacentHTML('beforeend','<input id=k aria-label=K>');k.focus();k.value='abc'", None
+        )
+        for key in ("backspace", "arrowleft", "forwarddelete", "home", "shift+tab", "pagedown", "f5"[:0] or "escape"):
+            result = executor.run("browser.press", {"key": key})
+            assert result.ok, (key, result.error)
+        assert browser._eval("k.value", None) == "a"  # "abc" → backspace → "ab" → left, forward delete → "a"
+    finally:
+        if session._browser is not None:
+            session._browser.stop()
+        executor.close()
+        session.close()

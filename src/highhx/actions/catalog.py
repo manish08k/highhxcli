@@ -878,7 +878,7 @@ def _specs() -> list[ActionSpec]:
         ),
         ActionSpec(
             "browser.press",
-            "Press a key in the browser (enter, tab, escape …).",
+            "Press a key or combination in the browser (enter, tab, shift+tab, cmd+a, arrowleft, f5 …).",
             native.browser_press,
             Obj({"key": Prop(Str(min_length=1), required=True)}),
             {"step": "outcome"},
@@ -959,7 +959,7 @@ def _specs() -> list[ActionSpec]:
             "Save a screenshot of the current page (default .highhx/screenshots/).",
             native.browser_screenshot,
             Obj({"path": Prop(Str(min_length=1))}),
-            {"path": "saved PNG", "bytes": "size"},
+            {"path": "saved PNG", "bytes": "size", "capture": "page capture id (for browser.click_at)"},
             permissions=(BROWSER, WRITE_PROJECT),
             timeout=60,
             agent=False,
@@ -1290,7 +1290,8 @@ def _specs() -> list[ActionSpec]:
             target=lambda i: str(i.get("key", "")),
             risk_for=lambda i: (
                 Risk.MEDIUM
-                if str(i.get("key", "")).lower() in ("enter", "return", "delete", "backspace", "forwarddelete")
+                if str(i.get("key", "")).lower().rsplit("+", 1)[-1]
+                in ("enter", "return", "delete", "backspace", "forwarddelete")
                 else Risk.LOW
             ),
         ),

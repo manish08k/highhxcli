@@ -43,7 +43,11 @@ def test_every_driver_implements_the_interface(desktop) -> None:
     assert isinstance(AndroidDriver(AdbClient(adb="adb")), ComputerDriver)
     assert isinstance(BrowserDriver(FakeBrowser()), ComputerDriver)
     for op in OPERATIONS:
-        assert callable(getattr(DesktopDriver, op)) and callable(getattr(AndroidDriver, op)) and callable(getattr(BrowserDriver, op))
+        assert (
+            callable(getattr(DesktopDriver, op))
+            and callable(getattr(AndroidDriver, op))
+            and callable(getattr(BrowserDriver, op))
+        )
 
 
 def test_desktop_driver_adapts_the_existing_computer_api(desktop) -> None:
@@ -138,5 +142,7 @@ def test_browser_driver_maps_operations_to_devtools_input() -> None:
     ]
     with pytest.raises(CapabilityError):
         driver.hotkey("hyper+a")
+    driver.scroll("left")  # horizontal page scrolling (real Chrome: test_live_browser.py)
+    assert browser.calls[-1] == ("scroll", "left")
     with pytest.raises(CapabilityError):
-        driver.scroll("left")
+        driver.scroll("diagonal")

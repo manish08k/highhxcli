@@ -403,8 +403,19 @@ def browser_screenshot(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     from highhx.artifacts import record
 
     artifact = record(ctx, target, kind="screenshot", action="browser.screenshot")
+    # and a page capture to click from: one pixel per CSS pixel, grounded and refused once stale
+    # (a browser that cannot make one still saves its screenshot)
+    browser = ctx.computer().browser
+    capture = (
+        ctx.computer().captures.take_page(browser, cancel=ctx.cancel)
+        if callable(getattr(browser, "page_capture", None))
+        else None
+    )
+    shown = {"capture": capture.id, "width": capture.shot.width, "height": capture.shot.height} if capture else {}
     return ActionResult(
-        True, output={"path": rel, "bytes": len(raw), "artifact": artifact}, summary=f"screenshot saved to {rel}"
+        True,
+        output={"path": rel, "bytes": len(raw), "artifact": artifact, **shown},
+        summary=f"screenshot saved to {rel}" + (f" (capture {capture.id} for browser.click_at)" if capture else ""),
     )
 
 

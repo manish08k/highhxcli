@@ -353,6 +353,10 @@ def drag(ctx: ActionContext, inputs: Inputs) -> ActionResult:
 def scroll(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     direction = str(inputs.get("direction") or "down")
     if str(inputs.get("source") or "browser") == "browser":
+        if inputs.get("x") is not None and inputs.get("y") is not None:
+            from highhx.actions.catalog_computer import _page_point, browser_wheel
+
+            return browser_wheel(ctx, direction, *_page_point(ctx, inputs))
         return _flow_step(ctx, {"scroll": direction})
     at = _point(ctx, inputs) if inputs.get("x") is not None and inputs.get("y") is not None else None
     where = frontmost_app(ctx)

@@ -282,8 +282,11 @@ class FakeSocket:
                 return {"result": {"value": "complete"}}
             if expression == "window.scrollY":
                 return {"result": {"value": data.get("scroll", 0)}}
+            if expression == "[window.scrollX, window.scrollY]":
+                return {"result": {"value": [data.get("scroll_x", 0), data.get("scroll", 0)]}}
             if expression.startswith("window.scrollTo"):
-                data["scroll"] = float(expression.split(",")[1].strip(" )"))
+                x, y = expression[len("window.scrollTo(") : -1].split(",")
+                data["scroll_x"], data["scroll"] = float(x), float(y)
                 return {"result": {"value": None}}
             if "querySelectorAll('[data-highhx-id]')" in expression:  # an observation of the page
                 page = {"title": data["title"], "url": data["url"], "elements": [], "text": "", "ready": "complete"}

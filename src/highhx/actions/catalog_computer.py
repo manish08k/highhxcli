@@ -8,6 +8,7 @@ from highhx.actions.handlers import api, blocks, state
 from highhx.actions.handlers.native import _flow_step
 from highhx.actions.policy import Risk
 from highhx.actions.spec import BROWSER, DESKTOP, NETWORK, ActionContext, ActionResult, ActionSpec, Inputs
+from highhx.agent.tools.base import ToolError
 from highhx.cloud.plans import AGENT_COMPUTER_USE
 from highhx.computer.network import sanitize_url
 from highhx.safety.actions import ActionKind
@@ -27,11 +28,45 @@ def _state_risk(inputs: Inputs) -> Risk:
 
 
 def browser_select(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    return _flow_step(ctx, {"select": {"in": str(inputs["target"]), "option": str(inputs["option"])}}, float(inputs.get("timeout") or 10))
+    return _flow_step(
+        ctx,
+        {"select": {"in": str(inputs["target"]), "option": str(inputs["option"])}},
+        float(inputs.get("timeout") or 10),
+    )
 
 
 def browser_scroll(ctx: ActionContext, inputs: Inputs) -> ActionResult:
-    return _flow_step(ctx, {"scroll": str(inputs.get("direction") or "down")})
+    direction = str(inputs.get("direction") or "down")
+    if inputs.get("x") is not None and inputs.get("y") is not None:
+        return browser_wheel(ctx, direction, *_page_point(ctx, inputs))
+    return _flow_step(ctx, {"scroll": direction})
+
+
+SCROLLED_AT = (
+    "(x, y) => { let n = document.elementFromPoint(x, y);"
+    " while (n && n.scrollHeight <= n.clientHeight && n.scrollWidth <= n.clientWidth) n = n.parentElement;"
+    " n = n || document.scrollingElement; return [n.scrollLeft, n.scrollTop]; }"
+)
+"""The scroll position of what wheel input at a point scrolls (the nearest scrollable ancestor)."""
+
+
+def browser_wheel(ctx: ActionContext, direction: str, x: int, y: int) -> ActionResult:
+    """Wheel input at a viewport point: scrolls whatever is under it (a panel, a map, a list)."""
+    browser = _browser(ctx)
+    probe = f"({SCROLLED_AT})({x}, {y})"
+    before = browser._eval(probe, ctx.cancel)
+    browser.pointer("wheel", x, y, direction=direction, cancel=ctx.cancel)
+    moved = False
+    for _ in range(10):  # wheel scrolling is applied asynchronously (and may be smooth)
+        moved = browser._eval(probe, ctx.cancel) != before
+        if moved or ctx.cancel.wait(0.05):
+            break
+    return ActionResult(
+        True,
+        output={"direction": direction, "x": x, "y": y, "moved": moved},
+        summary=f"scrolled {direction} at ({x}, {y})" + ("" if moved else " (nothing moved: already at the end?)"),
+        verified=moved,
+    )
 
 
 def _browser(ctx: ActionContext):  # type: ignore[no-untyped-def]
@@ -40,20 +75,54 @@ def _browser(ctx: ActionContext):  # type: ignore[no-untyped-def]
     return session.browser
 
 
+def _page_point(ctx: ActionContext, inputs: Inputs) -> tuple[int, int]:
+    """A viewport point: as given (CSS pixels), or a pixel of page screenshot ``capture`` — only
+    while the page is still the one captured (same address, scroll, size, zoom)."""
+    from highhx.actions.handlers.desktop import STALE
+    from highhx.computer.capture import StaleCapture
+
+    x, y = inputs["x"], inputs["y"]
+    if not inputs.get("capture"):
+        return int(x), int(y)
+    try:
+        return ctx.computer().captures.ground_page(
+            _browser(ctx),
+            str(inputs["capture"]),
+            float(x),
+            float(y),
+            space=str(inputs.get("space") or "pixels"),
+            cancel=ctx.cancel,
+        )
+    except StaleCapture as exc:
+        raise ToolError(f"{STALE}: {exc.message}") from None
+
+
 def browser_click_at(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     from highhx.actions.handlers.native import network_evidence
 
-    x, y = int(inputs["x"]), int(inputs["y"])
+    x, y = _page_point(ctx, inputs)
     count = int(inputs.get("count") or 1)
     evidence = network_evidence(ctx)
     _browser(ctx).pointer("click", x, y, button=str(inputs.get("button") or "left"), count=count, cancel=ctx.cancel)
-    return evidence.attach(ActionResult(True, output={"x": x, "y": y, "count": count}, summary=f"clicked the page at ({x}, {y})", verified=None))
+    return evidence.attach(
+        ActionResult(
+            True, output={"x": x, "y": y, "count": count}, summary=f"clicked the page at ({x}, {y})", verified=None
+        )
+    )
 
 
 def browser_insert_text(ctx: ActionContext, inputs: Inputs) -> ActionResult:
     text = str(inputs["text"])
     _browser(ctx).insert_text(text, cancel=ctx.cancel)
-    return ActionResult(True, output={"characters": len(text)}, summary=f"typed {len(text)} character(s)", verified=None)
+    return ActionResult(
+        True, output={"characters": len(text)}, summary=f"typed {len(text)} character(s)", verified=None
+    )
+
+
+PAGE_CAPTURE = Prop(
+    Str(min_length=1), description="x/y are in this page screenshot (from browser.screenshot); refused once stale."
+)
+SPACE = Prop(Str(choices=("pixels", "relative1000")), description="With capture: pixels or 0-1000.")
 
 
 def computer_use_specs() -> list[ActionSpec]:
@@ -69,8 +138,13 @@ def computer_use_specs() -> list[ActionSpec]:
                     "screenshot": Prop(Bool()),
                     "ocr": Prop(LEVEL),
                     "vision": Prop(LEVEL),
-                    "remote_vision": Prop(Bool(), description="Allow a remote vision model (screenshots leave this computer)."),
-                    "query": Prop(Str(min_length=1, check=_short), description="What to look for (escalates perception when not found)."),
+                    "remote_vision": Prop(
+                        Bool(), description="Allow a remote vision model (screenshots leave this computer)."
+                    ),
+                    "query": Prop(
+                        Str(min_length=1, check=_short),
+                        description="What to look for (escalates perception when not found).",
+                    ),
                     "app": Prop(Str(min_length=1)),
                     "device": Prop(Str(min_length=1), description="Android: the device serial."),
                     "max_size": Prop(Int(minimum=200, maximum=8000)),
@@ -120,6 +194,8 @@ def computer_use_specs() -> list[ActionSpec]:
                     "y": Prop(Int(minimum=0, maximum=100_000), required=True),
                     "button": Prop(Str(choices=("left", "right", "middle"))),
                     "count": Prop(Int(minimum=1, maximum=3)),
+                    "capture": PAGE_CAPTURE,
+                    "space": SPACE,
                 }
             ),
             {"x": "x", "y": "y"},
@@ -146,9 +222,17 @@ def computer_use_specs() -> list[ActionSpec]:
         ),
         ActionSpec(
             "browser.scroll",
-            "Scroll the page up or down.",
+            "Scroll the page up, down, left or right — or, at a viewport point, whatever is under it.",
             browser_scroll,
-            Obj({"direction": Prop(Str(choices=("up", "down")))}),
+            Obj(
+                {
+                    "direction": Prop(Str(choices=("up", "down", "left", "right"))),
+                    "x": Prop(Int(minimum=0, maximum=100_000), description="With y: wheel input at this point."),
+                    "y": Prop(Int(minimum=0, maximum=100_000)),
+                    "capture": PAGE_CAPTURE,
+                    "space": SPACE,
+                }
+            ),
             {"step": "outcome"},
             Risk.SAFE,
             ActionKind.UI_SCROLL,
@@ -167,15 +251,22 @@ def computer_use_specs() -> list[ActionSpec]:
                     "url": Prop(Str(min_length=1), required=True),
                     "method": Prop(Str(choices=("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"))),
                     "headers": Prop(Map(Str())),
-                    "headers_from_env": Prop(Map(Str(min_length=1)), description="Header → environment variable (never logged)."),
+                    "headers_from_env": Prop(
+                        Map(Str(min_length=1)), description="Header → environment variable (never logged)."
+                    ),
                     "json": Prop(Any_(), description="A JSON body."),
                     "body": Prop(Str()),
                     "timeout": Prop(Num(minimum=1)),
                     "expect_status": Prop(Int(minimum=100, maximum=599)),
                     "query": Prop(Map(Str()), description="Query parameters added to the URL."),
                     "form": Prop(Map(Str()), description="A form body (application/x-www-form-urlencoded)."),
-                    "retries": Prop(Int(minimum=0, maximum=5), description="Retries for GET/HEAD/OPTIONS on 5xx or connection errors."),
-                    "allow_private": Prop(Bool(), description="Allow private-network addresses (10/8, 192.168/16 …): high risk."),
+                    "retries": Prop(
+                        Int(minimum=0, maximum=5),
+                        description="Retries for GET/HEAD/OPTIONS on 5xx or connection errors.",
+                    ),
+                    "allow_private": Prop(
+                        Bool(), description="Allow private-network addresses (10/8, 192.168/16 …): high risk."
+                    ),
                     "response_schema": Prop(Any_(), description="A JSON Schema the JSON response must satisfy."),
                     "extract": Prop(Map(Str()), description="name → JSON path (data.items.0.id) into the response."),
                 }
@@ -211,9 +302,14 @@ def computer_use_specs() -> list[ActionSpec]:
                     "body": Prop(Str(), required=True),
                     "from": Prop(Str(min_length=3), description="Default: HIGHHX_SMTP_FROM."),
                     "html": Prop(Str(), description="An HTML version (sent with the text as an alternative)."),
-                    "attachments": Prop(List(Str(min_length=1)), description="Project files to attach (secret files refused, 10 MB total)."),
+                    "attachments": Prop(
+                        List(Str(min_length=1)),
+                        description="Project files to attach (secret files refused, 10 MB total).",
+                    ),
                     "in_reply_to": Prop(Str(min_length=3), description="The Message-ID this replies to."),
-                    "retries": Prop(Int(minimum=0, maximum=3), description="Only failures before the message was handed over."),
+                    "retries": Prop(
+                        Int(minimum=0, maximum=3), description="Only failures before the message was handed over."
+                    ),
                     "timeout": Prop(Num(minimum=1)),
                 },
                 check=api.email_problems,

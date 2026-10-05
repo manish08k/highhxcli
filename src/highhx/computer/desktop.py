@@ -226,7 +226,14 @@ function run(argv) {
 }
 """
 
-_KEYS = {"enter": 36, "tab": 48, "escape": 53, "backspace": 51, "arrowdown": 125, "arrowup": 126, "space": 49}
+_PRESS = """
+function run(argv) {
+  const using = JSON.parse(argv[2]).map(m => m + ' down');
+  if (argv[0] === 'code') Application('System Events').keyCode(Number(argv[1]), {using: using});
+  else Application('System Events').keystroke(argv[1], {using: using});
+  return 'ok';
+}
+"""
 
 
 def parse_bounds(value: Any) -> tuple[int, int, int, int] | None:
@@ -347,14 +354,25 @@ class MacAccessibility:
         self._act(element_id, "set", text, cancel)
 
     def press(self, key: str, *, cancel: CancellationToken | None = None) -> None:
-        if key not in _KEYS:
+        """A named key, a character or a combination (``shift+tab``, ``cmd+s``); the key travels
+        as an argument to a fixed script."""
+        from highhx.automation.engine.protocol import KEY_CODES
+        from highhx.computer.browser import parse_key
+
+        modifiers, base = parse_key(key)
+        if base in KEY_CODES:
+            kind, value = "code", str(KEY_CODES[base])
+        elif len(base) == 1:
+            kind, value = "char", base
+        else:
             raise IntegrationError(f"Unsupported key {key!r}")
-        self._osascript(
-            f"function run() {{ Application('System Events').keyCode({_KEYS[key]}); return 'ok'; }}", cancel=cancel
-        )
+        self._osascript(_PRESS, kind, value, json.dumps(modifiers), cancel=cancel)
 
     def scroll(self, direction: str, *, cancel: CancellationToken | None = None) -> None:
-        self.press("arrowdown" if direction == "down" else "arrowup", cancel=cancel)
+        keys = {"down": "arrowdown", "up": "arrowup", "left": "arrowleft", "right": "arrowright"}
+        if direction not in keys:
+            raise IntegrationError(f"Unsupported scroll direction {direction!r}")
+        self.press(keys[direction], cancel=cancel)  # "left" pressed arrow-up
 
     def select(self, element_id: str, option: str, *, cancel: CancellationToken | None = None) -> None:
         self.type_text(element_id, option, cancel=cancel)

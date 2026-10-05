@@ -84,6 +84,25 @@ def isolated_env(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.M
     (home / "gitconfig").write_text("[init]\n\tdefaultBranch = main\n[commit]\n\tgpgsign = false\n")
 
 
+@pytest.fixture(autouse=True)
+def no_leaked_browsers() -> Iterator[None]:
+    """With real browsers enabled, a test that starts one must stop it (a browser left running on a
+    throwaway profile is a leaked process). The leak fails that test and is cleaned up."""
+    import os
+
+    if not os.environ.get("HIGHHX_TEST_BROWSER"):
+        yield
+        return
+    from highhx.computer import browser
+
+    before = set(browser._LAUNCHED)
+    yield
+    leaked = [pid for pid in set(browser._LAUNCHED) - before if browser._alive(pid)]
+    for pid in leaked:
+        browser._terminate(pid)
+    assert not leaked, f"browser process(es) {leaked} were left running"
+
+
 requires_git = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 
 

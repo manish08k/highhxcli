@@ -80,10 +80,8 @@ FLOW_SCHEMA = Obj(
 STEP_SCHEMAS = {
     "open": Str(min_length=1),
     "click": Str(min_length=1),
-    "press": Str(
-        choices=("enter", "tab", "escape", "backspace", "arrowdown", "arrowup", "pagedown", "pageup", "space")
-    ),
-    "scroll": Str(choices=("up", "down")),
+    "press": Str(min_length=1),  # a key or combination; checked by the browser's own parser below
+    "scroll": Str(choices=("up", "down", "left", "right")),
     "launch": Str(min_length=1),
     "wait": Num(minimum=0),
     "type": Obj({"into": Prop(Str(min_length=1), required=True), "text": Prop(Str()), "text_from_env": Prop(Str())}),
@@ -150,6 +148,14 @@ def load_flow(path: Path) -> Flow:
             errors += STEP_SCHEMAS[keys[0]].validate(step[keys[0]], f"steps[{index}].{keys[0]}")
             if keys[0] == "type" and not ({"text", "text_from_env"} & set(step["type"])):
                 errors.append(f"steps[{index}].type: needs 'text' or 'text_from_env'")
+            if keys[0] == "press" and isinstance(step["press"], str) and step["press"]:
+                from highhx.computer.browser import parse_key
+                from highhx.core.errors import IntegrationError
+
+                try:
+                    parse_key(step["press"])
+                except IntegrationError as exc:
+                    errors.append(f"steps[{index}].press: {exc}")
     if errors:
         raise ValidationError(f"Invalid flow {path.name}", details=errors)
     return Flow(str(data.get("name") or path.stem), list(data["steps"]), float(data.get("timeout", 10)), path)

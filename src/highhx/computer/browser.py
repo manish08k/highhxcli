@@ -210,15 +210,119 @@ ACT_JS = r"""
 
 KEY_CODES = {
     "enter": ("Enter", "Enter", 13, "\r"),
+    "return": ("Enter", "Enter", 13, "\r"),
     "tab": ("Tab", "Tab", 9, ""),
     "escape": ("Escape", "Escape", 27, ""),
+    "esc": ("Escape", "Escape", 27, ""),
     "backspace": ("Backspace", "Backspace", 8, ""),
+    "delete": ("Backspace", "Backspace", 8, ""),  # the Mac key's name, as on the desktop
+    "forwarddelete": ("Delete", "Delete", 46, ""),
     "arrowdown": ("ArrowDown", "ArrowDown", 40, ""),
     "arrowup": ("ArrowUp", "ArrowUp", 38, ""),
+    "arrowleft": ("ArrowLeft", "ArrowLeft", 37, ""),
+    "arrowright": ("ArrowRight", "ArrowRight", 39, ""),
+    "down": ("ArrowDown", "ArrowDown", 40, ""),
+    "up": ("ArrowUp", "ArrowUp", 38, ""),
+    "left": ("ArrowLeft", "ArrowLeft", 37, ""),
+    "right": ("ArrowRight", "ArrowRight", 39, ""),
+    "home": ("Home", "Home", 36, ""),
+    "end": ("End", "End", 35, ""),
     "pagedown": ("PageDown", "PageDown", 34, ""),
     "pageup": ("PageUp", "PageUp", 33, ""),
     "space": (" ", "Space", 32, " "),
+    **{f"f{n}": (f"F{n}", f"F{n}", 111 + n, "") for n in range(1, 13)},
 }
+"""Named keys: DOM key, DOM code, Windows virtual-key code, the text the key types."""
+
+CDP_MODIFIERS = {"option": 1, "control": 2, "command": 4, "shift": 8}
+SHIFTED = dict(zip("`1234567890-=[]\\;',./", '~!@#$%^&*()_+{}|:"<>?', strict=True))
+_CODES = {
+    **{c: f"Digit{c}" for c in "0123456789"},
+    " ": "Space",
+    "-": "Minus",
+    "=": "Equal",
+    "[": "BracketLeft",
+    "]": "BracketRight",
+    "\\": "Backslash",
+    ";": "Semicolon",
+    "'": "Quote",
+    ",": "Comma",
+    ".": "Period",
+    "/": "Slash",
+    "`": "Backquote",
+}
+MAC_EDITING = {
+    ("command", "a"): "selectAll",
+    ("command", "c"): "copy",
+    ("command", "x"): "cut",
+    ("command", "v"): "paste",
+    ("command", "z"): "undo",
+    ("command+shift", "z"): "redo",
+    ("command", "arrowleft"): "moveToBeginningOfLine",
+    ("command", "arrowright"): "moveToEndOfLine",
+    ("command", "arrowup"): "moveToBeginningOfDocument",
+    ("command", "arrowdown"): "moveToEndOfDocument",
+    ("command+shift", "arrowleft"): "moveToBeginningOfLineAndModifySelection",
+    ("command+shift", "arrowright"): "moveToEndOfLineAndModifySelection",
+    ("option", "arrowleft"): "moveWordLeft",
+    ("option", "arrowright"): "moveWordRight",
+    ("option+shift", "arrowleft"): "moveWordLeftAndModifySelection",
+    ("option+shift", "arrowright"): "moveWordRightAndModifySelection",
+    ("option", "backspace"): "deleteWordBackward",
+    ("command", "backspace"): "deleteToBeginningOfLine",
+}
+"""Chrome on macOS performs these through the menu bar and Cocoa, never the page: a synthetic
+key event must name its editing command or nothing happens (cmd+a selected nothing)."""
+
+
+def parse_key(combo: str) -> tuple[list[str], str]:
+    """ "shift+tab" / "cmd+a" / "a" → (canonical modifiers, key). A lone "+" is the plus key."""
+    from highhx.automation.engine.protocol import MODIFIERS
+
+    text = combo.strip().lower() if len(combo.strip()) > 1 else combo
+    if len(text) <= 1:
+        return [], text
+    *mods, key = text.split("+") if not text.endswith("++") else [*text[:-2].split("+"), "+"]
+    unknown = [m for m in mods if m not in MODIFIERS]
+    if unknown or not key:
+        raise IntegrationError(
+            f"Unsupported key {combo!r}" + (f" (unknown modifier {unknown[0]!r})" if unknown else "")
+        )
+    if key not in KEY_CODES and len(key) != 1:
+        raise IntegrationError(f"Unsupported key {combo!r}")
+    order = list(CDP_MODIFIERS)
+    return sorted({MODIFIERS[m] for m in mods}, key=order.index), key
+
+
+def key_event(modifiers: list[str], key: str, *, mac: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The keyDown/keyUp pair for one key with modifiers, as Chrome receives it from a keyboard."""
+    mask = sum(CDP_MODIFIERS[m] for m in modifiers)
+    shift = "shift" in modifiers
+    if key in KEY_CODES:
+        name, code, vk, text = KEY_CODES[key]
+    else:
+        char = key.upper() if shift and key.isalpha() else SHIFTED.get(key, key) if shift else key
+        base = key.lower()
+        code = f"Key{base.upper()}" if base.isascii() and base.isalpha() else _CODES.get(base, "")
+        vk = ord(base.upper()) if base.isascii() and base.isalnum() else 0
+        name, text = char, char
+    down: dict[str, Any] = {
+        "type": "keyDown" if text else "rawKeyDown",
+        "key": name,
+        "code": code,
+        "windowsVirtualKeyCode": vk,
+        "modifiers": mask,
+    }
+    if text and not mask & (CDP_MODIFIERS["control"] | CDP_MODIFIERS["command"] | CDP_MODIFIERS["option"]):
+        down["text"] = down["unmodifiedText"] = text
+    elif text:
+        down["type"] = "rawKeyDown"
+    if mac:
+        command = MAC_EDITING.get(("+".join(m for m in modifiers), key.lower()))
+        if command:
+            down["commands"] = [command]
+    up = {"type": "keyUp", "key": name, "code": code, "windowsVirtualKeyCode": vk, "modifiers": mask}
+    return down, up
 
 
 def find_browser() -> str | None:
@@ -401,6 +505,7 @@ class ChromeBrowser:
         """Tabs that existed before a click, to recognise the tab the click opened."""
         self._clicked_href = ""
         """The address of the link the last click activated ('' when it was not a link)."""
+        self._is_mac: bool | None = None
         self.state = BrowserState.STOPPED
         self.journal: list[dict[str, Any]] = []
         """Recovery, tab, dialog and download events not yet written to the audit trail."""
@@ -510,6 +615,7 @@ class ChromeBrowser:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        _LAUNCHED[process.pid] = process  # kept until it exits (outliving this command is intended)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             if cancel is not None and cancel.cancelled:
@@ -1401,21 +1507,27 @@ class ChromeBrowser:
         """Where the page is: URL, title, scroll offset and viewport size in CSS pixels, pixel ratio."""
         data = self._eval(
             "({url: location.href, title: document.title, x: scrollX, y: scrollY,"
-            " width: innerWidth, height: innerHeight, dpr: devicePixelRatio})",
+            " width: innerWidth, height: innerHeight, dpr: devicePixelRatio,"
+            " visual: visualViewport && {x: visualViewport.pageLeft, y: visualViewport.pageTop,"
+            " width: visualViewport.width, height: visualViewport.height, scale: visualViewport.scale}})",
             cancel,
         )
         return dict(data or {})
 
     def page_capture(self, *, cancel: CancellationToken | None = None) -> tuple[bytes, dict[str, Any]]:
-        """The visible viewport as PNG, one image pixel per CSS pixel, with the viewport it shows."""
+        """The visible viewport as PNG, one image pixel per CSS pixel, with the viewport it shows: an
+        image pixel is the point pointer input takes. What is visible is the visual viewport — under
+        pinch zoom a smaller, offset part of the page than ``scrollX``/``innerWidth`` describe
+        (capturing those made every point after a pinch zoom miss)."""
         import base64
 
         view = self.viewport(cancel=cancel)
+        shown = view.get("visual") or view
         clip = {
-            "x": float(view.get("x") or 0),
-            "y": float(view.get("y") or 0),
-            "width": float(view.get("width") or 0),
-            "height": float(view.get("height") or 0),
+            "x": float(shown.get("x") or 0),
+            "y": float(shown.get("y") or 0),
+            "width": float(shown.get("width") or 0),
+            "height": float(shown.get("height") or 0),
             "scale": 1 / float(view.get("dpr") or 1),
         }
         data = self._run(
@@ -1475,25 +1587,14 @@ class ChromeBrowser:
 
     def key_combo(self, modifiers: list[str], key: str, *, cancel: CancellationToken | None = None) -> None:
         """A key with modifiers (``["command"], "a"``) to the page."""
-        bits = {"option": 1, "control": 2, "command": 4, "shift": 8}
-        mask = sum(bits[m] for m in modifiers if m in bits)
-        if key in KEY_CODES:
-            name, code, vk, text = KEY_CODES[key]
-        elif len(key) == 1:
-            name, code, vk, text = key, f"Key{key.upper()}", ord(key.upper()), key
-        else:
-            raise IntegrationError(f"Unsupported key {key!r}")
-        down: dict[str, Any] = {"type": "keyDown", "key": name, "code": code, "windowsVirtualKeyCode": vk, "modifiers": mask}
-        if text and not mask & (2 | 4):
-            down["text"] = text
-        up = {"type": "keyUp", "key": name, "code": code, "windowsVirtualKeyCode": vk, "modifiers": mask}
-        self._before_action(cancel)
+        self.press("+".join([*modifiers, key]) if modifiers else key, cancel=cancel)
 
-        def keystroke(conn: CDPConnection, session: str) -> None:
-            conn.call("Input.dispatchKeyEvent", down, session_id=session, cancel=cancel)
-            conn.call("Input.dispatchKeyEvent", up, session_id=session, cancel=cancel)
-
-        self._run(f"press {'+'.join([*modifiers, key])}", Retry.UNSAFE, keystroke, cancel)
+    def _mac_keys(self, cancel: CancellationToken | None) -> bool:
+        """Whether the browser (wherever it runs) is Chrome on macOS: its editing shortcuts then
+        need their commands named (see MAC_EDITING)."""
+        if self._is_mac is None:
+            self._is_mac = bool(self._eval("navigator.platform.startsWith('Mac')", cancel))
+        return self._is_mac
 
     # ----------------------------------------------------------------- actions
     def _act(
@@ -1532,14 +1633,10 @@ class ChromeBrowser:
         )
 
     def press(self, key: str, *, cancel: CancellationToken | None = None) -> None:
-        if key not in KEY_CODES:
-            raise IntegrationError(f"Unsupported key {key!r}")
-        name, code, vk, text = KEY_CODES[key]
+        """One key or combination (``enter``, ``shift+tab``, ``cmd+a``, ``a``) to the focused page."""
+        modifiers, base = parse_key(key)
         self._before_action(cancel)
-        down: dict[str, Any] = {"type": "keyDown", "key": name, "code": code, "windowsVirtualKeyCode": vk}
-        if text:
-            down["text"] = text
-        up = {"type": "keyUp", "key": name, "code": code, "windowsVirtualKeyCode": vk}
+        down, up = key_event(modifiers, base, mac=self._mac_keys(cancel))
 
         def keystroke(conn: CDPConnection, session: str) -> None:
             conn.call("Input.dispatchKeyEvent", down, session_id=session, cancel=cancel)
@@ -1548,12 +1645,13 @@ class ChromeBrowser:
         self._run(f"press {key}", Retry.UNSAFE, keystroke, cancel)
 
     def scroll(self, direction: str, *, cancel: CancellationToken | None = None) -> None:
-        delta = {"down": 600, "up": -600}.get(direction)
+        delta = {"down": (0, 600), "up": (0, -600), "right": (400, 0), "left": (-400, 0)}.get(direction)
         if delta is None:
             raise IntegrationError(f"Unsupported scroll direction {direction!r}")
         # scroll to an exact position (read once), so a retry after a failure cannot scroll twice
-        start = float(self._eval("window.scrollY", cancel) or 0)
-        self._eval(f"window.scrollTo(0, {max(0.0, start + delta)})", cancel)
+        start = self._eval("[window.scrollX, window.scrollY]", cancel) or [0, 0]
+        x, y = (max(0.0, float(start[i]) + delta[i]) for i in (0, 1))
+        self._eval(f"window.scrollTo({x}, {y})", cancel)
 
     def select(self, element_id: str, option: str, *, cancel: CancellationToken | None = None) -> None:
         self._act(element_id, "select", option, cancel=cancel)
@@ -1835,8 +1933,16 @@ class RemoteBrowser(ChromeBrowser):
         )
 
 
+_LAUNCHED: dict[int, subprocess.Popen[bytes]] = {}
+"""Browsers this process started, by pid: reaped through their handle once they exit."""
+
+
 def _alive(pid: int) -> bool:
     if pid <= 0:
+        return False
+    launched = _LAUNCHED.get(pid)
+    if launched is not None and launched.poll() is not None:  # exited: reaped by its own handle
+        del _LAUNCHED[pid]
         return False
     if hasattr(os, "WNOHANG"):
         with contextlib.suppress(ChildProcessError, OSError):

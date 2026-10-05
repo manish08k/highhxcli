@@ -22,10 +22,19 @@ from tests.unit.agent.conftest import agent_project, make_app  # noqa: F401
 
 class FakeBrowser:
     alive: dict[str, bool] = {}
+    made: list[FakeBrowser] = []
 
     def __init__(self, state_dir: Path, endpoint: str) -> None:
         self.key = endpoint or str(state_dir)
         self.endpoint = endpoint
+        self.closed = False
+        FakeBrowser.made.append(self)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def screenshot(self, *, cancel: Any = None) -> bytes:
+        return b"\x89PNG"
 
     def start(self, *, cancel: Any = None) -> dict[str, Any]:
         if self.endpoint and not FakeBrowser.alive.get(self.key, True):
@@ -39,6 +48,22 @@ class FakeBrowser:
     def stop(self) -> bool:
         FakeBrowser.alive[self.key] = False
         return True
+
+
+def test_every_browser_object_a_call_makes_is_disconnected_after_it(tmp_path: Path) -> None:
+    # Regression (a ResourceWarning in real Chrome): each call made a browser object and left its
+    # DevTools connection open — one leaked socket per screenshot, heartbeat or reconnect.
+    FakeBrowser.alive, FakeBrowser.made = {}, []
+    manager = BrowserSessionManager(tmp_path, factory=FakeBrowser)
+    local = manager.start(profile="default")
+    remote = manager.start(endpoint="http://127.0.0.1:9222")
+    for session in (local, remote):
+        manager.heartbeat(session.id)
+        manager.screenshot(session.id)
+        manager.reconnect(session.id)
+    assert FakeBrowser.made and all(b.closed for b in FakeBrowser.made)
+    for session in (local, remote):
+        manager.stop(session.id)
 
 
 def test_local_sessions_lease_their_profile_and_stop_cleanly(tmp_path: Path) -> None:

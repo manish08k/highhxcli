@@ -252,6 +252,12 @@ _DANGER_STYLE = re.compile(r"\b(?:danger|destructive|delete|critical|warning)\b"
 _CARD_FIELD = re.compile(r"\b(?:card|cc-number|cc-csc|cvv|cvc|expir|iban)\b", re.I)
 
 
+def _base_key(key: str) -> str:
+    """The key a combination ends in: "ctrl+enter" submits a form as surely as "enter" does."""
+    key = key.strip().lower()
+    return key if len(key) <= 1 else key.rsplit("+", 1)[-1] or "+"
+
+
 def _label_categories(label: str) -> list[str]:
     text = " ".join(label.lower().split())
     return [category for category, pattern in _UI_PATTERNS.items() if pattern.search(text)]
@@ -708,7 +714,7 @@ class SafetyPolicy:
         element_type = action.attr("type").lower()
         if (
             action.kind == ActionKind.UI_KEY
-            and action.attr("key").lower() in ("enter", "return")
+            and _base_key(action.attr("key")) in ("enter", "return")
             and action.attr("in_form") == "True"
         ):
             verdict.add(SUBMIT, "pressing Enter submits the form", RiskLevel.DANGEROUS)
