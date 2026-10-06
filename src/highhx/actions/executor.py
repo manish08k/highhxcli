@@ -265,7 +265,13 @@ class ActionExecutor:
         started = time.monotonic()
         self.events.emit(ev.ACTION_PLANNED, actor=str(self.actor), **planned.to_dict())
         if self.app.options.dry_run:
-            return ActionResult(True, summary="dry run: " + "; ".join(planned.preview()), status="planned")
+            what = spec.command_for(inputs) or spec.target_for(inputs) or ""
+            return ActionResult(
+                True,
+                output={"would": what, "risk": decision.risk.label, "asks": planned.asks},
+                summary="dry run: " + "; ".join(planned.preview()),
+                status="planned",
+            )
         preapproved = preapproved and self.actor == Actor.USER and decision.approval < Approval.TYPED
         asks = planned.asks and not preapproved
         if asks:

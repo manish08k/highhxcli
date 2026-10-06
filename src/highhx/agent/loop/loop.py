@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from highhx.actions import events as ev
 from highhx.actions.executor import UnknownActionError
+from highhx.actions.policy import Approval
 from highhx.actions.protocol import Outcome
 from highhx.agent.loop.model import AgentTask, Decision, LoopResult, PlanItem, Status, StepIntent
 from highhx.agent.loop.observer import AgentObserver, ObservationError
@@ -132,6 +133,8 @@ class AgentLoop:
         self.sleep = sleep
         self.clock = clock
         self._secret_steps: set[str] = set()
+        self._planned: list[dict[str, Any]] = []
+        """Steps a dry run planned (and rated) instead of running."""
 
     @property
     def events(self) -> Any:
@@ -161,21 +164,37 @@ class AgentLoop:
                 recorder.save(trajectory.trace_id)
                 recorder.recorder.close()
 
-    def _traced(self, task: AgentTask, surface: str, trajectory: Trajectory, counters: Counters, resumed: bool) -> LoopResult:
-        with trace_context(trace_id=trajectory.trace_id, task_id=trajectory.id, session_id=self.session_id, source=self.agent):
-            self.events.emit(ev.AGENT_STARTED, task=task.goal, surface=surface, planner=self.planner.name, resumed=resumed, agent=self.agent)
+    def _traced(
+        self, task: AgentTask, surface: str, trajectory: Trajectory, counters: Counters, resumed: bool
+    ) -> LoopResult:
+        with trace_context(
+            trace_id=trajectory.trace_id, task_id=trajectory.id, session_id=self.session_id, source=self.agent
+        ):
+            self.events.emit(
+                ev.AGENT_STARTED,
+                task=task.goal,
+                surface=surface,
+                planner=self.planner.name,
+                resumed=resumed,
+                agent=self.agent,
+            )
             self.events.emit(ev.TASK_STARTED, task=task.goal, surface=surface, resumed=resumed)
             try:
                 status, summary = self._run(task, surface, trajectory, counters, resumed)
             except (KeyboardInterrupt, OperationCancelledError):
-                status, summary = Status.INTERRUPTED, "interrupted — resume with `highhx agent --resume " + trajectory.id + "`"
+                status, summary = (
+                    Status.INTERRUPTED,
+                    "interrupted — resume with `highhx agent --resume " + trajectory.id + "`",
+                )
             trajectory.status = str(status)
             trajectory.summary = summary
             trajectory.ended = time.time()
             trajectory.metrics.update(self._metrics(counters, trajectory))
             self._checkpoint(task, trajectory, counters)
             self.events.emit(
-                ev.TASK_COMPLETED if status == Status.COMPLETED else ev.TASK_FAILED,
+                ev.TASK_COMPLETED
+                if status in (Status.COMPLETED, Status.PLANNED)
+                else ev.TASK_FAILED,  # the status says which
                 task=task.goal,
                 status=str(status),
                 summary=summary,
@@ -194,15 +213,30 @@ class AgentLoop:
         return LoopResult(status, summary, trajectory, trajectory.metrics)
 
     # ---------------------------------------------------------------------- run
-    def _run(self, task: AgentTask, surface: str, trajectory: Trajectory, counters: Counters, resumed: bool) -> tuple[Status, str]:
+    def _run(
+        self, task: AgentTask, surface: str, trajectory: Trajectory, counters: Counters, resumed: bool
+    ) -> tuple[Status, str]:
         deadline = self.clock() + task.timeout
         cancel = self.executor.app.ctx.cancel
         observer = AgentObserver(self.executor, task, surface)
-        worker = AgentWorker(self.executor, task, surface, grounder=self.grounder, memory=self.store if self.memory else None, trace_id=trajectory.trace_id)
+        worker = AgentWorker(
+            self.executor,
+            task,
+            surface,
+            grounder=self.grounder,
+            memory=self.store if self.memory else None,
+            trace_id=trajectory.trace_id,
+        )
         recovery = RecoveryManager(max_per_step=3, max_total=task.max_recoveries, deadline=deadline)
         recovery.total = counters.recoveries
         reflector = AgentReflector(recovery)
-        verifier = AgentVerifier(lambda: self._observe(observer, counters), settle=task.settle, emit=self.events.emit, cancel=cancel, sleep=self.sleep)
+        verifier = AgentVerifier(
+            lambda: self._observe(observer, counters),
+            settle=task.settle,
+            emit=self.events.emit,
+            cancel=cancel,
+            sleep=self.sleep,
+        )
         state = self._observe(observer, counters)
         if not resumed or not trajectory.plan:
             self.events.emit(ev.AGENT_PLANNING, task=task.goal, planner=self.planner.name)
@@ -231,7 +265,9 @@ class AgentLoop:
             if counters.failures > task.max_failures:
                 return Status.FAILED, f"{counters.failures} failed steps"
             fingerprint = state.fingerprint() if state is not None else ""
-            same_screen = same_screen + 1 if fingerprint and fingerprint == last_fingerprint and counters.failures else 0
+            same_screen = (
+                same_screen + 1 if fingerprint and fingerprint == last_fingerprint and counters.failures else 0
+            )
             last_fingerprint = fingerprint
             if same_screen >= NO_PROGRESS:
                 return Status.FAILED, "no progress: the screen stopped changing while steps kept failing"
@@ -251,8 +287,13 @@ class AgentLoop:
                 decision = self.planner.next(task, state, trajectory.steps, feedback=feedback, lessons=lessons)
             except HighhXError as exc:  # a model that is down or refuses: the task stops, resumable
                 if modelled:
-                    self.events.emit(ev.MODEL_ERROR, error=exc.message[:200], seconds=round(time.monotonic() - asked, 3))
-                return Status.FAILED, f"the planner failed: {exc.message} — resume with `highhx agent --resume {trajectory.id}`"
+                    self.events.emit(
+                        ev.MODEL_ERROR, error=exc.message[:200], seconds=round(time.monotonic() - asked, 3)
+                    )
+                return (
+                    Status.FAILED,
+                    f"the planner failed: {exc.message} — resume with `highhx agent --resume {trajectory.id}`",
+                )
             planning = round(time.monotonic() - asked, 4)
             seconds_list = trajectory.metrics.setdefault("planning_seconds", [])
             if len(seconds_list) < 500:
@@ -261,10 +302,15 @@ class AgentLoop:
                 self.events.emit(ev.MODEL_RESPONSE, kind=decision.kind, seconds=planning)
             feedback = ""
             self._usage(decision, counters)
+            if decision.kind == "done" and self._dry_run:
+                return Status.PLANNED, self._plan_summary(complete=True)
             if decision.kind == "done":
                 unconfirmed = sum(1 for s in trajectory.steps if (s.verification or {}).get("unobservable"))
                 if unconfirmed and task.success is None:
-                    return Status.NEEDS_USER, f"done, but {unconfirmed} step(s) could not be confirmed and the task has no success check"
+                    return (
+                        Status.NEEDS_USER,
+                        f"done, but {unconfirmed} step(s) could not be confirmed and the task has no success check",
+                    )
                 ok, why = self._finished(task, observer, counters)
                 if ok is True:
                     return Status.COMPLETED, decision.summary or why
@@ -283,13 +329,25 @@ class AgentLoop:
             if counters.steps >= task.max_steps:  # only another step is refused: "done" after the last step stands
                 return Status.FAILED, f"the task did not finish within {task.max_steps} steps"
             step = decision.step
+            if self._dry_run and step.describe() in {p["step"] for p in self._planned}:
+                # the planner proposes a step it already planned: what comes next depends on
+                # results a dry run does not produce
+                return Status.PLANNED, self._plan_summary(complete=False)
             if step.parameters.get("__redacted__"):
-                return Status.NEEDS_USER, f"the text for '{step.describe()}' went into a secret field and was not stored; provide it again"
+                return (
+                    Status.NEEDS_USER,
+                    f"the text for '{step.describe()}' went into a secret field and was not stored; provide it again",
+                )
             counters.steps += 1
             with trace_context(step_id=step.id):
                 self._plan_progress(trajectory, step, "running")
-                outcome, reflection, state = self._step(step, state, task, trajectory, counters, worker, observer, verifier, reflector)
-                self._plan_progress(trajectory, step, "done" if outcome == Outcome.SUCCESS else "failed")
+                outcome, reflection, state = self._step(
+                    step, state, task, trajectory, counters, worker, observer, verifier, reflector
+                )
+                planned = bool(self._planned) and self._planned[-1]["step"] == step.describe() and self._dry_run
+                self._plan_progress(
+                    trajectory, step, "planned" if planned else "done" if outcome == Outcome.SUCCESS else "failed"
+                )
             self._checkpoint(task, trajectory, counters)
             if reflection.decision == "continue":
                 continue
@@ -332,10 +390,22 @@ class AgentLoop:
             except GroundingFailed as failure:
                 attempts = [a.to_dict() for a in failure.result.attempts]
                 reflection = reflector.after_grounding(step.id, failure.result.status, attempts, step.label)
-                self._record(trajectory, step, state, None, None, reflection, failure.result.to_dict(), started, error=failure.result.explain())
+                self._record(
+                    trajectory,
+                    step,
+                    state,
+                    None,
+                    None,
+                    reflection,
+                    failure.result.to_dict(),
+                    started,
+                    error=failure.result.explain(),
+                )
                 if reflection.decision in ("reobserve", "scroll"):
                     counters.recoveries += 1
-                    self.events.emit(ev.RECOVERY_STARTED, step=step.id, kind=reflection.decision, reason=reflection.reason)
+                    self.events.emit(
+                        ev.RECOVERY_STARTED, step=step.id, kind=reflection.decision, reason=reflection.reason
+                    )
                     if reflection.decision == "scroll":
                         self._scroll(worker, state, observer)
                     else:
@@ -350,27 +420,66 @@ class AgentLoop:
                 self._record(trajectory, step, state, None, None, reflection, None, started, error=reason)
                 return Outcome.FAILED, reflection, state
             except ObservationError as exc:
-                reflection = Reflection("stop" if exc.status in ("blocked", "denied") else "replan", f"observation failed: {exc}")
+                reflection = Reflection(
+                    "stop" if exc.status in ("blocked", "denied") else "replan", f"observation failed: {exc}"
+                )
                 self._record(trajectory, step, state, None, None, reflection, None, started, error=str(exc))
                 return Outcome.FAILED, reflection, state
             self._protect_secret(step, work)
             counters.actions += len(work.responses)
+            if work.last is not None and work.last.status == "planned":  # a dry run: rated, not run, not verified
+                self._planned.append(
+                    {
+                        "step": step.describe(),
+                        "what": str(work.last.result.output.get("would") or "")[:200],
+                        "action": work.last.action,
+                        "risk": work.last.risk.label,
+                        "approval": work.last.approval >= Approval.ASK
+                        or (work.last.approval == Approval.MODE and str(self.executor.actor) == "agent"),
+                    }
+                )
+                reflection = Reflection("continue", "planned (dry run): not run")
+                self._record(trajectory, step, state, work, None, reflection, None, started)
+                return Outcome.SUCCESS, reflection, state
             if work.grounding is not None and work.grounding.strategy:
                 counters.grounding[work.grounding.strategy] = counters.grounding.get(work.grounding.strategy, 0) + 1
             verdict = verifier.verify(step, work, state)
             counters.observations += verdict.observations
             counters.outcomes[str(verdict.outcome)] = counters.outcomes.get(str(verdict.outcome), 0) + 1
-            reflection = reflector.after_step(step.id, work.last, verdict.outcome, step.label, unobservable=verdict.unobservable)
+            reflection = reflector.after_step(
+                step.id, work.last, verdict.outcome, step.label, unobservable=verdict.unobservable
+            )
             self.events.emit(ev.AGENT_REFLECTION, step=step.id, **reflection.to_dict())
             grounding = work.grounding.to_dict() if work.grounding else None
             if grounding is not None:
                 grounding["target"] = work.recorded_target() or grounding["target"]
                 self._healed(step, grounding, verdict.outcome)
             self._record(trajectory, step, state, work, verdict, reflection, grounding, started)
-            after = verdict.after if verdict.after is not None else (state if not observer.active else self._observe(observer, counters))
+            after = (
+                verdict.after
+                if verdict.after is not None
+                else (state if not observer.active else self._observe(observer, counters))
+            )
             return verdict.outcome, reflection, after
 
     # ------------------------------------------------------------------ helpers
+    @property
+    def _dry_run(self) -> bool:
+        return bool(getattr(self.executor.app.options, "dry_run", False))
+
+    def _plan_summary(self, *, complete: bool) -> str:
+        """What a dry run planned: every step with its risk and whether it would be asked."""
+        lines = [
+            f"{n}. {p['action']}{': ' + p['what'] if p['what'] else ''}  [risk {p['risk']}{' · needs approval' if p['approval'] else ''}]"
+            for n, p in enumerate(self._planned, start=1)
+        ]
+        asks = sum(1 for p in self._planned if p["approval"])
+        head = f"dry run: {len(self._planned)} step(s) planned, nothing was run"
+        head += f"; {asks} would need approval" if asks else ""
+        if not complete:
+            head += "; later steps depend on results a dry run does not produce"
+        return "\n".join([head, *lines])
+
     def _observe(self, observer: AgentObserver, counters: Counters) -> ComputerState | None:
         if not observer.active:
             return None
@@ -428,7 +537,9 @@ class AgentLoop:
 
         ctx = VerificationContext(after=state, root=self.executor.app.root, observe=again if observer.active else None)
         self.events.emit(ev.VERIFICATION_STARTED, step="task", check=task.success)
-        report = verify(task.success, ctx, timeout=3.0 if observer.active else 0.0, interval=task.settle, sleep=self.sleep)
+        report = verify(
+            task.success, ctx, timeout=3.0 if observer.active else 0.0, interval=task.settle, sleep=self.sleep
+        )
         self.events.emit(ev.VERIFICATION_COMPLETED, step="task", verdict=str(report.verdict))
         if report.verdict == Verdict.SATISFIED:
             return True, "the task's success check holds"
@@ -440,7 +551,9 @@ class AgentLoop:
         try:
             from highhx.skills import load, relevant
 
-            return [s.note() for s in relevant(load(self.executor.app.root), surface=surface, goal=task.goal, app=task.app)]
+            return [
+                s.note() for s in relevant(load(self.executor.app.root), surface=surface, goal=task.goal, app=task.app)
+            ]
         except Exception:
             return []
 
@@ -450,7 +563,9 @@ class AgentLoop:
         try:
             from highhx.agent.memory import ProjectMemory
 
-            return ProjectMemory.for_project(app.root, initialized=app.initialized, redactor=app.redactor).relevant(goal, limit=3)
+            return ProjectMemory.for_project(app.root, initialized=app.initialized, redactor=app.redactor).relevant(
+                goal, limit=3
+            )
         except Exception:
             return []
 
@@ -462,7 +577,13 @@ class AgentLoop:
         counters.tokens_out += reply.output_tokens
         if reply.cost is not None:
             counters.cost = (counters.cost or 0.0) + reply.cost
-        self.events.emit(ev.MODEL_USAGE, model=reply.model, input_tokens=reply.input_tokens, output_tokens=reply.output_tokens, cost=reply.cost)
+        self.events.emit(
+            ev.MODEL_USAGE,
+            model=reply.model,
+            input_tokens=reply.input_tokens,
+            output_tokens=reply.output_tokens,
+            cost=reply.cost,
+        )
 
     def _plan_progress(self, trajectory: Trajectory, step: StepIntent, status: str) -> None:
         items = trajectory.plan
@@ -490,13 +611,24 @@ class AgentLoop:
         error: str = "",
     ) -> None:
         last = work.last if work is not None else None
-        action = work.requests[-1].redacted() if work is not None and work.requests else {"action_type": step.action, "target": step.target, "parameters": step.parameters, "intent": step.describe()}
+        action = (
+            work.requests[-1].redacted()
+            if work is not None and work.requests
+            else {
+                "action_type": step.action,
+                "target": step.target,
+                "parameters": step.parameters,
+                "intent": step.describe(),
+            }
+        )
         candidate = work.grounding.candidate if work is not None and work.grounding is not None else None
         secret = bool(candidate is not None and candidate.element is not None and candidate.element.secret)
         action["step"] = _redacted_step(step, secret=secret)
         result = last.to_dict() if last is not None else {"outcome": "failed", "status": "not_run", "error": error}
         if verdict is not None:
             result["outcome"] = str(verdict.outcome)
+        elif last is not None and last.status == "planned":
+            result["outcome"] = "planned"  # a dry run: never recorded as a success
         trajectory.add(
             TrajectoryStep(
                 len(trajectory.steps) + 1,
@@ -528,7 +660,9 @@ class AgentLoop:
         }
         if self.store is not None:
             self.store.save(trajectory)
-            self.events.emit(ev.CHECKPOINT_CREATED, task_id=trajectory.id, steps=len(trajectory.steps), status=trajectory.status)
+            self.events.emit(
+                ev.CHECKPOINT_CREATED, task_id=trajectory.id, steps=len(trajectory.steps), status=trajectory.status
+            )
 
 
 RESUMABLE = ("running", "interrupted", "needs_user", "failed", "cancelled")
@@ -560,7 +694,12 @@ def resume(
     planner = planner or planner_from_state(checkpoint["planner"], catalog=executor.catalog)
     trajectory.status = "running"
     with trace_context(trace_id=trajectory.trace_id, task_id=trajectory.id):
-        executor.events.emit(ev.CHECKPOINT_RESUMED, task_id=trajectory.id, steps=len(trajectory.steps), cursor=checkpoint["planner"].get("cursor"))
+        executor.events.emit(
+            ev.CHECKPOINT_RESUMED,
+            task_id=trajectory.id,
+            steps=len(trajectory.steps),
+            cursor=checkpoint["planner"].get("cursor"),
+        )
     return AgentLoop(executor, planner, store=store, **loop_kwargs).run(task, trajectory=trajectory)
 
 
@@ -585,7 +724,9 @@ def fork(store: TrajectoryStore, task_id: str, *, at: int | None = None) -> Traj
     planner_state = copy.deepcopy(checkpoint["planner"])
     if "cursor" in planner_state:  # a script continues after the last step it had reached
         planner_state["cursor"] = len({str((s.action.get("step") or {}).get("id") or s.index) for s in steps})
-    forked = Trajectory(original.task, original.surface, status="interrupted", planner=original.planner, agent=original.agent)
+    forked = Trajectory(
+        original.task, original.surface, status="interrupted", planner=original.planner, agent=original.agent
+    )
     forked.plan = copy.deepcopy(original.plan)
     forked.steps = steps
     forked.environment = dict(original.environment)

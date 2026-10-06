@@ -32,7 +32,9 @@ DESKTOP = Path(__file__).resolve().parents[2] / "computer_use" / "tasks" / "_des
 
 
 class Kit:
-    def __init__(self, executor: ActionExecutor, ui: RecordingUI, web: FakeWebApp, store: TrajectoryStore, events: list[Any]) -> None:
+    def __init__(
+        self, executor: ActionExecutor, ui: RecordingUI, web: FakeWebApp, store: TrajectoryStore, events: list[Any]
+    ) -> None:
         self.executor, self.ui, self.web, self.store, self.events = executor, ui, web, store, events
 
     def loop(self, planner: Any, **kw: Any) -> AgentLoop:
@@ -79,7 +81,17 @@ def test_a_scripted_browser_task_runs_verifies_and_is_recorded(kit: Kit) -> None
     assert trajectory.steps[1].grounding["candidate"]["strategy"] == "accessibility"
     assert [p["status"] for p in trajectory.plan] == ["done", "done"]
     names = kit.names()
-    for name in ("agent.started", "plan.created", "grounding.completed", "action.completed", "verification.completed", "checkpoint.created", "task.started", "task.completed", "agent.completed"):
+    for name in (
+        "agent.started",
+        "plan.created",
+        "grounding.completed",
+        "action.completed",
+        "verification.completed",
+        "checkpoint.created",
+        "task.started",
+        "task.completed",
+        "agent.completed",
+    ):
         assert name in names, name
     task_events = [e for e in kit.events if e.context.get("task_id") == result.trajectory.id]
     assert task_events and all(e.context.get("trace_id") == result.trajectory.trace_id for e in task_events)
@@ -88,8 +100,12 @@ def test_a_scripted_browser_task_runs_verifies_and_is_recorded(kit: Kit) -> None
 
 def test_a_redesigned_site_is_healed_through_other_selectors(kit: Kit) -> None:
     kit.web.variant = "redesign"  # "Export" is now "Download CSV"; only its data-testid stayed
-    script = export_script(dom={"testid": "export-invoices", "tag": "button"}, accessibility={"name": "Export", "role": "button"})
-    result = kit.loop(ScriptedPlanner(script)).run(AgentTask("export", surface="browser", success={"text": "Export ready"}))
+    script = export_script(
+        dom={"testid": "export-invoices", "tag": "button"}, accessibility={"name": "Export", "role": "button"}
+    )
+    result = kit.loop(ScriptedPlanner(script)).run(
+        AgentTask("export", surface="browser", success={"text": "Export ready"})
+    )
     assert result.status == Status.COMPLETED
     step = result.trajectory.steps[-1]
     attempts = {a["strategy"]: a["result"] for a in step.grounding["attempts"]}
@@ -99,7 +115,9 @@ def test_a_redesigned_site_is_healed_through_other_selectors(kit: Kit) -> None:
 
 def test_an_off_screen_target_is_found_after_looking_again_and_scrolling(kit: Kit) -> None:
     kit.web.hidden_until_scroll = True
-    result = kit.loop(ScriptedPlanner(export_script())).run(AgentTask("export", surface="browser", success={"text": "Export ready"}))
+    result = kit.loop(ScriptedPlanner(export_script())).run(
+        AgentTask("export", surface="browser", success={"text": "Export ready"})
+    )
     assert result.status == Status.COMPLETED and ("scroll", "down") in kit.web.log
     decisions = [s.reflection["decision"] for s in result.trajectory.steps]
     assert decisions == ["continue", "reobserve", "scroll", "continue"]
@@ -133,7 +151,9 @@ def test_typing_is_verified_and_the_task_success_is_checked(kit: Kit) -> None:
         {"action": "type", "target": {"label": "Email", "role": "textbox"}, "parameters": {"text": "me@example.com"}},
         {"action": "click", "target": {"label": "Submit"}},
     ]
-    result = kit.loop(ScriptedPlanner(script)).run(AgentTask("sign up", surface="browser", success={"text": "Thank you"}))
+    result = kit.loop(ScriptedPlanner(script)).run(
+        AgentTask("sign up", surface="browser", success={"text": "Thank you"})
+    )
     assert result.status == Status.COMPLETED and kit.web.state["submitted"]
     assert result.trajectory.steps[0].action["action_type"] == "browser.fill"
     assert result.trajectory.steps[0].action["parameters"]["text"] == "<14 characters>"  # typed text is not stored
@@ -205,13 +225,19 @@ def test_an_interrupted_task_resumes_from_its_checkpoint(kit: Kit) -> None:
 
 
 def test_trajectories_replay_semantically(kit: Kit) -> None:
-    first = kit.loop(ScriptedPlanner(export_script())).run(AgentTask("export", surface="browser", success={"text": "Export ready"}))
+    first = kit.loop(ScriptedPlanner(export_script())).run(
+        AgentTask("export", surface="browser", success={"text": "Export ready"})
+    )
     steps = replay_steps(kit.store.load(first.trajectory.id))
     assert steps[1]["target"]["label"] == "Export" and "x" not in steps[1]["parameters"]
     kit.web.state.clear()
     kit.web.variant = "redesign"
-    again = kit.loop(ScriptedPlanner(steps)).run(AgentTask("export again", surface="browser", success={"text": "Export ready"}))
-    assert again.status == Status.COMPLETED, again.trajectory.describe() + str(steps)  # healed through the recorded data-testid
+    again = kit.loop(ScriptedPlanner(steps)).run(
+        AgentTask("export again", surface="browser", success={"text": "Export ready"})
+    )
+    assert again.status == Status.COMPLETED, again.trajectory.describe() + str(
+        steps
+    )  # healed through the recorded data-testid
     hits = kit.store.search("export the invoices")
     assert hits and hits[0].trajectory.task.startswith("export")
 
@@ -227,13 +253,21 @@ def test_the_model_planner_proposes_steps_that_the_executor_runs(kit: Kit) -> No
         [
             reply('{"steps": ["open invoices", "export"]}'),
             reply("I will click it."),  # no JSON: asked again
-            reply('{"thought": "open", "action": {"action": "open", "parameters": {"url": "https://shop.test/invoices"}}}', usage=Usage(200, 10)),
-            reply('{"thought": "export", "action": {"action": "click", "target": {"label": "Export", "role": "button"}}}', usage=Usage(300, 12)),
+            reply(
+                '{"thought": "open", "action": {"action": "open", "parameters": {"url": "https://shop.test/invoices"}}}',
+                usage=Usage(200, 10),
+            ),
+            reply(
+                '{"thought": "export", "action": {"action": "click", "target": {"label": "Export", "role": "button"}}}',
+                usage=Usage(300, 12),
+            ),
             reply('{"thought": "done", "done": true, "summary": "Export ready is shown"}'),
         ]
     )
     planner = ModelPlanner(ChatLanguageModel(provider, CAPS), kit.executor.catalog)
-    result = kit.loop(planner).run(AgentTask("export the invoices", surface="browser", success={"text": "Export ready"}))
+    result = kit.loop(planner).run(
+        AgentTask("export the invoices", surface="browser", success={"text": "Export ready"})
+    )
     assert result.status == Status.COMPLETED and kit.web.state["exported"]
     assert result.metrics["tokens_in"] >= 500 and "model.usage" in kit.names()
     assert "untrusted content" in provider.requests[-1].messages[0].blocks[-1].text
@@ -252,7 +286,9 @@ def test_the_model_planner_cannot_invent_actions_or_skip_checks(kit: Kit) -> Non
     result = kit.loop(planner).run(AgentTask("x", surface="browser"))
     assert result.status == Status.FAILED and "no usable step" in result.summary
     asked = ScriptedProvider([reply('{"steps": []}'), reply('{"ask_user": "Which account?"}')])
-    result = kit.loop(ModelPlanner(ChatLanguageModel(asked, CAPS), kit.executor.catalog)).run(AgentTask("x", surface="browser"))
+    result = kit.loop(ModelPlanner(ChatLanguageModel(asked, CAPS), kit.executor.catalog)).run(
+        AgentTask("x", surface="browser")
+    )
     assert result.status == Status.NEEDS_USER and result.summary == "Which account?"
 
 
@@ -266,7 +302,9 @@ def test_a_desktop_task_goes_through_the_computer_api(kit: Kit) -> None:
     assert result.status == Status.COMPLETED, result.trajectory.describe()
     assert kit.desktop.element("Title")["value"] == "Plan" and kit.desktop.element("Body")["value"] == "Ship on Friday"  # type: ignore[attr-defined]
     calls = [name for name, _args in kit.desktop.log]  # type: ignore[attr-defined]
-    assert calls.count("click_at") + calls.count("click") >= 2 and calls.count("type") == 2  # each field focused by a grounded click, then typed
+    assert (
+        calls.count("click_at") + calls.count("click") >= 2 and calls.count("type") == 2
+    )  # each field focused by a grounded click, then typed
 
 
 # ------------------------------------------------------------------- routing
@@ -302,7 +340,10 @@ def test_the_supervisor_coordinates_specialists_through_the_same_executor(kit: K
     }
     supervisor = SupervisorAgent(kit.executor, lambda spec, goal: ScriptedPlanner(scripts[spec.name]), store=kit.store)
     plan = [SubTask("browser", "export the invoices", {"text": "Export ready"}), SubTask("code", "log it")]
-    result = supervisor.run(AgentTask("export and log", surface="none", success={"file": {"path": "export.log", "contains": "exported"}}), plan)
+    result = supervisor.run(
+        AgentTask("export and log", surface="none", success={"file": {"path": "export.log", "contains": "exported"}}),
+        plan,
+    )
     assert result.status == Status.COMPLETED and kit.web.state["exported"]
     assert [r.trajectory.agent for _s, r in result.results] == ["browser-agent", "code-agent"]
     started = [e for e in kit.events if e.name == "agent.started"]
@@ -310,14 +351,23 @@ def test_the_supervisor_coordinates_specialists_through_the_same_executor(kit: K
 
 
 def test_a_specialist_cannot_leave_its_lane(kit: Kit) -> None:
-    supervisor = SupervisorAgent(kit.executor, lambda spec, goal: ScriptedPlanner([{"action": "shell.run", "parameters": {"command": "echo hi"}}]), store=kit.store)
+    supervisor = SupervisorAgent(
+        kit.executor,
+        lambda spec, goal: ScriptedPlanner([{"action": "shell.run", "parameters": {"command": "echo hi"}}]),
+        store=kit.store,
+    )
     result = supervisor.run(AgentTask("browse", surface="browser"), [SubTask("research", "read the docs")])
     assert result.status == Status.FAILED and "research" in result.summary
-    assert SPECIALISTS["research"].allowed and not SPECIALISTS["research"].task("x", AgentTask("y")).permits("shell.run")
+    assert SPECIALISTS["research"].allowed and not SPECIALISTS["research"].task("x", AgentTask("y")).permits(
+        "shell.run"
+    )
 
 
 def test_the_planner_agent_splits_by_tool_without_a_model() -> None:
-    names = [s.specialist for s in PlannerAgent().split("Find the API docs on the website, then fix the bug in the client code")]
+    names = [
+        s.specialist
+        for s in PlannerAgent().split("Find the API docs on the website, then fix the bug in the client code")
+    ]
     assert names[0] == "code" and {"research", "browser"} & set(names)
     assert [s.specialist for s in PlannerAgent().split("Run the tests")] == ["code"]
 
@@ -330,7 +380,9 @@ def test_a_click_without_a_visible_effect_is_not_reported_done(kit: Kit) -> None
 
 def test_text_typed_into_a_secret_field_is_never_stored(kit: Kit) -> None:
     kit.web.url = f"{BASE}/form"
-    script = [{"action": "type", "target": {"label": "Password", "role": "textbox"}, "parameters": {"text": "hunter2-secret"}}]
+    script = [
+        {"action": "type", "target": {"label": "Password", "role": "textbox"}, "parameters": {"text": "hunter2-secret"}}
+    ]
     result = kit.loop(ScriptedPlanner(script)).run(AgentTask("log in", surface="browser"))
     assert kit.web.state["password"] == "hunter2-secret"
     raw = kit.store.path(result.trajectory.id).read_text()
@@ -347,20 +399,37 @@ def test_a_task_trace_reconstructs_the_run(kit: Kit, tmp_path: Path) -> None:
 
     traces = TraceStore(tmp_path / "traces")
     kit.web.variant = "redesign"
-    script = export_script(dom={"testid": "export-invoices", "tag": "button"}, accessibility={"name": "Export", "role": "button"})
-    result = AgentLoop(kit.executor, ScriptedPlanner(script), store=kit.store, traces=traces, sleep=lambda _s: None).run(
-        AgentTask("export the invoices", surface="browser", success={"text": "Export ready"})
+    script = export_script(
+        dom={"testid": "export-invoices", "tag": "button"}, accessibility={"name": "Export", "role": "button"}
     )
+    result = AgentLoop(
+        kit.executor, ScriptedPlanner(script), store=kit.store, traces=traces, sleep=lambda _s: None
+    ).run(AgentTask("export the invoices", surface="browser", success={"text": "Export ready"}))
     trace = traces.load(result.trajectory.trace_id)
     assert trace.goal == "export the invoices" and trace.status == "completed" and trace.task_id == result.trajectory.id
     assert traces.load(result.trajectory.id).trace_id == trace.trace_id  # by task id too
     text = trace.render()
-    for expected in ("Plan", "Step", "export the invoices", "Grounding", "accessibility failed → dom success", "Healed", "Download CSV", "Action", "browser.click", "execution", "Verification", "Result"):
+    for expected in (
+        "Plan",
+        "Step",
+        "export the invoices",
+        "Grounding",
+        "accessibility failed → dom success",
+        "Healed",
+        "Download CSV",
+        "Action",
+        "browser.click",
+        "execution",
+        "Verification",
+        "Result",
+    ):
         assert expected in text, (expected, text)
     names = [r.name for r in trace.records]
     assert "selector.healed" in names and "agent.reflection" in names and "task.completed" in names
     assert all(r.trace_id == trace.trace_id for r in trace.records)
-    action = next(r for r in trace.records if r.name == "action.completed" and r.payload.get("action") == "browser.click")
+    action = next(
+        r for r in trace.records if r.name == "action.completed" and r.payload.get("action") == "browser.click"
+    )
     assert action.execution_id and action.step_id and action.action_id
     listed = traces.recent()
     assert listed[0]["trace_id"] == trace.trace_id and listed[0]["status"] == "completed"
@@ -406,7 +475,13 @@ def test_an_unlabeled_field_is_grounded_by_its_neighbour(kit: Kit) -> None:
     with _pytest.MonkeyPatch.context() as mp:
         mp.setattr(web, "page_elements", with_unlabeled)
         kit.web.url = f"{BASE}/form"
-        script = [{"action": "type", "target": {"role": "textbox", "relative": {"anchor": "Email", "direction": "below", "role": "textbox"}}, "parameters": {"text": "me@example.com"}}]
+        script = [
+            {
+                "action": "type",
+                "target": {"role": "textbox", "relative": {"anchor": "Email", "direction": "below", "role": "textbox"}},
+                "parameters": {"text": "me@example.com"},
+            }
+        ]
         result = kit.loop(ScriptedPlanner(script)).run(AgentTask("fill", surface="browser"))
     assert kit.web.state.get("email") == "me@example.com"
     assert result.trajectory.steps[0].grounding["candidate"]["strategy"] == "relative"
@@ -448,7 +523,11 @@ def test_a_captcha_stops_the_task_for_the_person(kit: Kit, monkeypatch: pytest.M
     def with_challenge(path: str, state: dict[str, Any], variant: str) -> tuple[str, list[dict[str, Any]], str]:
         if path != "/invoices":
             return real(path, state, variant)
-        return "Just a moment", [{"role": "checkbox", "name": "I'm not a robot", "tag": "input"}], "Verify you are human"
+        return (
+            "Just a moment",
+            [{"role": "checkbox", "name": "I'm not a robot", "tag": "input"}],
+            "Verify you are human",
+        )
 
     monkeypatch.setattr(web, "page_elements", with_challenge)
     result = kit.loop(ScriptedPlanner(export_script())).run(AgentTask("export the invoices", surface="browser"))
@@ -468,7 +547,9 @@ def test_ordinary_pages_about_robots_are_not_challenges() -> None:
     assert detect(page("We use reCAPTCHA-free forms.")) is None  # a name in prose, not a challenge control
     assert detect(page("", url="https://www.google.com/recaptcha/api2/anchor?k=x")) is not None
     assert detect(page("Please complete the security check to access the site")) is not None
-    frame = StateElement("f1", "iframe", "reCAPTCHA", attributes=(("src", "https://www.google.com/recaptcha/api2/anchor"),))
+    frame = StateElement(
+        "f1", "iframe", "reCAPTCHA", attributes=(("src", "https://www.google.com/recaptcha/api2/anchor"),)
+    )
     assert detect(page("", elements=(frame,))) is not None
     assert detect(None) is None
 
@@ -506,12 +587,19 @@ def test_a_poisoned_past_trajectory_is_data_and_cannot_widen_the_task(kit: Kit, 
         "browser",
         status="completed",
     )
-    poisoned.add(TrajectoryStep(1, "export", {"action_type": "browser.click", "target": {"label": "Export"}}, {"outcome": "success"}))
+    poisoned.add(
+        TrajectoryStep(
+            1, "export", {"action_type": "browser.click", "target": {"label": "Export"}}, {"outcome": "success"}
+        )
+    )
     kit.store.save(poisoned)
 
     def obeying() -> ModelPlanner:
         provider = ScriptedProvider(
-            [reply('{"steps": []}'), *[reply('{"action": {"action": "shell.run", "parameters": {"command": "rm -rf src"}}}')] * 4]
+            [
+                reply('{"steps": []}'),
+                *[reply('{"action": {"action": "shell.run", "parameters": {"command": "rm -rf src"}}}')] * 4,
+            ]
         )
         planner = ModelPlanner(ChatLanguageModel(provider, CAPS), kit.executor.catalog)
         planner.provider = provider  # type: ignore[attr-defined]
@@ -530,7 +618,9 @@ def test_a_poisoned_past_trajectory_is_data_and_cannot_widen_the_task(kit: Kit, 
     assert not any(e.name == "action.started" and e.data.get("action") == "shell.run" for e in kit.events)
 
     limited = obeying()
-    result = kit.loop(limited, memory=True).run(AgentTask("export the invoices", surface="browser", allowed=("browser.",)))
+    result = kit.loop(limited, memory=True).run(
+        AgentTask("export the invoices", surface="browser", allowed=("browser.",))
+    )
     assert result.status == Status.FAILED and "no usable step" in result.summary
     assert len(kit.ui.requests) == 1  # refused by the task's own limits: not even asked
 
@@ -546,22 +636,34 @@ def test_the_supervisor_delegates_within_a_budget_and_hands_results_over(kit: Ki
             return super().next(task, state, history, feedback=feedback, lessons=lessons)
 
     def planner_for(specialist, goal):  # type: ignore[no-untyped-def]
-        return Recording([{"action": "filesystem.write", "parameters": {"path": f"{specialist.name}.txt", "content": "x\n"}}])
+        return Recording(
+            [{"action": "filesystem.write", "parameters": {"path": f"{specialist.name}.txt", "content": "x\n"}}]
+        )
 
     supervisor = SupervisorAgent(kit.executor, planner_for, store=kit.store)
     subtasks = [SubTask("code", "write the code file"), SubTask("testing", "read it back")]
     subtasks[1] = SubTask("code", "write a second file")
     result = supervisor.run(AgentTask("two pieces", surface="none"), subtasks)
     assert result.ok and [s.id.startswith("sub_") for s, _ in result.results] == [True, True]
-    assert any(note.startswith("handed over: code (sub_") for note in seen_notes[-1])  # the second saw the first's result
+    assert any(
+        note.startswith("handed over: code (sub_") for note in seen_notes[-1]
+    )  # the second saw the first's result
     by = result.to_dict()["by_specialist"]["code"]
     assert by["subtasks"] == 2 and by["steps"] == 2 and by["statuses"] == ["completed", "completed"]
     assert result.used["steps"] == 2 and "agent.delegated" in kit.names()
 
-    tight = supervisor.run(AgentTask("over budget", surface="none"), [SubTask("code", "one"), SubTask("code", "two")], budget=Budget(steps=1))
+    tight = supervisor.run(
+        AgentTask("over budget", surface="none"),
+        [SubTask("code", "one"), SubTask("code", "two")],
+        budget=Budget(steps=1),
+    )
     assert tight.status == Status.FAILED and "steps budget ran out before code: 'two'" in tight.summary
-    assert [str(o.status) for _, o in tight.results] == ["completed"]  # the first fit exactly; the second was never started
-    no_tokens = supervisor.run(AgentTask("no tokens", surface="none"), [SubTask("code", "one")], budget=Budget(tokens=0))
+    assert [str(o.status) for _, o in tight.results] == [
+        "completed"
+    ]  # the first fit exactly; the second was never started
+    no_tokens = supervisor.run(
+        AgentTask("no tokens", surface="none"), [SubTask("code", "one")], budget=Budget(tokens=0)
+    )
     assert no_tokens.status == Status.FAILED and "tokens budget" in no_tokens.summary and no_tokens.results == []
 
 
@@ -578,20 +680,73 @@ def test_a_task_that_finishes_in_exactly_max_steps_completes(kit: Kit) -> None:
 def test_fork_and_duplicate(kit: Kit, agent_project: Path) -> None:
     from highhx.agent.loop import fork
 
-    steps = [{"action": "filesystem.write", "parameters": {"path": f"f{i}.txt", "content": f"{i}\\n"}} for i in range(3)]
+    steps = [
+        {"action": "filesystem.write", "parameters": {"path": f"f{i}.txt", "content": f"{i}\\n"}} for i in range(3)
+    ]
     first = kit.loop(ScriptedPlanner(steps)).run(AgentTask("three files", surface="none"))
     assert first.status == Status.COMPLETED
     for i in range(3):
         (agent_project / f"f{i}.txt").unlink()
     forked = fork(kit.store, first.trajectory.id, at=1)
     assert forked.id != first.trajectory.id and forked.trace_id != first.trajectory.trace_id
-    assert len(forked.steps) == 1 and forked.metrics["forked_from"] == {"task": first.trajectory.id, "trace": first.trajectory.trace_id, "at": 1}
+    assert len(forked.steps) == 1 and forked.metrics["forked_from"] == {
+        "task": first.trajectory.id,
+        "trace": first.trajectory.trace_id,
+        "at": 1,
+    }
     finished = resume(kit.executor, kit.store, forked.id, sleep=lambda _s: None)
     assert finished.status == Status.COMPLETED and len(finished.trajectory.steps) == 3
-    assert not (agent_project / "f0.txt").exists() and (agent_project / "f1.txt").exists() and (agent_project / "f2.txt").exists()  # continued after step 1
+    assert (
+        not (agent_project / "f0.txt").exists()
+        and (agent_project / "f1.txt").exists()
+        and (agent_project / "f2.txt").exists()
+    )  # continued after step 1
     assert len(kit.store.load(first.trajectory.id).steps) == 3  # the original is untouched
     again = fork(kit.store, first.trajectory.id, at=0)
     assert resume(kit.executor, kit.store, again.id, sleep=lambda _s: None).status == Status.COMPLETED
     assert (agent_project / "f0.txt").exists()  # a duplicate runs every step again
     with pytest.raises(Exception, match="fork at 0"):
         fork(kit.store, first.trajectory.id, at=9)
+
+
+# ------------------------------------------------------------------- dry run
+def test_a_dry_run_plans_and_rates_every_step_and_never_reports_success(kit: Kit, agent_project: Path) -> None:
+    # Regression: `--dry-run agent loop` ran nothing (right) but ended "completed: all 2 step(s)
+    # done", without the plan, its risks or which steps would be asked.
+    (agent_project / "build").mkdir()
+    kit.executor.app.options.dry_run = True
+    script = [
+        {"action": "filesystem.write", "parameters": {"path": "dry.txt", "content": "x\n"}},
+        {"action": "shell.run", "parameters": {"command": "rm -rf build"}},
+    ]
+    result = kit.loop(ScriptedPlanner(script)).run(AgentTask("write and clean", surface="none"))
+    assert result.status == Status.PLANNED and not result.ok
+    assert not (agent_project / "dry.txt").exists() and (agent_project / "build").exists()
+    lines = result.summary.splitlines()
+    assert lines[0] == "dry run: 2 step(s) planned, nothing was run; 2 would need approval"
+    assert lines[1] == "1. filesystem.write: dry.txt  [risk medium · needs approval]"
+    assert lines[2] == "2. shell.run: rm -rf build  [risk critical · needs approval]"
+    assert [s.outcome for s in kit.store.load(result.trajectory.id).steps] == ["planned", "planned"]
+    assert not [e for e in kit.ui.events if e[0] in ("permission", "confirm_action")]  # rated, never asked
+
+
+def test_a_dry_run_stops_where_the_next_step_needs_real_results(kit: Kit, agent_project: Path) -> None:
+    from highhx.agent.loop.model import StepIntent
+
+    class Repeating:  # a planner that would act on the result of its last step
+        name = "model"
+
+        def outline(self, task: Any, state: Any) -> list[Any]:
+            return []
+
+        def next(self, task: Any, state: Any, history: Any, **_kw: Any) -> Decision:
+            return Decision("act", StepIntent("filesystem.read", parameters={"path": "a.txt"}))
+
+        def state(self) -> dict[str, Any]:
+            return {}
+
+    (agent_project / "a.txt").write_text("x")
+    kit.executor.app.options.dry_run = True
+    result = kit.loop(Repeating()).run(AgentTask("read until done", surface="none"))
+    assert result.status == Status.PLANNED and len(result.trajectory.steps) == 1  # bounded: no loop
+    assert "later steps depend on results a dry run does not produce" in result.summary

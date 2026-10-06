@@ -93,7 +93,7 @@ class Trajectory:
     id: str = field(default_factory=lambda: new_id("task"))
     trace_id: str = field(default_factory=lambda: new_id("tr"))
     status: str = "running"
-    """running · completed · failed · needs_user · cancelled · interrupted"""
+    """running · completed · failed · needs_user · cancelled · interrupted · planned (a dry run)"""
     plan: list[dict[str, Any]] = field(default_factory=list)
     steps: list[TrajectoryStep] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)

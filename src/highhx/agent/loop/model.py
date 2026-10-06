@@ -38,6 +38,8 @@ class Status(StrEnum):
     NEEDS_USER = "needs_user"
     CANCELLED = "cancelled"
     INTERRUPTED = "interrupted"
+    PLANNED = "planned"
+    """A dry run: the steps were planned and rated, nothing ran."""
 
 
 @dataclass
