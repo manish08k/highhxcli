@@ -234,6 +234,30 @@ class WebConsole:
             raise ValueError(f"unknown control {op!r}")
         return task
 
+    def takeover(self, op: str) -> dict[str, Any]:
+        """Hand the computer to the person (``take``) or back (``release``). While they have it,
+        HighhX's actions that change the computer are refused and a running task waits; after it
+        is handed back, the task observes again before its next step."""
+        from highhx.actions import events as ev
+
+        session = self.session()
+        if op == "take":
+            session.take_over("the person at the web console")
+            self.app.ctx.events.emit(ev.COMPUTER_TAKEN_OVER, by=session.human_by)
+        elif op == "release":
+            if not session.taken_over:
+                raise Conflict("the computer is not taken over")
+            held = session.release()
+            self.app.ctx.events.emit(ev.COMPUTER_RELEASED, seconds=round(held, 1))
+        else:
+            raise ValueError(f"unknown takeover operation {op!r}")
+        return self.computer_state()
+
+    def computer_state(self) -> dict[str, Any]:
+        session = self._session
+        taken = bool(session is not None and session.taken_over)
+        return {"taken_over": taken, "by": session.human_by if taken else ""}
+
     # ------------------------------------------------------------- live view
     def stream(self, source: str) -> FrameBroker:
         broker = self.brokers[source]
@@ -261,6 +285,7 @@ class WebConsole:
             if task["status"] == "running" and pending:
                 task["status"] = "waiting"
         return {
+            "computer": self.computer_state(),
             "tasks": tasks,
             "approvals": pending,
             "streams": {
@@ -523,6 +548,8 @@ class _Handler(BaseHTTPRequestHandler):
                 request_id = str(body.get("request_id") or "")[:100]
                 task, started = c.start_task(goal, surface, steps, request_id=request_id)
                 self._send(201 if started else 200, task.to_dict())
+            elif path in ("/api/computer/take", "/api/computer/release"):
+                self._send(200, c.takeover(path.rsplit("/", 1)[1]))
             elif path.startswith("/api/tasks/") and path.count("/") == 4:
                 _, _, _, task_id, op = path.split("/")
                 self._send(200, c.control(task_id, op).to_dict())

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -77,6 +78,33 @@ class ComputerSession:
 
         self.captures = CaptureStore()
         """Screenshots handed to models, and the checks that ground their coordinates."""
+        self._human = threading.Event()
+        self._human_since = 0.0
+        self.human_by = ""
+
+    # ------------------------------------------------------------ human takeover
+    @property
+    def taken_over(self) -> bool:
+        """A person is operating the computer: HighhX changes nothing on it until they release it."""
+        return self._human.is_set()
+
+    def take_over(self, by: str = "the person") -> None:
+        """Hand the computer to a person. Every screenshot taken before stops grounding clicks (the
+        person will change what is on the screen), and HighhX's actions that change the computer
+        are refused until :meth:`release`."""
+        if not self._human.is_set():
+            self._human_since, self.human_by = time.monotonic(), by
+            self._human.set()
+        self.captures.retire(f"{by} took control of the computer")
+
+    def release(self) -> float:
+        """Give the computer back; the seconds the person had it. Nothing seen before is trusted:
+        whoever continues must observe again (the agent loop does)."""
+        held = time.monotonic() - self._human_since if self._human.is_set() else 0.0
+        self.captures.retire("the computer was handed back after a person used it")
+        self._runtimes.clear()  # cached observations and element ids describe the old screen
+        self._human.clear()
+        return held
 
     def driver(self) -> HighhXDriver:
         """The HighhX Computer API for desktop operations — one per session, shared by HighhX Free's

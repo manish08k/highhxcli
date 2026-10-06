@@ -251,13 +251,24 @@ class AgentLoop:
         same_screen = 0
         last_fingerprint = ""
         while True:
-            if self.pause is not None and self.pause.is_set() and not cancel.cancelled:
+            if self._held() and not cancel.cancelled:
                 self.events.emit(ev.TASK_PAUSED, task=task.goal, steps=counters.steps)
                 paused_at = self.clock()
-                while self.pause.is_set() and not cancel.cancelled:
+                person = False
+                while self._held() and not cancel.cancelled:
+                    person = person or self._person()
                     cancel.wait(0.1)
                 deadline += self.clock() - paused_at  # a pause does not use up the task's time
-                self.events.emit(ev.TASK_RESUMED, task=task.goal, steps=counters.steps)
+                self.events.emit(ev.TASK_RESUMED, task=task.goal, steps=counters.steps, after_takeover=person)
+                if person and not cancel.cancelled:
+                    # a person used the computer: nothing seen before is trusted — observe again and
+                    # decide from what is there now (the next step has not run, so none is repeated)
+                    state = self._observe(observer, counters)
+                    feedback = (
+                        "A person operated the computer while the task was paused. The earlier screen is "
+                        "no longer valid: decide from the current observation."
+                    )
+                    lessons = [*lessons, "a person took over the computer mid-task; re-observed after"]
             if cancel.cancelled:
                 return Status.CANCELLED, "cancelled"
             if self.clock() > deadline:
@@ -463,6 +474,14 @@ class AgentLoop:
             return verdict.outcome, reflection, after
 
     # ------------------------------------------------------------------ helpers
+    def _person(self) -> bool:
+        session = self.executor.computer_if_any()
+        return bool(session is not None and getattr(session, "taken_over", False))
+
+    def _held(self) -> bool:
+        """Paused between steps, or a person has the computer (human takeover)."""
+        return bool(self.pause is not None and self.pause.is_set()) or self._person()
+
     @property
     def _dry_run(self) -> bool:
         return bool(getattr(self.executor.app.options, "dry_run", False))

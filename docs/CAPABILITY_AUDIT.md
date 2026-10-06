@@ -39,7 +39,7 @@ No `TODO`/`FIXME` in `src/`; every `NotImplementedError` is an abstract base met
 | Trajectory / audit | `TrajectoryStore`, `TraceStore`, audit log, events — one history | — | COMPLETE |
 | Checkpoint / resume | `agent loop --resume`, workflow resume; verification before continuing | — | COMPLETE |
 | Pause | agent loop pause between steps; web console pause/resume/cancel | — | COMPLETE |
-| Human takeover | — | No takeover/release: nothing stops the agent acting while a person uses the computer, and nothing forces a fresh observation afterwards | NOT IMPLEMENTED → implemented below |
+| Human takeover | `ComputerSession.take_over/release`; executor refuses changes to the computer meanwhile; agent loop waits and re-observes; web console Take over / Release (`tests/unit/test_human_takeover.py`, real-Chrome button test) | CLI `agent loop` and the TUI have no takeover command (they run a task in the foreground; Ctrl-C cancels it, resumable) | COMPLETE (web console) |
 | Dry run | global `--dry-run` reaches every action (nothing changes) | **Bug:** `--dry-run agent loop` reported "✓ completed: all 2 step(s) done", without the plan, risks or approvals | PARTIAL → fixed below |
 | Rollback | `compensate` on specs with a real inverse (`/undo` of file changes) | — | COMPLETE |
 | Browser sessions | profiles, managed sessions, heartbeat, reconnect, downloads, uploads, popups, crash recovery, no duplicate tabs — real Chrome | — | COMPLETE |
@@ -66,7 +66,7 @@ No `TODO`/`FIXME` in `src/`; every `NotImplementedError` is an abstract base met
    and `require_approval` rules honoured by the gate. *Done:* `host` / `app` rule conditions,
    `tests/unit/test_site_app_policies.py`, real Chrome `known_url` test.
 3. **Human takeover** — pause the agent, refuse its actions while a person operates the
-   computer, and require a fresh observation on release.
+   computer, and require a fresh observation on release. *Done.*
 4. **Screenshot redaction** — blank the bounding boxes of secret fields (passwords, card
    numbers, one-time codes) in stored screenshots, from DOM/accessibility, and say so in
    metadata (no claim of general PII detection).

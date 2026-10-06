@@ -53,4 +53,5 @@ Every record carries `canonical`: the older names map to the spec's vocabulary
 `task.resumed`, `task.cancelled`, `model.request|response|error`, `grounding.failed`,
 `browser.started|navigation|crash|connection_lost|recovered|tab|download`, `computer.input`,
 `computer.screenshot`, `android.action`, `sandbox.blocked`, `artifact.created`, `agent.delegated`,
-`attempt.completed`, `approval.required|approved|rejected|modified|deferred|expired`.
+`attempt.completed`, `approval.required|approved|rejected|modified|deferred|expired|cancelled`,
+`computer.taken_over`, `computer.released` (human takeover; `task.resumed` carries `after_takeover`).

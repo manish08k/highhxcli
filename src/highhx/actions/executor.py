@@ -273,6 +273,12 @@ class ActionExecutor:
                 summary="dry run: " + "; ".join(planned.preview()),
                 status="planned",
             )
+        held = self._held_by_person(spec)
+        if held:
+            self.events.emit(ev.ACTION_FAILED, action=spec.name, status="blocked", error=held)
+            return ActionResult(
+                False, status="blocked", error=held, summary="a person has the computer", retryable=False
+            )
         preapproved = preapproved and self.actor == Actor.USER and decision.approval < Approval.TYPED
         asks = planned.asks and not preapproved
         if asks:
@@ -457,6 +463,25 @@ class ActionExecutor:
             elif token.wait(delay):
                 raise OperationCancelledError("cancelled")
         return result
+
+    def computer_if_any(self) -> ComputerSession | None:
+        """The computer session if one exists (never creates one)."""
+        try:
+            return self._computer_factory() if self._computer_factory is not None else self._computer
+        except Exception:
+            return None
+
+    def _held_by_person(self, spec: ActionSpec) -> str:
+        """While a person operates the computer (human takeover), HighhX changes nothing on it —
+        whoever asks, agent or console. Looking is still allowed (observations, live view)."""
+        from highhx.actions.spec import ANDROID, BROWSER, DESKTOP
+
+        if spec.kind == ActionKind.READ or not {BROWSER, DESKTOP, ANDROID} & set(spec.permissions):
+            return ""
+        session = self.computer_if_any()
+        if session is None or not getattr(session, "taken_over", False):
+            return ""
+        return f"{session.human_by} has control of the computer; HighhX waits until it is handed back"
 
     def _where(self, spec: ActionSpec, data: Inputs) -> tuple[tuple[str, str], ...]:
         """The site a browser action acts on and the application a desktop action acts on, for

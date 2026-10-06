@@ -18,4 +18,11 @@ Tasks run one at a time (the executor's cancellation is per application). Frames
 
 API (for scripts, same token): `GET /api/state`, `/api/events?after=N`, `/api/history[/ID]`,
 `/api/timeline/TRACE`, `/api/approvals`, `/api/artifacts`, `/api/benchmarks`, `/api/frame?source=browser`;
-`POST /api/tasks`, `/api/tasks/ID/{pause,resume,cancel}`, `/api/approvals/ID`.
+`POST /api/tasks` (with a `request_id`, a repeated request returns the task it started),
+`/api/tasks/ID/{pause,resume,cancel}`, `/api/approvals/ID`, `/api/computer/{take,release}`.
+
+**Human takeover.** *Take over* hands the computer to you: HighhX's actions that would change it
+(browser, desktop, Android) are refused — whoever asks — and a running task waits (looking is still
+allowed, so the live view keeps working). Every screenshot taken before stops grounding clicks.
+*Release* hands it back: the task observes the computer again and decides from what is there now;
+the step it was about to take had not run, so nothing is repeated.

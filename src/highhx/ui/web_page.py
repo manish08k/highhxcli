@@ -31,7 +31,8 @@ img.live { width:100%; border:1px solid var(--line); border-radius:6px; backgrou
 :focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; margin:0; }
 </style></head><body>
-<header><h1>HighhX</h1><span id="status" class="dim" role="status" aria-live="polite">connecting…</span><span id="caps" class="dim"></span></header>
+<header><h1>HighhX</h1><span id="status" class="dim" role="status" aria-live="polite">connecting…</span><span id="caps" class="dim"></span>
+<button id="takeover" type="button" title="Use the computer yourself: HighhX pauses and changes nothing until you release it">Take over</button><span id="takeerror" class="bad" role="alert"></span></header>
 <main>
  <div>
   <section><h2>New task</h2>
@@ -105,7 +106,9 @@ const LABEL = { waiting: "waiting for approval", running: "running", paused: "pa
 function render() {
   if (connected === false || !lastState) return;
   const s = lastState, st = (x) => s.tasks.filter((t) => t.status === x).length;
-  const [text, cls] = st("waiting") ? [`waiting for approval (${s.approvals.length})`, "warn"]
+  const human = s.computer && s.computer.taken_over;
+  $("takeover").textContent = human ? "Release" : "Take over";
+  const [text, cls] = human ? ["you have control — HighhX waits", "warn"] : st("waiting") ? [`waiting for approval (${s.approvals.length})`, "warn"]
     : st("running") ? ["running", "ok"] : st("paused") ? ["paused", "warn"]
     : (st("queued") || st("starting")) ? ["starting", "dim"] : ["idle", "dim"];
   $("status").textContent = text; $("status").className = cls;
@@ -237,6 +240,13 @@ function live(on) {
 }
 $("live").addEventListener("click", () => live($("live").textContent === "Start"));
 $("source").addEventListener("change", () => { if ($("live").textContent === "Stop") live(true); });
+// Human takeover: the computer is the person's until they release it; the agent then observes again.
+$("takeover").addEventListener("click", () => busy($("takeover"), async () => {
+  $("takeerror").textContent = "";
+  const human = lastState && lastState.computer && lastState.computer.taken_over;
+  try { await post(human ? "/api/computer/release" : "/api/computer/take"); await state(); }
+  catch (e) { $("takeerror").textContent = " " + e.message; }
+}));
 // A new task: Enter or Run. One request at a time; a retry of a request whose answer was lost
 // reuses its id, so the console returns the task it started instead of starting a second one.
 let lastRequest = null;

@@ -211,6 +211,19 @@ def test_ended_tasks_leave_no_token_on_the_console(console: WebConsole) -> None:
     assert held() == []
 
 
+def test_the_person_takes_the_computer_and_hands_it_back(console: WebConsole) -> None:
+    status, answer, _ = call(console, "POST", "/api/computer/release", {}, authed(console))
+    assert status == 409 and "not taken over" in answer["error"]
+    status, answer, _ = call(console, "POST", "/api/computer/take", {}, authed(console))
+    assert status == 200 and answer == {"taken_over": True, "by": "the person at the web console"}
+    assert call(console, "GET", f"/api/state?token={console.token}")[1]["computer"]["taken_over"] is True
+    assert console.session().taken_over  # the executor refuses changes to the computer meanwhile
+    assert call(console, "POST", "/api/computer/release", {}, authed(console))[1]["taken_over"] is False
+    names = [e["event"] for e in call(console, "GET", f"/api/events?token={console.token}&after=0")[1]["events"]]
+    assert "computer.taken_over" in names and "computer.released" in names
+    assert call(console, "POST", "/api/computer/take", {}, {"Content-Type": "application/json"})[0] == 401  # guarded
+
+
 LIVE = pytest.mark.skipif(
     not (os.environ.get("HIGHHX_TEST_BROWSER") and find_browser()),
     reason="set HIGHHX_TEST_BROWSER=1 to drive a real browser",
@@ -400,3 +413,18 @@ def test_page_cancel_disconnect_and_one_live_loop(console: WebConsole, tmp_path:
         page.close()
         if console._session is not None and console._session._browser is not None:
             console._session._browser.stop()
+
+
+@LIVE
+def test_page_take_over_and_release_by_click(console: WebConsole, tmp_path: Path) -> None:
+    page = Page(console, tmp_path / "viewer")
+    try:
+        wait_for(lambda: page.status() == "idle")
+        page.click("#takeover")
+        wait_for(lambda: page.status() == "you have control — HighhX waits")
+        assert page.js("document.getElementById('takeover').textContent") == "Release" and console.session().taken_over
+        page.click("#takeover")
+        wait_for(lambda: page.status() == "idle")
+        assert not console.session().taken_over
+    finally:
+        page.close()
