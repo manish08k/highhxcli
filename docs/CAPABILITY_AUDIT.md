@@ -74,3 +74,34 @@ No `TODO`/`FIXME` in `src/`; every `NotImplementedError` is an abstract base met
    typed text into them was not protected either; fixed and tested on the real desktop.
 5. **Native file dialogs** — macOS open/save panels through accessibility (Go-to-folder path
    entry, then verify); other platforms reported as unsupported. *Done.*
+
+## Final matrix (after this phase)
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Screenshot | COMPLETE | screen/window/region, page capture, raw page; secret fields blacked out — real Chrome pixel test; desktop pixel test skips without Screen Recording (accessibility side tested for real) |
+| Mouse | COMPLETE | real AppKit fixture: every button, double-click, drag, horizontal scroll, 10pt control edges, after move/resize; real Chrome: clicks under scroll, DPR 2, page zoom, pinch zoom, iframes |
+| Keyboard | COMPLETE | real desktop (Unicode, Caps Lock, caret/page keys, Tab chain), real Chrome (all keys, combos, macOS editing commands) |
+| Vision | OPTIONAL DEPENDENCY | provider abstraction (local or HighhX Pro remote vision model); no model installed here |
+| Grounding | COMPLETE | DOM / accessibility / page-capture grounding with staleness refusal (real Chrome); OCR needs tesseract (OPTIONAL DEPENDENCY) |
+| Browser hybrid | COMPLETE | DOM actions, then page-capture pixels for click/scroll — real Chrome through the executor |
+| Observe/Act/Verify | COMPLETE | agent loop worker → verifier → reflector; bounded (steps, failures, time, no-progress); dry run plans without running |
+| Reflection | COMPLETE | reflector decisions (continue/retry/replan/ask/stop) — agent loop tests |
+| Recovery | COMPLETE | re-observe, scroll, re-ground, replan; reconnect never repeats an unsafe action — real Chrome crash/kill tests |
+| Checkpoint | COMPLETE | `agent loop --resume`, workflow resume; verified before continuing |
+| Human takeover | COMPLETE | take over / release (web console), executor refuses changes meanwhile, task re-observes — simulated computer + real Chrome button test |
+| Remote browser | COMPLETE | `RemoteBrowser` over a DevTools endpoint (token never stored) — real Chrome as the remote endpoint in `test_sessions_in_real_chrome`; no hosted browser service included |
+| Remote computer | OPTIONAL DEPENDENCY | `ssh://` runtime (keys only, host keys checked, heartbeat); needs an SSH host with HighhX — none configured here |
+| VM | OPTIONAL DEPENDENCY | `vm.*` on Lima/Tart command lines, tested with a fake runner; neither installed here |
+| Android | OPTIONAL DEPENDENCY | `android.*` over adb, emulator lifecycle, hierarchy + vision fallback, tested with a fake adb; no adb/device here |
+| macOS | COMPLETE | AX + Quartz — 21 real desktop tests (1 skipped: Screen Recording) |
+| Windows | PLATFORM LIMITED | UI Automation backend, tested with a fake runner only |
+| Linux | PLATFORM LIMITED | X11 + AT-SPI backend, tested with a fake runner only; Wayland refused |
+| Security | COMPLETE | risk + approvals + policy (incl. site/app rules and `require_approval` now enforced), path confinement, secret redaction in text and screenshots, SSRF; regression tests for each bug found |
+| Benchmarks | PARTIAL | `highhx benchmark` suites and real-browser benchmark run here; Android/OSWorld suites need their environments |
+
+Bugs found and fixed in this phase (each with a regression test): dry run reported "completed";
+`require_approval` policy rules were ignored by the gate; site rules missed clicks/typing after a
+link; macOS password fields were never recognised as secret (subrole); plus the takeover, redaction
+and file-dialog capabilities above. Suite: 2517 → 2532 passed (+15), skipped 61 → 67 (new opt-in
+real-platform tests); real Chrome 46 → 55 passed; real desktop 19 → 21 passed (+1 skipped).
