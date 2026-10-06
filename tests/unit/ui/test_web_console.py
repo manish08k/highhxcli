@@ -182,6 +182,35 @@ def test_idempotent_honest_states(console: WebConsole, agent_project: Path, monk
     assert status == 500 and "could not read that" in answer["error"]
 
 
+def test_ended_tasks_leave_no_token_on_the_console(console: WebConsole) -> None:
+    # Regression: each task's token was a child of the console's and was never let go, so a
+    # long-running console held every task it ever ran (and whatever its callbacks referenced).
+    root = console.app.ctx.cancel
+    held = lambda: [t.id for t in console.tasks.values() if t.cancel.cancel in root._callbacks]  # noqa: E731
+    for goal in ("one", "two"):  # tasks that run to the end
+        call(
+            console,
+            "POST",
+            "/api/tasks",
+            {"goal": goal, "surface": "none", "steps": [{"action": "wait"}]},
+            authed(console),
+        )
+    wait_for(lambda: len(console.tasks) == 2 and all(t.ended for t in console.tasks.values()))
+    assert all(t.status == "completed" for t in console.tasks.values())
+    # one waits for an answer, another is cancelled while queued behind it (it never starts)
+    steps = [{"action": "filesystem.write", "parameters": {"path": "w.txt", "content": "x\n"}}]
+    call(console, "POST", "/api/tasks", {"goal": "blocker", "surface": "none", "steps": steps}, authed(console))
+    pending = wait_for(lambda: call(console, "GET", f"/api/state?token={console.token}")[1]["approvals"])
+    _, queued, _ = call(
+        console, "POST", "/api/tasks", {"goal": "queued", "surface": "none", "steps": steps}, authed(console)
+    )
+    call(console, "POST", f"/api/tasks/{queued['id']}/cancel", {}, authed(console))
+    call(console, "POST", f"/api/approvals/{pending[0]['id']}", {"decision": "reject"}, authed(console))
+    wait_for(lambda: len(console.tasks) == 4 and all(t.ended for t in console.tasks.values()))
+    assert console.tasks[queued["id"]].summary == "cancelled before it started"
+    assert held() == []
+
+
 LIVE = pytest.mark.skipif(
     not (os.environ.get("HIGHHX_TEST_BROWSER") and find_browser()),
     reason="set HIGHHX_TEST_BROWSER=1 to drive a real browser",

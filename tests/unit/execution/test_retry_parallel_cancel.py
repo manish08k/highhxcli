@@ -1,5 +1,6 @@
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -68,3 +69,38 @@ def test_parallel_stop_when_skips_remaining() -> None:
     outcomes = run_parallel([lambda: 1, lambda: 2, lambda: 3], max_workers=1, stop_when=lambda v: v == 1)
     assert outcomes[0].value == 1
     assert all(o.skipped for o in outcomes[1:])
+
+
+def test_a_detached_child_no_longer_follows_and_is_not_kept() -> None:
+    parent = CancellationToken()
+    done, live = parent.child(), parent.child()
+    done.detach()
+    done.detach()  # twice is harmless
+    assert parent._callbacks == [live.cancel]  # the finished child is no longer held
+    parent.cancel("stop")
+    assert live.cancelled and not done.cancelled
+    assert parent._callbacks == []  # a cancelled token keeps no callbacks either
+
+
+def test_long_sessions_keep_no_token_per_action_workflow_or_task(tmp_path: Path) -> None:
+    # Regression: the executor made a child of the session's token per action and never let it
+    # go — 2000 actions held 2000 tokens (and what they referenced) for the life of the process.
+    from highhx.actions.executor import ActionExecutor
+    from highhx.commands import App
+    from highhx.core.context import Options
+    from highhx.safety.actions import Actor
+    from highhx.safety.gate import ActionGate, ApprovalMode
+    from highhx.ui.prompts import StaticPrompter
+
+    (tmp_path / "a.txt").write_text("x")
+    app = App(Options(interactive=False, yes=True), cwd=tmp_path)
+    try:
+        gate = ActionGate(app.engine, StaticPrompter(), source="test", mode=ApprovalMode.AUTO_EDIT)
+        executor = ActionExecutor(app, gate, actor=Actor.USER)
+        root = app.ctx.cancel
+        for _ in range(50):
+            assert executor.run("filesystem.read", {"path": "a.txt"}).ok
+        assert root._callbacks == []
+        executor.close()
+    finally:
+        app.close()

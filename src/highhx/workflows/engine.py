@@ -333,6 +333,7 @@ class WorkflowEngine:
             finally:
                 if timer is not None:
                     timer.cancel()
+                token.detach()  # the run is over: the engine's token keeps no token per workflow
                 registration.__exit__(None, None, None)
 
             ordered = {sid: results[sid] for sid in spec.step_ids}

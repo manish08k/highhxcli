@@ -7,6 +7,7 @@ lets a workflow cancel all running steps (fail-fast, Ctrl+C) in one call.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 from collections.abc import Callable
@@ -21,6 +22,7 @@ class CancellationToken:
         self._event = threading.Event()
         self._lock = threading.Lock()
         self._callbacks: list[Callable[[str], None]] = []
+        self._parent: CancellationToken | None = None
         self.reason: str | None = None
 
     @property
@@ -34,7 +36,7 @@ class CancellationToken:
                 return
             self.reason = reason
             self._event.set()
-            callbacks = list(self._callbacks)
+            callbacks, self._callbacks = list(self._callbacks), []  # each runs once; none is kept
         for callback in callbacks:
             try:
                 callback(reason)
@@ -54,7 +56,17 @@ class CancellationToken:
         return self._event.wait(timeout)
 
     def child(self) -> CancellationToken:
-        """Create a token cancelled whenever this one is."""
+        """Create a token cancelled whenever this one is. Call :meth:`detach` on it when its work is
+        over: until then this token keeps it (an executor makes one per action — kept forever, a
+        long session held every action it ever ran)."""
         child = CancellationToken()
+        child._parent = self
         self.on_cancel(child.cancel)
         return child
+
+    def detach(self) -> None:
+        """Stop following the parent (the work this token guarded is over)."""
+        parent, self._parent = self._parent, None
+        if parent is not None:
+            with parent._lock, contextlib.suppress(ValueError):
+                parent._callbacks.remove(self.cancel)

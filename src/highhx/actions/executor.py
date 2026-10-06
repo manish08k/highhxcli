@@ -296,7 +296,12 @@ class ActionExecutor:
             try:
                 replanned = self.plan(spec.name, {**inputs, **exc.inputs})
             except HighhXError as invalid:
-                return ActionResult(False, status="denied", error=f"the modified inputs are invalid: {invalid.message}", summary="not approved")
+                return ActionResult(
+                    False,
+                    status="denied",
+                    error=f"the modified inputs are invalid: {invalid.message}",
+                    summary="not approved",
+                )
             self.gate.assume_yes = assume_yes
             return self.execute(replanned, cancel=cancel, _modifications=_modifications + 1)
         except ApprovalDeniedError as exc:
@@ -349,15 +354,28 @@ class ActionExecutor:
             result = ActionResult(False, status="timeout" if timed_out.is_set() else "cancelled", error="cancelled")
         finally:
             timer.cancel()
+            token.detach()  # the action is over: its token must not stay on the session's
             self.app.ctx.cancel = previous
         result.seconds = time.monotonic() - started
         if spec.kind != ActionKind.READ and result.status not in ("denied", "blocked", "planned"):
             self._screen_changed(spec.name)
         with trace_context(execution_id=result.execution_id or None):
             if result.ok:
-                self.events.emit(ev.ACTION_COMPLETED, action=spec.name, summary=result.summary, seconds=result.seconds, execution_id=result.execution_id)
+                self.events.emit(
+                    ev.ACTION_COMPLETED,
+                    action=spec.name,
+                    summary=result.summary,
+                    seconds=result.seconds,
+                    execution_id=result.execution_id,
+                )
             else:
-                self.events.emit(ev.ACTION_FAILED, action=spec.name, status=result.status, error=result.error, execution_id=result.execution_id)
+                self.events.emit(
+                    ev.ACTION_FAILED,
+                    action=spec.name,
+                    status=result.status,
+                    error=result.error,
+                    execution_id=result.execution_id,
+                )
             self._domain_event(spec, result)
         return result
 
@@ -400,9 +418,18 @@ class ActionExecutor:
             except ApprovalDeniedError as exc:
                 # a confirmation inside the action (e.g. the browser runtime's per-element check)
                 # was declined: that is the person's answer, final, never a failure to retry
-                return ActionResult(False, status="denied", error=exc.message, summary="not approved", retryable=False, attempts=attempt)
+                return ActionResult(
+                    False, status="denied", error=exc.message, summary="not approved", retryable=False, attempts=attempt
+                )
             except PolicyViolationError as exc:
-                return ActionResult(False, status="blocked", error=exc.message, summary="blocked by policy", retryable=False, attempts=attempt)
+                return ActionResult(
+                    False,
+                    status="blocked",
+                    error=exc.message,
+                    summary="blocked by policy",
+                    retryable=False,
+                    attempts=attempt,
+                )
             except HighhXError as exc:
                 result = ActionResult(
                     False, error=exc.message + (f" ({exc.hint})" if exc.hint else ""), summary=exc.message

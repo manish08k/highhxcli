@@ -103,7 +103,9 @@ class DagScheduler:
                     done, _ = wait(list(running), timeout=0.2, return_when=FIRST_COMPLETED)
                     for future in done:
                         node = running.pop(future)
-                        self._tokens.pop(node, None)
+                        finished = self._tokens.pop(node, None)
+                        if finished is not None:
+                            finished.detach()
                         self._record(future.result(), hooks)
                 except KeyboardInterrupt:
                     self.interrupted = True

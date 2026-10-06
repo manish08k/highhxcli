@@ -189,6 +189,7 @@ class WebConsole:
             with self._run_lock:  # one task at a time: the executor's cancellation is per application
                 if task.cancel.cancelled:
                     task.status, task.summary, task.ended = "cancelled", "cancelled before it started", time.time()
+                    task.cancel.detach()
                     executor.close()
                     return
                 self._run(task, loop, executor, goal, surface)
@@ -212,6 +213,7 @@ class WebConsole:
         finally:
             self.app.ctx.cancel = previous
             task.ended = time.time()
+            task.cancel.detach()  # ended: the console's token keeps no token per task
             executor.close()
 
     def control(self, task_id: str, op: str) -> WebTask:

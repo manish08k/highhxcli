@@ -21,7 +21,16 @@ from typing import TYPE_CHECKING, Any, Protocol
 from highhx.agent.context import ProjectContext
 from highhx.agent.history import SessionBusyError, SessionRecord, SessionStore, lease_owner
 from highhx.agent.memory import ProjectMemory
-from highhx.agent.messages import ImageBlock, Message, TextBlock, ToolCall, ToolResultBlock, Usage, limit_images, without_images
+from highhx.agent.messages import (
+    ImageBlock,
+    Message,
+    TextBlock,
+    ToolCall,
+    ToolResultBlock,
+    Usage,
+    limit_images,
+    without_images,
+)
 from highhx.agent.model.base import ModelProvider, ModelRequest
 from highhx.agent.model.resilience import CircuitBreaker, RetryPolicy
 from highhx.agent.permissions import AgentPermissions, ApprovalMode
@@ -615,6 +624,7 @@ class AgentSession:
             outcome = ToolResult.error(f"Internal error in {call.name}: {type(exc).__name__}: {exc}", code="internal")
         finally:
             timer.cancel()
+            ctx.cancel.detach()  # the call is over: the session keeps no token per tool call
             self.sink.buffer = None
             self.app.ctx.cancel = self.cancel
         if ctx.cancel.reason == "timeout" and outcome.error_code != "timeout" and not self.cancel.cancelled:
