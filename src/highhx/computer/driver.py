@@ -26,6 +26,7 @@ awaitable). Coordinates are desktop points in the platform's global space (``scr
 
 from __future__ import annotations
 
+import dataclasses
 import itertools
 import time
 import uuid
@@ -70,6 +71,8 @@ class Screenshot:
     window: int | None = None
     origin: tuple[int, int] = (0, 0)
     """The desktop point the image's top-left pixel shows: point = origin + pixel / scale."""
+    redacted: int = 0
+    """Secret fields blacked out in the image (see :mod:`highhx.perception.redaction`)."""
 
     def to_point(self, x: float, y: float) -> tuple[int, int]:
         """A pixel of this image → the desktop point it shows."""
@@ -340,7 +343,7 @@ class HighhXDriver:
             "screenshot", path=str(target), window=window, region=list(region) if region else None, max_size=max_size
         )
         origin = data.get("origin") or (region[:2] if region else (0, 0))
-        return Screenshot(
+        shot = Screenshot(
             Path(data["path"]),
             int(data["width"]),
             int(data["height"]),
@@ -348,6 +351,30 @@ class HighhXDriver:
             window,
             (int(origin[0]), int(origin[1])),
         )
+        return self._redact(shot)
+
+    def _redact(self, shot: Screenshot) -> Screenshot:
+        """Black out the secure text fields of the frontmost application (and of the window
+        captured) — from the accessibility tree, in desktop points mapped to the image's pixels."""
+        from highhx.perception.redaction import redact_png, scaled
+
+        apps: list[str | None] = [None]
+        if shot.window is not None:
+            apps += [w.app for w in self.windows() if w.id == shot.window]
+        secret: list[tuple[float, float, float, float]] = []
+        for app in dict.fromkeys(apps):
+            try:
+                tree = self.get_ui_tree(app)
+            except Exception:  # no accessibility here: nothing is known to redact
+                continue
+            secret += [tuple(map(float, e.bounds)) for e in tree.elements if e.secret and e.bounds]  # type: ignore[misc]
+        if not secret:
+            return shot
+        data, count = redact_png(shot.path.read_bytes(), scaled(secret, shot.scale, *shot.origin))
+        if not count:
+            return shot
+        shot.path.write_bytes(data)
+        return dataclasses.replace(shot, redacted=count)
 
     def apps(self) -> list[App]:
         return [

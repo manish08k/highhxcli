@@ -168,11 +168,15 @@ function run(argv) {
   // same element — the first one.)
   let visited = 0;
   const walk = (node, path, depth) => {
-    let kids, all;
+    let kids, all, subs;
     try { kids = node.uiElements; all = kids.role(); } catch (e) { return; }  // every child's role: one event
+    // AppKit's password field is role AXTextField, *subrole* AXSecureTextField (checking the role
+    // alone missed every one): every child's subrole, also one event.
+    try { subs = kids.subrole(); } catch (e) { subs = []; }
+    const isSecure = (i) => all[i] === 'AXSecureTextField' || subs[i] === 'AXSecureTextField';
     // Each property of every child in one event when the platform allows it, else child by child.
     // A secure field's value is never read, not even in bulk: then values are read child by child.
-    const cache = all.indexOf('AXSecureTextField') >= 0 ? {value: null} : {};
+    const cache = all.some((_r, i) => isSecure(i)) ? {value: null} : {};
     const bulk = f => { if (!(f in cache)) { try { cache[f] = kids[f](); } catch (e) { cache[f] = null; } } return cache[f]; };
     for (let i = 0; i < all.length && out.length < 400 && visited < 4000; i++) {
       const el = kids[i];
@@ -183,7 +187,7 @@ function run(argv) {
       if (role) {
         const raw = f => { const b = bulk(f); if (b) return b[i]; try { return el[f](); } catch (e) { return null; } };
         const get = f => { const v = raw(f); return v === null || v === undefined ? '' : String(v); };
-        const secure = r === 'AXSecureTextField';
+        const secure = isSecure(i);
         let bounds = null;
         const p = raw('position'), z = raw('size');
         if (p && z) bounds = [p[0], p[1], z[0], z[1]];

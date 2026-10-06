@@ -57,6 +57,8 @@ class Capture:
     """Why it may no longer be used (an action changed the desktop after it)."""
     page: dict[str, Any] | None = None
     """For a browser page's capture: the URL, scroll offset and viewport it showed (CSS pixels)."""
+    redacted: int = 0
+    """Secret fields blacked out in the image."""
 
     def label(self) -> str:
         return (
@@ -76,6 +78,7 @@ class Capture:
             "origin": list(self.shot.origin),
             "scale": self.shot.scale,
             "target": self.target,
+            "redacted": self.redacted,
         }
 
 
@@ -115,7 +118,14 @@ class CaptureStore:
             target = f"region {list(region)}"
         else:
             target = "the screen"
-        capture = Capture(f"c{next(self._ids)}", shot, windows, (screen.width, screen.height, screen.scale), target)
+        capture = Capture(
+            f"c{next(self._ids)}",
+            shot,
+            windows,
+            (screen.width, screen.height, screen.scale),
+            target,
+            redacted=shot.redacted,
+        )
         self._items[capture.id] = capture
         self.latest = capture.id
         for old in list(self._items)[:-3]:  # a few recent ones for history; older files are removed
@@ -170,7 +180,7 @@ class CaptureStore:
         page = {k: view.get(k) for k in ("url", "x", "y", "width", "height", "visual")}
         target = f"the page {view.get('title') or view.get('url') or ''}".strip()
         size = (int(view_width), int(shown.get("height") or height), float(view.get("dpr") or 1))
-        capture = Capture(f"c{number}", shot, [], size, target, page=page)
+        capture = Capture(f"c{number}", shot, [], size, target, page=page, redacted=int(view.get("redacted") or 0))
         self._items[capture.id] = capture
         self.latest = capture.id
         for old in list(self._items)[:-3]:

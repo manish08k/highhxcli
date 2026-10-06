@@ -1497,7 +1497,8 @@ class ChromeBrowser:
         return self._eval(expression, cancel, safety=Retry.SAFE if retry_safe else Retry.UNSAFE)
 
     def screenshot(self, *, cancel: CancellationToken | None = None) -> bytes:
-        """The current page as PNG bytes (read-only; nothing on the page changes)."""
+        """The current page as PNG bytes (read-only; nothing on the page changes), in device
+        pixels, with secret fields blacked out (see :mod:`highhx.perception.redaction`)."""
         import base64
 
         data = self._run(
@@ -1506,7 +1507,25 @@ class ChromeBrowser:
             lambda c, s: c.call("Page.captureScreenshot", {"format": "png"}, session_id=s, cancel=cancel),
             cancel,
         )
-        return base64.b64decode(str(data.get("data") or ""))
+        raw = base64.b64decode(str(data.get("data") or ""))
+        secret = self._secret_fields(cancel)
+        if not secret or not raw:
+            return raw
+        view = self.viewport(cancel=cancel)
+        shown = view.get("visual") or {}
+        scale = float(view.get("dpr") or 1) * float(shown.get("scale") or 1)
+        dx = float(shown.get("x", view.get("x") or 0)) - float(view.get("x") or 0)
+        dy = float(shown.get("y", view.get("y") or 0)) - float(view.get("y") or 0)
+        from highhx.perception.redaction import redact_png, scaled
+
+        return redact_png(raw, scaled(secret, scale, dx, dy))[0]
+
+    def _secret_fields(self, cancel: CancellationToken | None) -> list[tuple[float, float, float, float]]:
+        """The page's secret fields (password, card, one-time code) as client rectangles."""
+        from highhx.perception.redaction import SECRET_FIELDS_JS
+
+        found = self._eval(SECRET_FIELDS_JS, cancel) or []
+        return [(float(b[0]), float(b[1]), float(b[2]), float(b[3])) for b in found if len(b) == 4]
 
     # ------------------------------------------------- the page as pixels (vision)
     def viewport(self, *, cancel: CancellationToken | None = None) -> dict[str, Any]:
@@ -1542,7 +1561,15 @@ class ChromeBrowser:
             lambda c, s: c.call("Page.captureScreenshot", {"format": "png", "clip": clip}, session_id=s, cancel=cancel),
             cancel,
         )
-        return base64.b64decode(str(data.get("data") or "")), view
+        image = base64.b64decode(str(data.get("data") or ""))
+        secret = self._secret_fields(cancel)
+        if secret and image:  # one image pixel per CSS pixel, from where the visual viewport starts
+            from highhx.perception.redaction import redact_png, scaled
+
+            dx = clip["x"] - float(view.get("x") or 0)
+            dy = clip["y"] - float(view.get("y") or 0)
+            image, view["redacted"] = redact_png(image, scaled(secret, 1.0, dx, dy))
+        return image, view
 
     def pointer(
         self,

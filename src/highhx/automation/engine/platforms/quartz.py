@@ -436,7 +436,8 @@ def element_at(x: float, y: float) -> dict[str, Any]:
             or _string_attribute(element, "AXDescription")
             or _string_attribute(element, "AXHelp")
         )
-        secure = ax_role == "AXSecureTextField"
+        # AppKit's password field: role AXTextField, subrole AXSecureTextField
+        secure = "AXSecureTextField" in (ax_role, _string_attribute(element, "AXSubrole"))
         return {
             "pid": pid.value,
             "role": AX_ROLES.get(ax_role, ax_role.removeprefix("AX").lower() or "unknown"),

@@ -29,6 +29,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let label = NSTextField(labelWithString: "Count: 0")
     let name = NSTextField(string: "")
     let email = NSTextField(string: "")
+    let secret = NSSecureTextField(string: "hunter2")
     let agree = NSButton(checkboxWithTitle: "Agree", target: nil, action: nil)
     let volume = NSSlider(value: 0, minValue: 0, maxValue: 100, target: nil, action: nil)
     let scroll = NSScrollView()
@@ -78,6 +79,8 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         email.placeholderString = "Email"
         email.setAccessibilityLabel("Email")
         email.delegate = self
+        secret.setAccessibilityLabel("Password")
+        secret.widthAnchor.constraint(equalToConstant: 140).isActive = true
         agree.target = self; agree.action = #selector(changed)
         volume.target = self; volume.action = #selector(changed)
         volume.setAccessibilityLabel("Volume")
@@ -107,17 +110,19 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         tinyButton.setAccessibilityLabel("Tiny")
         tinyButton.widthAnchor.constraint(equalToConstant: 10).isActive = true
         tinyButton.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        let credentials = NSStackView(views: [email, secret])
+        credentials.orientation = .horizontal
         let row = NSStackView(views: [pad, tinyButton])
         row.orientation = .horizontal
         row.alignment = .centerY
-        let stack = NSStackView(views: [label, button, name, email, agree, volume, scroll, pair, row])
+        let stack = NSStackView(views: [label, button, name, credentials, agree, volume, scroll, pair, row])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         scroll.heightAnchor.constraint(equalToConstant: 80).isActive = true
         scroll.widthAnchor.constraint(equalToConstant: 400).isActive = true
         name.widthAnchor.constraint(equalToConstant: 300).isActive = true
-        email.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        email.widthAnchor.constraint(equalToConstant: 220).isActive = true
         volume.widthAnchor.constraint(equalToConstant: 300).isActive = true
         window.contentView = stack
 

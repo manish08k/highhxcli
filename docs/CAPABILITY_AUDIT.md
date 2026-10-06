@@ -26,7 +26,7 @@ No `TODO`/`FIXME` in `src/`; every `NotImplementedError` is an abstract base met
 | Capability | Implementation (evidence) | Gaps found | Status |
 |---|---|---|---|
 | Unified execution | `ActionExecutor` (plan → classify → policy → approval → run → verify → audit) for every `computer.*`, `browser.*`, `android.*`, `vm.*` action; agent loop, workflows, web console, TUI and MCP all call it | — | COMPLETE |
-| Screenshot | `computer.screenshot` (screen, window, region; `CaptureStore` grounding, staleness), `browser.screenshot` (+ page capture), `android.screenshot`; artifacts with retention | No redaction of secret fields in stored images | PARTIAL → fixed below |
+| Screenshot | `computer.screenshot` (screen, window, region; `CaptureStore` grounding, staleness), `browser.screenshot` (+ page capture), `android.screenshot`; artifacts with retention; secret fields blacked out (`perception/redaction.py`; real Chrome pixel test; real macOS accessibility test) | Desktop pixel check needs Screen Recording granted to the terminal (skipped here); Android screenshots not redacted | PARTIAL |
 | Mouse | move, click, double/right/middle, down/up, drag, scroll incl. horizontal, hover — real AppKit fixture tests, edge hits on a 10pt control, clicks after window move/resize | — | COMPLETE (macOS) |
 | Keyboard | type (Unicode, Caps-Lock-proof), keys, combos, forward delete, edit shortcuts; browser: all keys + macOS editing commands — real desktop and real Chrome tests | — | COMPLETE |
 | Clipboard | `computer.clipboard_read/write`, `computer.edit` (copy/cut/paste/undo); paste asked first; real tests | — | COMPLETE |
@@ -69,6 +69,8 @@ No `TODO`/`FIXME` in `src/`; every `NotImplementedError` is an abstract base met
    computer, and require a fresh observation on release. *Done.*
 4. **Screenshot redaction** — blank the bounding boxes of secret fields (passwords, card
    numbers, one-time codes) in stored screenshots, from DOM/accessibility, and say so in
-   metadata (no claim of general PII detection).
+   metadata (no claim of general PII detection). *Done* for browser and desktop. **Bug found:**
+   macOS password fields were never recognised as secret (role checked instead of subrole) —
+   typed text into them was not protected either; fixed and tested on the real desktop.
 5. **Native file dialogs** — macOS open/save panels through accessibility (Go-to-folder path
    entry, then verify); other platforms reported as unsupported.

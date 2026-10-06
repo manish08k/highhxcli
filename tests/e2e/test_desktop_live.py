@@ -423,10 +423,12 @@ def test_tab_and_shift_tab_move_focus(fixture_app: tuple[Any, Any], act: Any) ->
     act("computer.hotkey", {"keys": "shift+tab"})
     assert focus_becomes("textbox:Name") == "textbox:Name"
     act("computer.press", {"key": "tab"})
+    act("computer.press", {"key": "tab"})
+    assert focus_becomes("textbox:Password") == "textbox:Password"
     act("computer.press", {"key": "tab"})  # into the multi-line text view (where Tab is a character)
     assert focus_becomes("textbox:text entry area") == "textbox:text entry area"
     act("computer.hotkey", {"keys": "ctrl+shift+tab"})  # the macOS way out of a text view
-    assert focus_becomes("textbox:Email") == "textbox:Email"
+    assert focus_becomes("textbox:Password") == "textbox:Password"
 
 
 def test_clicks_land_on_the_control_after_the_window_moves_and_resizes(fixture_app: tuple[Any, Any], act: Any) -> None:
@@ -438,3 +440,43 @@ def test_clicks_land_on_the_control_after_the_window_moves_and_resizes(fixture_a
         before = state()["count"]
         act("computer.click_at", dict(zip(("x", "y"), _center(_element(driver, "Increment")), strict=True)))
         state(lambda s, b=before: s["count"] == b + 1)
+
+
+def test_the_password_field_is_known_as_secret_where_redaction_reads_it(fixture_app: tuple[Any, Any]) -> None:
+    driver, _state = fixture_app
+    field = _element(driver, "Password")
+    # Regression: AppKit reports it as AXTextField with subrole AXSecureTextField; only the role was
+    # checked, so no macOS password field was secret (typed text unprotected, nothing to redact)
+    assert field.secret and field.value == "" and field.bounds and field.bounds[2] > 50  # value never read
+    at = driver.element_at(*_center(field))
+    assert at.secret and at.value == ""
+
+
+def test_a_window_screenshot_blacks_out_the_password_field(fixture_app: tuple[Any, Any]) -> None:
+    from highhx.automation.engine.platforms import quartz
+    from highhx.perception.png import decode
+
+    if not quartz.screen_capture_allowed():
+        pytest.skip(
+            "grant Screen Recording to this terminal to check the pixels (System Settings → Privacy & Security)"
+        )
+    driver, _state = fixture_app
+    field = _element(driver, "Password")
+    window = driver.windows(APP)[0]
+    started = time.monotonic()  # the window's area (a window capture needs Screen Recording here)
+    shot = driver.screenshot(region=(window.x, window.y, window.width, window.height))
+    seconds = time.monotonic() - started
+    try:
+        image = decode(shot.path.read_bytes())
+        x, y, width, height = field.bounds
+        inside = {image.pixel(*_pixel(shot, x + dx, y + height // 2)) for dx in range(4, width - 4, 6)}
+        assert shot.redacted >= 1 and inside == {(0, 0, 0)}, (shot.redacted, inside)
+        name = _element(driver, "Name").bounds  # an ordinary field is drawn as it is
+        assert image.pixel(*_pixel(shot, name[0] + 4, name[1] + name[3] // 2)) != (0, 0, 0)
+        assert seconds < 5, seconds  # redaction (an accessibility read) keeps a screenshot interactive
+    finally:
+        shot.path.unlink(missing_ok=True)
+
+
+def _pixel(shot: Any, x: float, y: float) -> tuple[int, int]:
+    return int((x - shot.origin[0]) * shot.scale), int((y - shot.origin[1]) * shot.scale)

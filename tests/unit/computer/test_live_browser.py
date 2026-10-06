@@ -702,3 +702,35 @@ def test_the_page_in_front_is_known_without_asking_the_page(site: str, tmp_path:
         assert browser.known_url() == f"{site}/results.html?q=moved"
     finally:
         assert browser.stop()
+
+
+SECRETS_PAGE = (
+    "<!doctype html><title>Pay</title><style>body{margin:0;background:#fff} input{position:absolute;width:200px;"
+    "height:30px;font:20px monospace;border:0;background:#fff;color:#000}</style>"
+    "<input id=pw type=text autocomplete=current-password value=hunter2-shown style='left:20px;top:20px'>"
+    "<input id=cc autocomplete=cc-number value=4111111111111111 style='left:20px;top:80px'>"
+    "<input id=otp autocomplete=one-time-code value=123456 style='left:20px;top:140px'>"
+    "<input id=name aria-label=Name value=Ada style='left:20px;top:200px'>"
+)
+
+
+def test_screenshots_black_out_secret_fields(site: str, tmp_path: Path) -> None:
+    from highhx.computer.capture import CaptureStore
+    from highhx.perception.png import decode
+
+    (tmp_path / "pay.html").write_text(SECRETS_PAGE)
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+    try:
+        browser.navigate(f"{site}/pay.html")
+        capture = CaptureStore().take_page(browser)
+        assert capture.redacted == 3 and capture.to_dict()["redacted"] == 3
+        page = decode(capture.shot.path.read_bytes())
+        for y in (35, 95, 155):  # the shown password, the card number, the one-time code
+            assert {page.pixel(x, y) for x in range(22, 218, 4)} == {(0, 0, 0)}, y
+        assert len({page.pixel(x, 215) for x in range(22, 218)}) > 1  # the name field is drawn as it is
+        raw = decode(browser.screenshot())  # device pixels
+        dpr = raw.width / page.width
+        assert {raw.pixel(int(x * dpr), int(95 * dpr)) for x in range(22, 218, 4)} == {(0, 0, 0)}
+        capture.shot.path.unlink(missing_ok=True)
+    finally:
+        assert browser.stop()

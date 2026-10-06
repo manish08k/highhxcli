@@ -92,6 +92,24 @@ application a desktop action acts on: the one it names, else the frontmost one (
 case-insensitive). Both facts are looked up only when a rule uses them. A site or application
 HighhX cannot determine (no page open, no desktop access) matches no rule.
 
+## Screenshots
+
+Every screenshot HighhX takes — page captures and browser screenshots, desktop screen, window and
+region captures — has the fields HighhX classifies as secret blacked out before it is stored,
+shown to a model or saved as an artifact: password inputs and fields whose `autocomplete` says
+password, card (`cc-…`) or one-time code; on the desktop, secure text fields (macOS, Windows UI
+Automation `IsPassword`, AT-SPI password text). Browsers draw a password as bullets, but card
+numbers, one-time codes and a password shown with "show password" are drawn in clear. A capture
+says how many fields it blacked out (`redacted`).
+
+Limits, stated plainly: this is **not** general PII detection — text that merely looks sensitive
+(an API key printed on a page, a private message) is not found. Fields inside cross-origin frames
+are not seen; on the desktop only the frontmost application's (and the captured window's)
+secure fields are known, and only where accessibility is granted. The live view (a screencast to
+the person's own loopback console, never stored) is not redacted. Cost: one DOM query (~1.4 ms)
+per browser capture; when a secret field is on screen, decoding and re-encoding the image
+(~165 ms for 1280×813 in real Chrome).
+
 ## Secrets
 
 - `highhx env` shows secret values as `******** (N chars)`; `env set NAME` prompts without echo.
