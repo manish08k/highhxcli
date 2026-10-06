@@ -621,3 +621,114 @@ def desktop_step(ctx: ActionContext, step: dict[str, Any], timeout: float = 10.0
         verified=verified if isinstance(verified, bool) else None,
         error="" if result.ok else detail,
     )
+
+
+# ----------------------------------------------------------- system file dialogs
+DIALOG_BUTTONS = {"open": ("Open", "Choose", "Select"), "save": ("Save",)}
+
+
+def _dialog(ctx: ActionContext, app: str) -> tuple[str, Any]:
+    """The kind of the file dialog in front of ``app`` (open · save) and its elements — or ''."""
+    tree = run(ctx, lambda d: d.get_ui_tree(app))
+    buttons = {e.name for e in tree.elements if e.role == "button"}
+    if "Cancel" not in buttons:
+        return "", tree
+    for kind, names in DIALOG_BUTTONS.items():
+        if buttons & set(names):
+            return kind, tree
+    return "", tree
+
+
+def _until(ctx: ActionContext, check: Callable[[], bool], seconds: float) -> bool:
+    import time
+
+    deadline = time.monotonic() + seconds
+    while True:
+        if check():
+            return True
+        if time.monotonic() >= deadline or ctx.cancel.wait(0.15):
+            return False
+
+
+def file_dialog(ctx: ActionContext, inputs: Inputs) -> ActionResult:
+    """Choose a file in the system's open dialog, or name and place one in its save dialog, through
+    the dialog's own "Go to folder" path entry — typed text, never clicks at guessed places. macOS
+    only (its file panels are the same in every application). The dialog must already be open
+    (an earlier click opened it); afterwards it must have closed, and a saved file must exist."""
+    import sys
+    from pathlib import Path
+
+    from highhx.agent.permissions import confine_path, relative_to_root
+    from highhx.safety.actions import Actor
+
+    if sys.platform != "darwin":
+        raise ToolError(
+            "file dialogs are driven on macOS; on this platform type the full path into the dialog's "
+            "file-name field (computer.type) and press Enter"
+        )
+    kind_wanted = str(inputs.get("kind") or "")
+    agent = ctx.actor == Actor.AGENT
+    app = _target(inputs) or frontmost_app(ctx)
+    kind, _tree = _dialog(ctx, app)
+    if not kind:
+        raise ToolError(f"no file dialog is open in {app} (open it first, e.g. with its Open… or Save As… command)")
+    if kind_wanted and kind_wanted != kind:
+        raise ToolError(f"the dialog in {app} is a {kind} dialog, not a {kind_wanted} dialog")
+    if kind == "open":
+        path = Path(confine_path(ctx.app, str(inputs["path"]), must_exist=True, for_agent=agent))
+        goto = str(path)
+    else:
+        path = Path(confine_path(ctx.app, str(inputs["path"]), write=True, for_agent=agent))
+        if not path.parent.is_dir():
+            raise ToolError(f"the folder {path.parent} does not exist")
+        if path.exists() and not inputs.get("overwrite"):
+            raise ToolError(f"{path.name} already exists there; pass overwrite to replace it")
+        goto = str(path.parent)
+
+    def go_to_sheet_open() -> bool:  # the "Go to folder" sheet replaces the panel's buttons
+        names = {e.name for e in run(ctx, lambda d: d.get_ui_tree(app)).elements if e.role == "button"}
+        return not names & set(DIALOG_BUTTONS[kind])
+
+    run(ctx, lambda d: d.hotkey("cmd+shift+g", app=None))
+    if not _until(ctx, go_to_sheet_open, 3):
+        raise ToolError("the dialog's Go to folder field did not open")
+    run(ctx, lambda d: d.hotkey("cmd+a", app=None))
+    run(ctx, lambda d: d.type_text(goto))
+    run(ctx, lambda d: d.press("enter"))
+    if not _until(ctx, lambda: _dialog(ctx, app)[0] == kind, 5):
+        raise ToolError(f"the dialog did not go to {goto}")
+    if kind == "save":
+        tree = run(ctx, lambda d: d.get_ui_tree(app))
+        name_field = next(
+            (e for e in tree.elements if e.role == "textbox" and e.bounds and "search" not in e.name.lower()), None
+        )
+        if name_field is None or not name_field.bounds:
+            raise ToolError("the save dialog's name field is not where the dialog shows it")
+        x, y, width, height = name_field.bounds
+        run(ctx, lambda d: d.click(x + width // 2, y + height // 2))
+        run(ctx, lambda d: d.hotkey("cmd+a", app=None))
+        run(ctx, lambda d: d.type_text(path.name))
+    run(ctx, lambda d: d.press("enter"))
+    if kind == "save" and inputs.get("overwrite") and _until(ctx, lambda: _replace_asked(ctx, app), 1.5):
+        run(ctx, lambda d: d.press_element("Replace", role="button", app=app))
+    closed = _until(ctx, lambda: _dialog(ctx, app)[0] == "", 5)
+    saved = kind == "save" and _until(ctx, path.exists, 5)
+    verified = (closed and saved) if kind == "save" else closed
+    return ActionResult(
+        verified,
+        output={
+            "app": app,
+            "kind": kind,
+            "path": str(path),
+            "dialog_closed": closed,
+            **({"exists": saved} if kind == "save" else {}),
+        },
+        summary=f"{'chose' if kind == 'open' else 'saved'} {path} in {app}'s {kind} dialog",
+        verified=verified,
+        error="" if verified else ("the dialog is still open" if not closed else f"{path} was not written"),
+        changed=[relative_to_root(ctx.app.root, path)] if saved else [],
+    )
+
+
+def _replace_asked(ctx: ActionContext, app: str) -> bool:
+    return any(e.role == "button" and e.name == "Replace" for e in run(ctx, lambda d: d.get_ui_tree(app)).elements)

@@ -89,3 +89,26 @@ def test_wait_is_bounded_and_cancellable(desk: Any) -> None:
     assert executor.run("computer.wait", {"seconds": 0}).ok
     with pytest.raises(ValidationError):
         executor.plan("computer.wait", {"seconds": 61})
+
+
+def test_file_dialogs_are_refused_where_they_cannot_be_driven(
+    desk: Any, monkeypatch: pytest.MonkeyPatch, agent_project: Path
+) -> None:
+    from highhx.actions.catalog import default_catalog
+    from highhx.actions.policy import Risk
+    from highhx.safety.actions import ActionKind
+
+    _env, executor, _ui = desk
+    (agent_project / "a.txt").write_text("x")
+    spec = next(s for s in default_catalog() if s.name == "computer.file_dialog")
+    assert (
+        spec.risk == Risk.MEDIUM
+        and spec.kind_for is not None
+        and spec.kind_for({"kind": "save"}) == ActionKind.WRITE_FILE
+    )
+    if sys.platform == "darwin":
+        none_open = executor.run("computer.file_dialog", {"path": "a.txt"})
+        assert not none_open.ok and "no file dialog is open" in none_open.error  # the simulated desktop has none
+    monkeypatch.setattr(sys, "platform", "linux")
+    elsewhere = executor.run("computer.file_dialog", {"path": "a.txt"})
+    assert not elsewhere.ok and "driven on macOS" in elsewhere.error

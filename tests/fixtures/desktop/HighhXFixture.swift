@@ -36,6 +36,8 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     let pad = Pad(frame: NSRect(x: 0, y: 0, width: 200, height: 60))
     var padEvents: [String: Int] = [:]
     var tinyClicks = 0
+    var chosen = ""
+    var saved = ""
 
     init(statePath: String) { self.statePath = statePath }
 
@@ -46,6 +48,7 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             "frame": [Int(window.frame.origin.x), Int(window.frame.origin.y),
                       Int(window.frame.size.width), Int(window.frame.size.height)],
             "pad": padEvents, "tiny": tinyClicks, "minimized": window.isMiniaturized,
+            "chosen": chosen, "saved": saved,
         ]
         if let data = try? JSONSerialization.data(withJSONObject: state) {
             try? data.write(to: URL(fileURLWithPath: statePath))
@@ -61,6 +64,26 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func controlTextDidChange(_ notification: Notification) { write() }
     @objc func scrolled() { write() }
     @objc func tiny() { tinyClicks += 1; write() }
+    // Real system file panels: what HighhX chooses or saves through them lands in the state.
+    @objc func choose() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.begin { response in
+            if response == .OK, let url = panel.url { self.chosen = url.path; self.write() }
+        }
+    }
+    @objc func saveAs() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "untitled.txt"
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                try? "saved by the fixture\n".write(to: url, atomically: true, encoding: .utf8)
+                self.saved = url.path
+                self.write()
+            }
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A second window of the same application (behind the main one): exact window targeting.
@@ -93,7 +116,9 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(scrolled),
                                                name: NSView.boundsDidChangeNotification, object: scroll.contentView)
         let pair = NSStackView(views: [NSButton(title: "Add", target: self, action: #selector(addFirst)),
-                                       NSButton(title: "Add", target: self, action: #selector(addSecond))])
+                                       NSButton(title: "Add", target: self, action: #selector(addSecond)),
+                                       NSButton(title: "Choose…", target: self, action: #selector(choose)),
+                                       NSButton(title: "Save As…", target: self, action: #selector(saveAs))])
         pair.orientation = .horizontal
         pad.setAccessibilityElement(true)
         pad.setAccessibilityRole(.group)

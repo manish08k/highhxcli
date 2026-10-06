@@ -263,9 +263,10 @@ def act(fixture_app: tuple[Any, Any], make_app: Any, agent_project: Path) -> Ite
     executor = ActionExecutor(app, gate, actor=Actor.USER, computer=lambda: session)
     fixture_app[0].focus(APP)
 
-    def run(name: str, inputs: dict[str, Any]) -> Any:
+    def run(name: str, inputs: dict[str, Any], *, ok: bool = True) -> Any:
         result = executor.run(name, inputs)
-        assert result.ok, (name, result.error)
+        if ok:
+            assert result.ok, (name, result.error)
         return result
 
     yield run
@@ -480,3 +481,28 @@ def test_a_window_screenshot_blacks_out_the_password_field(fixture_app: tuple[An
 
 def _pixel(shot: Any, x: float, y: float) -> tuple[int, int]:
     return int((x - shot.origin[0]) * shot.scale), int((y - shot.origin[1]) * shot.scale)
+
+
+def test_system_file_dialogs(fixture_app: tuple[Any, Any], act: Any, agent_project: Path) -> None:  # noqa: F811
+    driver, state = fixture_app
+    (agent_project / "report.txt").write_text("quarterly numbers\n")
+    (agent_project / "out").mkdir(exist_ok=True)
+    refused = act("computer.file_dialog", {"path": "report.txt"}, ok=False)
+    assert not refused.ok and "no file dialog is open" in refused.error  # nothing to drive: said, not guessed
+    # open: the application receives exactly that file
+    act("computer.click_at", dict(zip(("x", "y"), _center(_element(driver, "Choose…")), strict=True)))
+    result = act("computer.file_dialog", {"path": "report.txt", "kind": "open"})
+    assert result.verified and result.output["dialog_closed"]
+    assert Path(state(lambda s: s["chosen"])["chosen"]).resolve() == (agent_project / "report.txt").resolve()
+    # save: named and placed by path, and the file exists afterwards
+    act("computer.click_at", dict(zip(("x", "y"), _center(_element(driver, "Save As…")), strict=True)))
+    outside = act("computer.file_dialog", {"path": "/etc/hosts-copy", "kind": "save"}, ok=False)
+    assert not outside.ok  # never outside the project
+    saved = act("computer.file_dialog", {"path": "out/saved.txt", "kind": "save"})
+    target = (agent_project / "out" / "saved.txt").resolve()
+    assert saved.verified and saved.output["exists"] and target.read_text() == "saved by the fixture\n"
+    assert Path(state(lambda s: s["saved"])["saved"]).resolve() == target
+    act("computer.click_at", dict(zip(("x", "y"), _center(_element(driver, "Save As…")), strict=True)))
+    again = act("computer.file_dialog", {"path": "out/saved.txt", "kind": "save"}, ok=False)
+    assert not again.ok and "already exists" in again.error  # replacing a file must be asked for
+    driver.press("escape")

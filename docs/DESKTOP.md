@@ -20,6 +20,13 @@ apps: `computer.launch`, `computer.quit`, `computer.focus`, `computer.windows`, 
 Other: `computer.screenshot`, `computer.state`, `computer.element_at`, `computer.clipboard_read/write`,
 `computer.verify`, `computer.wait`.
 
+System file dialogs (macOS): `computer.file_dialog` chooses a project file in the open dialog in
+front, or saves into the project through the save dialog, by typing the path into the dialog's own
+"Go to folder" field (no clicks at guessed places). The dialog must already be open; afterwards it
+must have closed, and a saved file must exist. Project files only (never secret files), medium risk
+(a file handed to an application may leave the machine); replacing a file needs `overwrite`. On
+Windows and Linux it is refused with how to proceed: type the path into the dialog's file-name field.
+
 Keyboard actions are refused when their target is a terminal (commands go through `shell.run`).
 Pasting and cutting are medium risk; a click is rated by its target's label (`Delete account` is high).
 

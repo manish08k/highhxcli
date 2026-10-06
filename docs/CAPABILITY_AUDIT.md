@@ -49,7 +49,7 @@ No `TODO`/`FIXME` in `src/`; every `NotImplementedError` is an abstract base met
 | Android | `android.*` over adb (25 actions), emulator lifecycle, hierarchy, vision fallback | No adb/emulator here; tested with a fake adb | OPTIONAL DEPENDENCY |
 | macOS | AX + Quartz backend — real tests | — | COMPLETE |
 | Windows / Linux | UI Automation / X11 + AT-SPI backends | Only fake-runner tests on this machine; Wayland refused | PLATFORM LIMITED |
-| Native file dialogs | browser uploads avoid them (`browser.upload`) | Desktop open/save panels: no structured support | NOT IMPLEMENTED (see below) |
+| Native file dialogs | `computer.file_dialog` (macOS open/save panels via Go to folder; verified close / file written) — real `NSOpenPanel`/`NSSavePanel` test; browser uploads avoid dialogs (`browser.upload`) | Windows/Linux refused with guidance; folder pickers and permission dialogs not covered | PLATFORM LIMITED |
 | Memory | long-term `agent/memory.py` (typed, provenance, secrets refused); in-task attempts in the reflector | — | COMPLETE |
 | Skills | `highhx skills`, application skills on the executor | — | COMPLETE |
 | Scheduling / triggers | `automation/scheduler.py` (cron schedules, file watches) | — | COMPLETE |
@@ -73,4 +73,4 @@ No `TODO`/`FIXME` in `src/`; every `NotImplementedError` is an abstract base met
    macOS password fields were never recognised as secret (role checked instead of subrole) —
    typed text into them was not protected either; fixed and tested on the real desktop.
 5. **Native file dialogs** — macOS open/save panels through accessibility (Go-to-folder path
-   entry, then verify); other platforms reported as unsupported.
+   entry, then verify); other platforms reported as unsupported. *Done.*

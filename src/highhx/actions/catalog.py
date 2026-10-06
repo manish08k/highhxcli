@@ -1309,6 +1309,32 @@ def _specs() -> list[ActionSpec]:
             target=lambda i: str(i.get("keys", "")),
         ),
         ActionSpec(
+            "computer.file_dialog",
+            "Choose a project file in the open dialog in front, or save into the project through its save "
+            "dialog (macOS; the dialog must be open). Verified: the dialog closed; a saved file exists.",
+            desktop.file_dialog,
+            Obj(
+                {
+                    "path": Prop(
+                        Str(min_length=1),
+                        required=True,
+                        description="A project file (open) or the file to write (save).",
+                    ),
+                    "kind": Prop(Str(choices=("open", "save")), description="Default: whichever dialog is open."),
+                    "overwrite": Prop(Bool(), description="Save: replace an existing file."),
+                    "app": BACKGROUND_APP,
+                }
+            ),
+            {"path": "the file", "kind": "open or save", "dialog_closed": "verified"},
+            Risk.MEDIUM,  # a file handed to an application (it may send it on), or a file written
+            ActionKind.UI_UPLOAD,
+            (DESKTOP,),
+            timeout=60,
+            agent=False,
+            target=lambda i: str(i.get("path", "")),
+            kind_for=lambda i: ActionKind.WRITE_FILE if i.get("kind") == "save" else ActionKind.UI_UPLOAD,
+        ),
+        ActionSpec(
             "computer.edit",
             "Copy, cut, paste, select all or undo in the frontmost application (cmd on macOS, ctrl elsewhere; never in a terminal).",
             desktop.edit,
