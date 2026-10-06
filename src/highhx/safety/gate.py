@@ -25,6 +25,7 @@ from highhx.core.errors import (
     PolicyViolationError,
     TimeoutExpiredError,
 )
+from highhx.policy.rules import Effect
 from highhx.safety.actions import ActionDescriptor, ActionKind, Actor
 from highhx.safety.audit import AuditEvent, AuditLog
 from highhx.safety.classifier import SafetyPolicy, SafetyVerdict
@@ -58,6 +59,20 @@ class Authorization:
     decision: str
     ticket: ApprovalTicket | None
     event: AuditEvent
+
+
+def where(action: ActionDescriptor) -> tuple[str | None, str | None]:
+    """The site and the application an action acts on, for host/app policy rules: from the facts
+    the executor attached, else from the application a runtime described ("Chrome <https://…>")."""
+    from urllib.parse import urlparse
+
+    host, app = action.attr("host") or None, action.attr("app") or None
+    application = action.application or ""
+    if host is None and "<" in application and application.endswith(">"):
+        host = urlparse(application[application.rindex("<") + 1 : -1]).hostname
+    if app is None and application and not application.startswith("project "):
+        app = application.split(" <", 1)[0].strip() or None
+    return host, app
 
 
 class ActionGate:
@@ -142,11 +157,24 @@ class ActionGate:
             if self.mode == ApprovalMode.READ_ONLY and action.kind != ActionKind.READ and verdict.risk > RiskLevel.SAFE:
                 # read-only refuses changes; a read that needs a confirmation still asks for one below
                 raise ApprovalDeniedError(f"Not allowed in read-only mode: {action.summary}")
-            self.engine.evaluate_policy(policy_action, command=action.command, target=action.target or None)
+            host, app = where(action)
+            policy = self.engine.evaluate_policy(
+                policy_action, command=action.command, target=action.target or None, host=host, app=app
+            )
+            assume_yes = self.assume_yes
+            if policy.effect == Effect.REQUIRE_APPROVAL:
+                # The project's rule asks for this action: always asked, at the rule's risk, with the
+                # rule's reason (the decision used to be dropped here, so such rules never asked).
+                always_confirm = True
+                verdict.risk = max(verdict.risk, policy.risk)
+                verdict.reasons += [
+                    f"project policy: {m}" for m in policy.messages if f"project policy: {m}" not in verdict.reasons
+                ]
+                assume_yes = assume_yes and policy.bypassable  # --yes never answers a non-bypassable rule
             if verdict.risk <= RiskLevel.SAFE and not always_confirm:
                 return Authorization(action, verdict, "allowed", None, self._event(action, verdict, "allowed"))
             if verdict.blocked or verdict.requires_confirmation or always_confirm:
-                ticket = self.broker.request(action, verdict, details=details, assume_yes=self.assume_yes)
+                ticket = self.broker.request(action, verdict, details=details, assume_yes=assume_yes)
                 return Authorization(action, verdict, "confirmed", ticket, self._event(action, verdict, "confirmed"))
             # Normal-risk, non-sensitive change.
             auto_level = self.engine.approvals.policy.auto_approve

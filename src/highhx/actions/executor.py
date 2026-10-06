@@ -232,6 +232,7 @@ class ActionExecutor:
             command=spec.command_for(data),
             environment=spec.environment_for(data),
             actor=self.actor,
+            attributes=self._where(spec, data),
         )
         verdict = self.gate.classify(descriptor)
         floor = max(spec.risk, spec.risk_for(data)) if spec.risk_for is not None else spec.risk
@@ -292,8 +293,10 @@ class ActionExecutor:
                 risk_label=decision.risk.label,
             )
         except PolicyViolationError as exc:
-            self.events.emit(ev.ACTION_FAILED, action=spec.name, status="blocked", error=exc.message)
-            return ActionResult(False, status="blocked", error=exc.message, summary="blocked by policy")
+            # the rule's own words say why (its message, else its description) — not only that it was
+            error = exc.message + (f": {'; '.join(exc.details)}" if exc.details else "")
+            self.events.emit(ev.ACTION_FAILED, action=spec.name, status="blocked", error=error)
+            return ActionResult(False, status="blocked", error=error, summary="blocked by policy")
         except ApprovalModifiedError as exc:
             # the person changed the inputs instead of approving: a new plan, classified and asked again
             self.events.emit(ev.APPROVAL_DENIED, action=spec.name, risk=decision.risk.label, modified=True)
@@ -454,6 +457,42 @@ class ActionExecutor:
             elif token.wait(delay):
                 raise OperationCancelledError("cancelled")
         return result
+
+    def _where(self, spec: ActionSpec, data: Inputs) -> tuple[tuple[str, str], ...]:
+        """The site a browser action acts on and the application a desktop action acts on, for
+        ``host`` / ``app`` policy rules — looked up only when a rule tests them. A navigation acts
+        on its destination; a click or typing on the page in front (so a rule against a site
+        holds after a link took the browser there, not only for typed addresses)."""
+        from urllib.parse import urlparse
+
+        from highhx.actions.spec import BROWSER, DESKTOP
+
+        policy = self.app.engine.policy
+        facts: list[tuple[str, str]] = []
+        if BROWSER in spec.permissions and policy.uses("host"):
+            url = str(data.get("url") or "")
+            host = urlparse(url if "://" in url else f"https://{url}").hostname if url else None
+            facts += [("host", host or self._page_host())]
+        if DESKTOP in spec.permissions and policy.uses("app"):
+            facts += [("app", str(data.get("app") or data.get("name") or "") or self._front_app())]
+        return tuple((k, v) for k, v in facts if v)
+
+    def _page_host(self) -> str:
+        """The host of the page in front, from what the browser last reported (never starts one)."""
+        from urllib.parse import urlparse
+
+        try:
+            browser = getattr(self.computer(), "_browser", None)  # only one already in use
+            url = browser.known_url() if browser is not None else ""
+        except Exception:  # no page: nothing a host rule could be about
+            return ""
+        return urlparse(url).hostname or ""
+
+    def _front_app(self) -> str:
+        try:
+            return str(self.computer().driver().active()[0] or "")
+        except Exception:  # no desktop here: nothing an app rule could be about
+            return ""
 
     # ----------------------------------------------------------- compensation
     def compensate(self, planned: Planned, result: ActionResult) -> str | None:

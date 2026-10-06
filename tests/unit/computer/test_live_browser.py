@@ -685,3 +685,20 @@ def test_capture_clicks_and_scrolling(site: str, tmp_path: Path, agent_project: 
             session._browser.stop()
         executor.close()
         session.close()
+
+
+def test_the_page_in_front_is_known_without_asking_the_page(site: str, tmp_path: Path) -> None:
+    # host policy rules read this: it must follow a link the page itself took
+    browser = ChromeBrowser(tmp_path / "state", headless=True)
+    try:
+        assert browser.known_url() == ""  # nothing started, nothing known
+        browser.navigate(f"{site}/links.html")
+        assert browser.known_url() == f"{site}/links.html"
+        browser.evaluate("location.href = 'results.html?q=moved'", retry_safe=False)
+        browser.wait_ready()
+        deadline = time.monotonic() + 5
+        while "results.html" not in browser.known_url() and time.monotonic() < deadline:
+            browser.pump_events(0.1)
+        assert browser.known_url() == f"{site}/results.html?q=moved"
+    finally:
+        assert browser.stop()

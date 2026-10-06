@@ -53,16 +53,18 @@ No `TODO`/`FIXME` in `src/`; every `NotImplementedError` is an abstract base met
 | Memory | long-term `agent/memory.py` (typed, provenance, secrets refused); in-task attempts in the reflector | — | COMPLETE |
 | Skills | `highhx skills`, application skills on the executor | — | COMPLETE |
 | Scheduling / triggers | `automation/scheduler.py` (cron schedules, file watches) | — | COMPLETE |
-| Security | risk classes, approvals, policy rules, path confinement, secret redaction, SSRF, CSP/CSRF console | **Gap:** domain and application policies only see an action's own target: a rule against `*.bank.com` stops `browser.open` but not a click or typing on that site; `computer.launch` gives no target at all | PARTIAL → fixed below |
+| Security | risk classes, approvals, policy rules, path confinement, secret redaction, SSRF, CSP/CSRF console | **Gap:** domain and application policies only see an action's own target: a rule against `bank.com` stops `browser.open` but not a click or typing on that site. **Bug found while fixing it:** the gate dropped `require_approval` decisions, so such rules never asked for any executor action | PARTIAL → fixed below |
 | Benchmarks | `highhx benchmark` suites, 8 metrics, real-browser benchmark | Android/OSWorld need their environments | PARTIAL |
 | Live view | web console (screencast, status, approvals), TUI live dashboard | — | COMPLETE |
 
 ## Gaps, in the order they are addressed
 
 1. **Dry run reports success** — a planning run must show the plan, each step's risk and whether
-   it needs approval, and end as a plan, never as "completed".
+   it needs approval, and end as a plan, never as "completed". *Done:* status `planned`.
 2. **Domain and application policies** for every browser and desktop action, enforced by the
-   existing policy engine (the page's host for browser actions; the application for desktop).
+   existing policy engine (the page's host for browser actions; the application for desktop) —
+   and `require_approval` rules honoured by the gate. *Done:* `host` / `app` rule conditions,
+   `tests/unit/test_site_app_policies.py`, real Chrome `known_url` test.
 3. **Human takeover** — pause the agent, refuse its actions while a person operates the
    computer, and require a fresh observation on release.
 4. **Screenshot redaction** — blank the bounding boxes of secret fields (passwords, card

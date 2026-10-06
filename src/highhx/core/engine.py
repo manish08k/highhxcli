@@ -248,6 +248,8 @@ class Engine:
         command: str | None = None,
         target: str | None = None,
         production: bool = False,
+        host: str | None = None,
+        app: str | None = None,
     ) -> PolicyDecision:
         """Evaluate policies; raises :class:`PolicyViolationError` on deny."""
         facts = self.facts()
@@ -259,6 +261,8 @@ class Engine:
                 target=target,
                 profile=facts.get("profile"),
                 production=production,
+                host=host,
+                app=app,
             )
         )
         if decision.denied:

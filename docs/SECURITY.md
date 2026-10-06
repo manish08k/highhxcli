@@ -59,8 +59,38 @@ rules:
 ```
 
 Conditions (`when`) combine: `action` (glob, e.g. `deploy:*`, `git:push`, `exec:docker`,
-`workflow:ci:deploy`), `command` (regex), `branch`, `target`, `profile` (globs) and
-`production`. Check the current repository with `highhx policy check`.
+`workflow:ci:deploy`, `action:browser.*`), `command` (regex), `branch`, `target`, `profile`
+(globs), `production`, `host` and `app`. Check the current repository with `highhx policy check`.
+
+`require_approval` asks for the action every time, at the rule's `risk`, with the rule's message
+as the reason; `--yes` answers it only when the rule is `bypassable`. A blocked action's error
+includes the rule's message.
+
+### Sites and applications
+
+```yaml
+rules:
+  - id: no-banking
+    when: {action: "action:browser.*", host: bank.example}     # the site and its subdomains
+    effect: deny
+    message: HighhX does not operate the bank's site
+  - id: mail-is-asked
+    when: {action: "action:browser.*", host: "*.mail.example"} # a glob: subdomains only
+    effect: require_approval
+  - id: no-typing-in-keychain
+    when: {action: "action:computer.*", app: "Keychain*"}
+    effect: deny
+```
+
+Executor actions are named `action:<name>` in rules (`action:browser.click`,
+`action:computer.type`); a few name their own (`network:<host>` for `api.request`, `vm:*`).
+`host` is the web site a browser action acts on: a navigation's destination, otherwise the page in
+front — so a rule against a site also holds for clicks and typing after a link took the browser
+there, not only for addresses typed in. `bank.example` matches it and its subdomains, never a
+substring (`bank.example.evil.com` is not it); a pattern with `*` is a glob. `app` is the
+application a desktop action acts on: the one it names, else the frontmost one (glob,
+case-insensitive). Both facts are looked up only when a rule uses them. A site or application
+HighhX cannot determine (no page open, no desktop access) matches no rule.
 
 ## Secrets
 

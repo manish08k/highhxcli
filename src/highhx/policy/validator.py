@@ -28,6 +28,11 @@ WHEN_SCHEMA = Obj(
         "target": Prop(Str(), description="Glob matched against the deployment target"),
         "profile": Prop(Str(), description="Glob matched against the environment profile"),
         "production": Prop(Bool()),
+        "host": Prop(
+            Str(min_length=1),
+            description="The web site a browser action acts on: 'bank.com' (and its subdomains) or a glob",
+        ),
+        "app": Prop(Str(min_length=1), description="Glob matched against the application a desktop action acts on"),
     }
 )
 

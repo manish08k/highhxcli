@@ -1139,6 +1139,12 @@ class ChromeBrowser:
     def current_url(self, *, cancel: CancellationToken | None = None) -> str:
         return str(self._eval("location.href", cancel) or "")
 
+    def known_url(self) -> str:
+        """The address of the tab HighhX works in, as the browser last reported it — without
+        connecting or starting anything ('' when no page is known)."""
+        tab = self.tabs.tabs.get(self._target_id) if self._target_id else None
+        return tab.url if tab is not None else ""
+
     def _before_action(self, cancel: CancellationToken | None, *, follow_tabs: bool = False) -> None:
         """Remember the navigation count so ``wait_ready`` can tell whether the action started one
         (and, for clicks, which tabs exist so a tab the click opens is recognised)."""

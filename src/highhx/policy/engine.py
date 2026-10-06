@@ -78,6 +78,11 @@ class PolicyEngine:
     def __init__(self, policies: PolicySet | None = None) -> None:
         self.policies = policies or PolicySet()
 
+    def uses(self, condition: str) -> bool:
+        """Whether any rule tests ``condition`` (``host``, ``app`` …): facts that cost a lookup
+        (the page in front, the frontmost application) are gathered only then."""
+        return any(getattr(rule, condition, None) is not None for rule in self.policies.rules)
+
     def evaluate(self, ctx: PolicyContext) -> PolicyDecision:
         decision = PolicyDecision()
         for rule in self.policies.rules:

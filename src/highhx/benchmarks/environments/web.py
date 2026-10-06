@@ -21,6 +21,7 @@ def png(width: int = 80, height: int = 60, boxes: tuple[tuple[int, int, int, int
         fill(rgb, width, box, (0, 0, 0))
     return encode(width, height, bytes(rgb))
 
+
 BASE = "https://shop.test"
 
 
@@ -31,8 +32,21 @@ def page_elements(path: str, state: dict[str, Any], variant: str) -> tuple[str, 
     if path == "/":
         elements = [
             {"role": "heading", "name": "Shop", "tag": "h1"},
-            {"role": "link", "name": "Billing documents" if renamed else "Invoices", "tag": "a", "href": "/invoices", "class": "nav css-1q2w3e" if renamed else "nav nav-invoices"},
-            {"role": "searchbox", "name": "Search", "tag": "input", "type": "search", "name_attr": "q", "value": state.get("typed_query", "")},
+            {
+                "role": "link",
+                "name": "Billing documents" if renamed else "Invoices",
+                "tag": "a",
+                "href": "/invoices",
+                "class": "nav css-1q2w3e" if renamed else "nav nav-invoices",
+            },
+            {
+                "role": "searchbox",
+                "name": "Search",
+                "tag": "input",
+                "type": "search",
+                "name_attr": "q",
+                "value": state.get("typed_query", ""),
+            },
             {"role": "button", "name": "Go", "tag": "button", "type": "submit"},
             {"role": "link", "name": "Account form", "tag": "a", "href": "/form"},
             {"role": "button", "name": "Delete account", "tag": "button", "class": "btn btn-danger"},
@@ -46,7 +60,12 @@ def page_elements(path: str, state: dict[str, Any], variant: str) -> tuple[str, 
     if path == "/invoices":
         elements = [
             {"role": "heading", "name": "Invoices", "tag": "h1"},
-            {"role": "button", "name": "Download CSV" if renamed else "Export", "tag": "button", "testid": "export-invoices"},
+            {
+                "role": "button",
+                "name": "Download CSV" if renamed else "Export",
+                "tag": "button",
+                "testid": "export-invoices",
+            },
         ]
         if state.get("exported"):
             elements.append({"role": "text", "name": "Export ready", "tag": "p"})
@@ -54,11 +73,15 @@ def page_elements(path: str, state: dict[str, Any], variant: str) -> tuple[str, 
     if path == "/form":
         if state.get("submitted"):
             return "Thanks", [{"role": "heading", "name": "Thank you", "tag": "h1"}], "Thank you"
-        return "Account", [
-            {"role": "textbox", "name": "Email", "tag": "input", "type": "email", "value": state.get("email", "")},
-            {"role": "textbox", "name": "Password", "tag": "input", "type": "password", "value": ""},
-            {"role": "button", "name": "Submit", "tag": "button", "type": "button"},
-        ], "Account"
+        return (
+            "Account",
+            [
+                {"role": "textbox", "name": "Email", "tag": "input", "type": "email", "value": state.get("email", "")},
+                {"role": "textbox", "name": "Password", "tag": "input", "type": "password", "value": ""},
+                {"role": "button", "name": "Submit", "tag": "button", "type": "button"},
+            ],
+            "Account",
+        )
     return "Not found", [{"role": "heading", "name": "Not found", "tag": "h1"}], "Not found"
 
 
@@ -95,7 +118,16 @@ class FakeWebApp:
                 attributes["testid"] = spec["testid"]
             if spec.get("name_attr"):
                 attributes["name"] = spec["name_attr"]
-            out.append(UIElement(element_id, spec["role"], spec["name"], value=str(spec.get("value", "")), attributes=attributes, bounds=(20, y, 160, 30)))
+            out.append(
+                UIElement(
+                    element_id,
+                    spec["role"],
+                    spec["name"],
+                    value=str(spec.get("value", "")),
+                    attributes=attributes,
+                    bounds=(20, y, 160, 30),
+                )
+            )
             y += 50
         return Observation("chrome", "Chrome", title, self.url, out, text=text)
 
@@ -117,6 +149,9 @@ class FakeWebApp:
         if spec is None:
             raise ElementNotFoundError(f"element {element_id} is gone")
         return spec
+
+    def known_url(self) -> str:
+        return self.url
 
     def navigate(self, url: str, *, cancel: Any = None, reuse_tab: bool = False) -> Any:
         self.log.append(("navigate", url))
