@@ -1,4 +1,4 @@
-# HighhXCli
+# HighhXClii
 
 **HighhX is a developer automation CLI.** Run `highhx` in a project and describe what you
 want. Everything HighhX does — a command you typed, a sentence, a workflow step, or a step
@@ -7,7 +7,7 @@ risk deterministically, asks when the risk calls for it, executes with timeouts 
 cancellation, verifies the result, records it and can undo it where that is possible.
 
 | | |
-|---|---|
+|---|---||
 | **HighhX Free — deterministic developer and computer automation** | Plain language → a **deterministic resolver** (no AI) → a JSON action plan → verified automation of websites, applications, the keyboard, files, git and your project (*open Gmail and search internship*, *play lofi on YouTube*, *switch to Slack*, *open my project and run the tests*). The interactive session and the full developer CLI: 99 actions (files, git, packages, docker, databases, services, browser, deployments, security, workflows, shell), workflows with rollback, resume and cancel, `/plan` + `/approve`, `/undo`, voice with local speech-to-text. No AI, no account. |
 | **HighhX Pro — deterministic automation + AI developer agent** | The same session with the AI agent attached: open-ended requests, planning, repository-wide changes, debugging, refactoring, AI computer use — proposed as action graphs that the same executor validates, rates, approves and runs. Autonomous tasks: *"fix the login bug and make sure all tests pass"* runs until HighhX itself has verified the tests. |
 
